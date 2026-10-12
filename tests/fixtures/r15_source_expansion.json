@@ -1,0 +1,266 @@
+{
+  "source_records_sha256": {
+    "artifacts/independent-e2e-20261008/round15-pilot/source-expansion-audit/snapshots/revision-00394-project.json": "872ffa07c8b2ec9435192a0489b059f567aa36f1c9760c2fd6507bd177144cf4",
+    "artifacts/independent-e2e-20261008/round15-pilot/source-expansion-audit/snapshots/revision-00594-project.json": "d7099882c6a48fa5e99a0291cfd95137cd7218fa655cbd2f1d2246d796a0fc6e"
+  },
+  "locator_records": [
+    {
+      "path": "/local-developer/Documents/ChatGPT/营销号视频自动生成器/data/cache/scene-ranks/ed8e4e1f8111b3c85d656b8a-52317c8126394873.json",
+      "sha256": "6f7b16158d2c39d55ba555f41d1721a66e0e136736653e4cd014ec783b8a0994"
+    },
+    {
+      "path": "/local-developer/Documents/ChatGPT/营销号视频自动生成器/data/cache/scene-ranks/7a8da945adb5b17093790ff0-d11355704b684ac2.json",
+      "sha256": "932956f3cc5359fb6ef94cf3bcbcaef039cac77d7666dd018251a9379f7db653"
+    }
+  ],
+  "edge_seed": {
+    "candidate": {
+      "id": "afb04fa9062d1caf438d5979",
+      "source_url": "https://www.chinanews.com.cn/sh/shipin/cns/2026/01-30/news1044573.shtml",
+      "duration": 143.701
+    },
+    "verified": [
+      [
+        7.4,
+        13.64
+      ],
+      [
+        15.8,
+        24.04
+      ]
+    ],
+    "occupied": [
+      [
+        7.4,
+        13.64
+      ],
+      [
+        15.8,
+        24.04
+      ]
+    ],
+    "durations": [
+      9.0,
+      6.88,
+      9.0,
+      6.88,
+      11.16,
+      5.48,
+      7.84,
+      12.16,
+      5.08,
+      5.68,
+      8.24,
+      3.52,
+      7.68,
+      7.84,
+      10.16,
+      5.52,
+      10.0,
+      7.08,
+      9.0,
+      11.16,
+      7.24,
+      8.84,
+      6.64,
+      6.88,
+      9.8,
+      6.84,
+      8.64,
+      8.64
+    ],
+    "initial_probes": [
+      {
+        "at": 19.92,
+        "start": 13.84,
+        "end": 26.12,
+        "duration": 12.16
+      },
+      {
+        "at": 32.4,
+        "start": 26.32,
+        "end": 38.6,
+        "duration": 12.16
+      },
+      {
+        "at": 44.88,
+        "start": 38.8,
+        "end": 51.08,
+        "duration": 12.16
+      },
+      {
+        "at": 57.36,
+        "start": 51.28,
+        "end": 63.56,
+        "duration": 12.16
+      }
+    ],
+    "actual_repair_probes": [
+      {
+        "at": 3.54,
+        "start": 0.0,
+        "end": 7.2,
+        "duration": 7.08
+      }
+    ]
+  },
+  "repair_queue": {
+    "shot_number": 29,
+    "shot_id": "06758a9c35ea447ab409fc74626f10df",
+    "duration": 9.8,
+    "previous": [
+      {
+        "candidate_id": "074f1c9c744609473132bd8a",
+        "source_url": "https://www.bilibili.com/video/BV1fz4y1H7uA",
+        "frame_id": "f1",
+        "sample_at": 37.443,
+        "clip_start": 32.543,
+        "duration": 9.8,
+        "scene": "穿戴深色手套的手、纸箱、封箱胶带；手持胶带在纸箱上进行封箱包装；CHANGE LIFE, START FRESH；Action may not always bring happiness, but there is no happines",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      },
+      {
+        "candidate_id": "074f1c9c744609473132bd8a",
+        "source_url": "https://www.bilibili.com/video/BV1fz4y1H7uA",
+        "frame_id": "f2",
+        "sample_at": 66.576,
+        "clip_start": 61.676,
+        "duration": 9.8,
+        "scene": "戴着深色手套的手、贴有胶带的纸箱、蓝色带孔塑料筐；双手搬运封装好的纸箱；CHANGE LIFE, START FRESH；Action may not always bring happiness, but there is no happ",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      },
+      {
+        "candidate_id": "c69ae3980017cef179c73ae9",
+        "source_url": "https://www.bilibili.com/video/BV1LAN36BEMD",
+        "frame_id": "f1",
+        "sample_at": 326.592938,
+        "clip_start": 321.692938,
+        "duration": 9.8,
+        "scene": "穿蓝色工服的女子、灰色面包车、车间环境；女子站在车旁手拉车门把手；佐川急便株式会社；HIRTAKU；A",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      }
+    ],
+    "current": [
+      {
+        "candidate_id": "dff47bd93e506dd15e94273b",
+        "source_url": "https://www.chinanews.com.cn/shipin/cns/2024/02-29/news983661.shtml",
+        "frame_id": "f1",
+        "sample_at": 61.32,
+        "clip_start": 56.42,
+        "duration": 9.8,
+        "scene": "集装箱货车内部、橙红色包裹、灰色布袋、金属车厢壁；包裹堆放在密闭车厢内；中新视频",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      },
+      {
+        "candidate_id": "dff47bd93e506dd15e94273b",
+        "source_url": "https://www.chinanews.com.cn/shipin/cns/2024/02-29/news983661.shtml",
+        "frame_id": "f0",
+        "sample_at": 78.72,
+        "clip_start": 73.82,
+        "duration": 9.8,
+        "scene": "快递柜内黑色包装袋、橙色包装盒、蓝色柜体与破洞内衬；静置于快递柜格口内的包裹；中新视频；资料",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      },
+      {
+        "candidate_id": "4aab7fb5bd5aee2d7fd77d0e",
+        "source_url": "https://www.bilibili.com/video/BV1x3dfBLEMb",
+        "frame_id": "f2",
+        "sample_at": 220.567,
+        "clip_start": 215.667,
+        "duration": 9.8,
+        "scene": "快递驿站货架、身穿格子外套的女子、手递纸箱；女子将纸箱递给前方的人；两个辉 bilibili；你看我手没有时间手持",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      },
+      {
+        "candidate_id": "4aab7fb5bd5aee2d7fd77d0e",
+        "source_url": "https://www.bilibili.com/video/BV1x3dfBLEMb",
+        "frame_id": "f1",
+        "sample_at": 124.067,
+        "clip_start": 119.167,
+        "duration": 9.8,
+        "scene": "白色快递车门、带有蓝色图案和文字、一只手；手掌贴在车门上；两个辉 bilibili；快递；NG EXPRESS",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      },
+      {
+        "candidate_id": "4aab7fb5bd5aee2d7fd77d0e",
+        "source_url": "https://www.bilibili.com/video/BV1x3dfBLEMb",
+        "frame_id": "f0",
+        "sample_at": 27.567,
+        "clip_start": 22.667,
+        "duration": 9.8,
+        "scene": "眼镜店内部、玻璃展柜、椅子、拿手机的手；以第一视角在店内走动；两个辉 bilibili",
+        "reason": "实际采样位置；须独立核验目标片段的动作覆盖与人物事件证据",
+        "sampling_only": true
+      }
+    ],
+    "candidates": {
+      "074f1c9c744609473132bd8a": {
+        "id": "074f1c9c744609473132bd8a",
+        "source_url": "https://www.bilibili.com/video/BV1fz4y1H7uA",
+        "duration": 103.999833
+      },
+      "c69ae3980017cef179c73ae9": {
+        "id": "c69ae3980017cef179c73ae9",
+        "source_url": "https://www.bilibili.com/video/BV1LAN36BEMD",
+        "duration": 907.157188
+      },
+      "dff47bd93e506dd15e94273b": {
+        "id": "dff47bd93e506dd15e94273b",
+        "source_url": "https://www.chinanews.com.cn/shipin/cns/2024/02-29/news983661.shtml",
+        "duration": 194.666
+      },
+      "4aab7fb5bd5aee2d7fd77d0e": {
+        "id": "4aab7fb5bd5aee2d7fd77d0e",
+        "source_url": "https://www.bilibili.com/video/BV1x3dfBLEMb",
+        "duration": 344.584558
+      }
+    },
+    "reliable_candidate_ids": [
+      "c69ae3980017cef179c73ae9",
+      "afb04fa9062d1caf438d5979",
+      "dff47bd93e506dd15e94273b"
+    ],
+    "failed_window": {
+      "candidate_id": "074f1c9c744609473132bd8a",
+      "source_url": "https://www.bilibili.com/video/BV1fz4y1H7uA",
+      "clip_start": 32.543,
+      "verdict": "uncertain",
+      "reason": "片段独立复核：中性观察的可读文字格式无效"
+    },
+    "selected_source_intervals": {
+      "https://www.chinanews.com.cn/sh/shipin/cns/2026/01-30/news1044573.shtml": [
+        [
+          15.8,
+          24.04
+        ],
+        [
+          7.4,
+          13.64
+        ]
+      ],
+      "https://www.chinanews.com.cn/shipin/cns/2024/02-29/news983661.shtml": [
+        [
+          67.72,
+          72.44
+        ],
+        [
+          119.7,
+          129.5
+        ]
+      ],
+      "https://www.bilibili.com/video/BV1LAN36BEMD": [
+        [
+          322.973,
+          330.213
+        ]
+      ]
+    }
+  }
+}

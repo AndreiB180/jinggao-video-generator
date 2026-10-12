@@ -1,0 +1,107 @@
+{
+  "source": "round4-pilot saved review; selected primary examples are offline test fixtures, not a model outcome",
+  "cases": [
+    {
+      "source_index": 9,
+      "narration": "在人社部门介绍的职业分工里，快件处理员要承担接收、卸载、分拨、集包、装载和发运等工作，快递员则直接面对揽收、派送和客户沟通。",
+      "original_visual": "快件处理员在分拣中心卸载或装载包裹，快递员在路边揽收包裹或与客户沟通。",
+      "primary": {
+        "scene": "分拣中心",
+        "subject": "快件处理员",
+        "action": "从车厢卸下一件包裹",
+        "query": "快件处理员 卸载包裹"
+      },
+      "alternative": {
+        "scene": "另一个独立场景",
+        "subject": "另一位工作人员",
+        "action": "执行另一种操作",
+        "query": "不应参与检索的备选词"
+      }
+    },
+    {
+      "source_index": 10,
+      "narration": "把他们全部叫成一个模糊的送货人，会漏掉很多具体劳动。",
+      "original_visual": "不同岗位的快递工作人员在各自工位上操作，例如分拣员扫描包裹、快递员搬运纸箱，画面展示多种具体劳动。",
+      "primary": {
+        "scene": "分拣工位",
+        "subject": "工作人员",
+        "action": "扫描一个包裹的条码",
+        "query": "分拣员 扫描包裹"
+      },
+      "alternative": {
+        "scene": "另一个独立场景",
+        "subject": "另一位工作人员",
+        "action": "执行另一种操作",
+        "query": "不应参与检索的备选词"
+      }
+    },
+    {
+      "source_index": 13,
+      "narration": "事情不会因为页面显示很近就自动完成。",
+      "original_visual": "手机地图界面显示快递员位置距离用户很近，但实际快递员仍在行进或寻找门牌的实拍镜头。",
+      "primary": {
+        "scene": "居民楼门口",
+        "subject": "快递员",
+        "action": "查看一处门牌",
+        "query": "快递员 查看门牌"
+      },
+      "alternative": {
+        "scene": "另一个独立场景",
+        "subject": "另一位工作人员",
+        "action": "执行另一种操作",
+        "query": "不应参与检索的备选词"
+      }
+    },
+    {
+      "source_index": 14,
+      "narration": "再换一个场景，同一个小区里，有人正在家里等，有人已经出门，有人想换个时间收件。",
+      "original_visual": "同一小区内不同住户门口：有人开门等待、有人锁门外出、有人通过电话沟通改约时间。",
+      "primary": {
+        "scene": "小区住户门前",
+        "subject": "住户",
+        "action": "用手机通话",
+        "query": "居民 手机通话"
+      },
+      "alternative": {
+        "scene": "另一个独立场景",
+        "subject": "另一位工作人员",
+        "action": "执行另一种操作",
+        "query": "不应参与检索的备选词"
+      }
+    },
+    {
+      "source_index": 17,
+      "narration": "楼道、电梯、门禁、天气，都可能参与一件东西最后怎样到达。",
+      "original_visual": "快递员推车经过楼道、电梯、门禁，或雨天撑伞护着包裹行走的实拍镜头。",
+      "primary": {
+        "scene": "居民楼门禁前",
+        "subject": "快递员",
+        "action": "推车通过一处门禁",
+        "query": "快递员 通过门禁"
+      },
+      "alternative": {
+        "scene": "另一个独立场景",
+        "subject": "另一位工作人员",
+        "action": "执行另一种操作",
+        "query": "不应参与检索的备选词"
+      }
+    },
+    {
+      "source_index": 18,
+      "narration": "你可能会说，现在不是有机器吗？确实，自动化分拣设备、手持终端、智能快件箱，都已进入相关职业技能的内容。",
+      "original_visual": "自动化分拣设备、手持终端、智能快件箱的设备特写或操作画面，展示技术工具在快递场景中的应用。",
+      "primary": {
+        "scene": "分拣工位",
+        "subject": "工作人员",
+        "action": "操作一台手持终端",
+        "query": "快递员 手持终端 操作"
+      },
+      "alternative": {
+        "scene": "另一个独立场景",
+        "subject": "另一位工作人员",
+        "action": "执行另一种操作",
+        "query": "不应参与检索的备选词"
+      }
+    }
+  ]
+}

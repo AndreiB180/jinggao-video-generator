@@ -1,0 +1,109 @@
+{
+  "source": "round5-pilot independent-plan-snapshot.json; original primary/narration are recorded outputs; corrected primaries are offline fixtures, not model outcomes",
+  "cases": [
+    {
+      "source_index": 3,
+      "narration": "先看一个有明确年份的数字。国家邮政局公布，二〇二四年我国快递业务量完成一千七百五十点八亿件。",
+      "original_primary": {
+        "scene": "国家邮政局官网或公报页面",
+        "subject": "国家邮政局公布的快递业务量数据页面",
+        "action": "页面显示二〇二四年快递业务量数据",
+        "query": "国家邮政局 快递业务量 数据",
+        "search_queries": [
+          "国家邮政局 快递业务量 数据",
+          "2024年快递业务量 公报",
+          "邮政局 统计公报 页面"
+        ]
+      },
+      "primary": {
+        "scene": "",
+        "subject": "快递分拣线上的包裹",
+        "action": "随传送带移动",
+        "query": "快递 包裹 传送带"
+      },
+      "original_preferred_media": "image"
+    },
+    {
+      "source_index": 4,
+      "narration": "这说的是那一年的业务量，不是人口数，也不是每个人都收到了同样多的包裹。",
+      "original_primary": {
+        "scene": "统计图表画面",
+        "subject": "快递业务量统计柱状图或数据图表",
+        "action": "图表展示快递业务量数据对比",
+        "query": "快递业务量 统计图表",
+        "search_queries": [
+          "快递业务量 统计图表",
+          "快递业务量 数据 柱状图",
+          "快递行业 统计 数据"
+        ]
+      },
+      "primary": {
+        "scene": "",
+        "subject": "快递工作人员",
+        "action": "搬起一件包裹",
+        "query": "快递 工作人员 搬包裹"
+      },
+      "original_preferred_media": "image"
+    },
+    {
+      "source_index": 12,
+      "narration": "对你来说只是一个疏忽，到了送件的人那里，就多了确认地址、再次联系、调整安排这些动作。",
+      "original_primary": {
+        "scene": "居民楼楼下",
+        "subject": "快递员",
+        "action": "边看手机边拨打电话走进单元门",
+        "query": "快递员 打电话 送件",
+        "search_queries": [
+          "快递员 打电话 送件"
+        ]
+      },
+      "primary": {
+        "scene": "",
+        "subject": "快递员",
+        "action": "通电话",
+        "query": "快递员 通话"
+      },
+      "original_preferred_media": "video"
+    },
+    {
+      "source_index": 18,
+      "narration": "你可能会说，现在不是有机器吗？确实，自动化分拣设备、手持终端、智能快件箱，都已进入相关职业技能的内容。",
+      "original_primary": {
+        "scene": "快递分拨中心",
+        "subject": "自动化分拣设备",
+        "action": "包裹在分拣线上被扫描分流",
+        "query": "自动化分拣设备 运行",
+        "search_queries": [
+          "自动化分拣设备 运行"
+        ]
+      },
+      "primary": {
+        "scene": "",
+        "subject": "自动化分拣设备",
+        "action": "传送带上的包裹持续移动",
+        "query": "快递 自动化分拣 传送带"
+      },
+      "original_preferred_media": "video"
+    },
+    {
+      "source_index": 29,
+      "narration": "方便的背面却是一连串有人完成的动作。把这些动作看清楚，不会让生活变沉重，只会让方便有了更准确的来处。",
+      "original_primary": {
+        "scene": "快递分拨中心",
+        "subject": "自动化分拣设备",
+        "action": "传送带上的包裹被分拣",
+        "query": "快递 自动化分拣 传送带",
+        "search_queries": [
+          "快递 自动化分拣 传送带"
+        ]
+      },
+      "primary": {
+        "scene": "",
+        "subject": "快递工作人员",
+        "action": "搬起一件包裹",
+        "query": "快递 工作人员 搬包裹"
+      },
+      "original_preferred_media": "video"
+    }
+  ]
+}

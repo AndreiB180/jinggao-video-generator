@@ -1,0 +1,2096 @@
+{
+  "source": "round6 paid plan-consistency-af30a02142e74322a1f0a55dcfc6c761.json; request and response unchanged",
+  "diagnostic_sha256": "f1dc7de1ae369f0a8adb39abaa652d9e0f78cf2e513ba5e70ee5ca1e399ab021",
+  "request": {
+    "stage": "plan_consistency",
+    "full_script": "你有没有注意过，买东西的时候，手指只动了几下，收货的时候，箱子却像自己长了腿一样出现在附近？中间那么长一段路，在手机上往往只剩几行字。今天，就把这几行字重新展开。\n\n先看一个有明确年份的数字。国家邮政局公布，二〇二四年我国快递业务量完成一千七百五十点八亿件。这说的是那一年的业务量，不是人口数，也不是每个人都收到了同样多的包裹。\n\n把这个数字缩小，缩成你手边一只普通纸箱，就容易理解一些。它里面可能是一本书、一双鞋，也可能是给家里补的一点日用品。对整个行业来说是一件，对收件人来说却有自己的用途和期待。\n\n它的移动也不是一条没有接头的直线。包裹要被接收、分拨、装载、运输，到了末端还要派送。不同环节由不同岗位接力，消费者最容易看见的那个人，只站在这条链路靠近自己的地方。\n\n在人社部门介绍的职业分工里，快件处理员要承担接收、卸载、分拨、集包、装载和发运等工作，快递员则直接面对揽收、派送和客户沟通。把他们全部叫成一个模糊的送货人，会漏掉很多具体劳动。\n\n现在设想一个生活场景：你写的楼号少了一位，电话又暂时没接。对你来说只是一个疏忽，到了送件的人那里，就多了确认地址、再次联系、调整安排这些动作。事情不会因为页面显示很近就自动完成。\n\n再换一个场景，同一个小区里，有人正在家里等，有人已经出门，有人想换个时间收件。地图上看起来紧挨着的几栋楼，落到现实里，变成了不同的门、不同的作息和不同的沟通。\n\n这些只是用来理解工作的例子，不是在讲某位快递员的真实遭遇。恰恰因为不需要离奇故事，日常的复杂才值得看见。楼道、电梯、门禁、天气，都可能参与一件东西最后怎样到达。\n\n你可能会说，现在不是有机器吗？确实，自动化分拣设备、手持终端、智能快件箱，都已进入相关职业技能的内容。技术可以帮忙处理一些环节，但设备照样需要操作，信息照样需要判断。\n\n一台机器顺畅运行的时候，人很容易从画面里消失。出了异常，人才重新被看见。可真正稳定的服务，需要有人在平常就把问题接住，而不是等到包裹已经丢失或送错，才承认工作存在。\n\n理解这些，也不是要求消费者对所有问题都说算了。东西没收到、包装有损坏、沟通没做到位，都可以把事实说清楚，要求解决。尊重劳动和认真对待服务，本来就能放在同一件事里。\n\n比起一句很空的互相理解，更有用的做法也许很小：地址写完整，能够联系时把情况说明白，需求变了及时沟通。一个少绕的弯，一次不用反复打的电话，都比想象中的英雄故事更贴近每天的工作。\n\n对企业来说同样如此。消费者不该靠猜测安排自己的收件时间，劳动者也不该总靠临场补救维持流程。清晰的信息、合理的安排、遇到问题能找到人，才会让一件小事真正顺下来。\n\n我们说现代生活方便，常常说的是结果：东西到了，消息收到了，事情办成了。方便的背面却是一连串有人完成的动作。把这些动作看清楚，不会让生活变沉重，只会让方便有了更准确的来处。\n\n下次拆快递时，可以想一秒钟：这只箱子经历了多少次接力，最后才来到这里。你不必对一只纸箱产生多么宏大的感慨，只要知道，屏幕上短短几行进度，装不下它走过的全部路。\n\n真正值得我们习惯的，是一种更完整的目光。既看见商品，也看见运输；既提出需求，也说清需求。快递不是从天上掉下来的，你轻轻一点之后，许多人的一天，就这样与你连接起来。",
+    "requirements": "",
+    "rewrite": false,
+    "visual_contract": "one_primary_action_v1",
+    "shots": [
+      {
+        "shot_id": "9fc19e219678493a81e02965be12e1c4",
+        "source_unit_id": "u0001",
+        "narration": "你有没有注意过，买东西的时候，手指只动了几下，收货的时候，箱子却像自己长了腿一样出现在附近？",
+        "duration": 10.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递 送件",
+        "search_queries": [
+          "快递 送件",
+          "快递员 递包裹",
+          "小区 收快递"
+        ],
+        "subject": "快递箱",
+        "visual": "快递箱，被放在住户门口或递到收件人手中。场景：居民小区门口或楼下。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "居民小区门口或楼下",
+            "subject": "快递箱",
+            "action": "被放在住户门口或递到收件人手中",
+            "query": "快递 送件",
+            "search_queries": [
+              "快递 送件",
+              "快递员 递包裹",
+              "小区 收快递"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "646ca9939d4641aebc9703033f44b804",
+        "source_unit_id": "u0002",
+        "narration": "中间那么长一段路，在手机上往往只剩几行字。今天，就把这几行字重新展开。",
+        "duration": 7.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "image",
+        "query": "快递 物流跟踪 手机",
+        "search_queries": [
+          "快递 物流跟踪 手机",
+          "快递单号 查询页面",
+          "手机 查物流"
+        ],
+        "subject": "快递物流跟踪页面",
+        "visual": "快递物流跟踪页面，页面上的物流进度条目向下滚动。场景：手机屏幕特写。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "手机屏幕特写",
+            "subject": "快递物流跟踪页面",
+            "action": "页面上的物流进度条目向下滚动",
+            "query": "快递 物流跟踪 手机",
+            "search_queries": [
+              "快递 物流跟踪 手机",
+              "快递单号 查询页面",
+              "手机 查物流"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "c963aad37c9b4af4a14381c1d508a6bc",
+        "source_unit_id": "u0003",
+        "narration": "先看一个有明确年份的数字。国家邮政局公布，二〇二四年我国快递业务量完成一千七百五十点八亿件。",
+        "duration": 10.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "国家邮政局数据资料",
+        "persons": [],
+        "preferred_media": "image",
+        "query": "国家邮政局 快递业务量 数据",
+        "search_queries": [
+          "国家邮政局 快递业务量 数据",
+          "快递业务量 统计公报 页面",
+          "中国快递 年度数据"
+        ],
+        "subject": "国家邮政局公布的快递业务量数据页面",
+        "visual": "国家邮政局公布的快递业务量数据页面，页面上的年度业务量数字被展示。场景：国家邮政局发布现场或资料页。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "国家邮政局发布现场或资料页",
+            "subject": "国家邮政局公布的快递业务量数据页面",
+            "action": "页面上的年度业务量数字被展示",
+            "query": "国家邮政局 快递业务量 数据",
+            "search_queries": [
+              "国家邮政局 快递业务量 数据",
+              "快递业务量 统计公报 页面",
+              "中国快递 年度数据"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "0327dc405de44b16b217caa391d136dc",
+        "source_unit_id": "u0004",
+        "narration": "这说的是那一年的业务量，不是人口数，也不是每个人都收到了同样多的包裹。",
+        "duration": 7.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "统计数据示意",
+        "persons": [],
+        "preferred_media": "image",
+        "query": "快递业务量 图表",
+        "search_queries": [
+          "快递业务量 图表",
+          "快递包裹 数量示意图",
+          "快递行业 数据展示"
+        ],
+        "subject": "快递业务量数据示意图",
+        "visual": "快递业务量数据示意图，图表上的数字与包裹量示意被呈现。场景：快递分拨中心或数据展示环境。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心或数据展示环境",
+            "subject": "快递业务量数据示意图",
+            "action": "图表上的数字与包裹量示意被呈现",
+            "query": "快递业务量 图表",
+            "search_queries": [
+              "快递业务量 图表",
+              "快递包裹 数量示意图",
+              "快递行业 数据展示"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "a74d62e035df4d3f9c1e557e7ad68c9b",
+        "source_unit_id": "u0005",
+        "narration": "把这个数字缩小，缩成你手边一只普通纸箱，就容易理解一些。它里面可能是一本书、一双鞋，也可能是给家里补的一点日用品。",
+        "duration": 12.7,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "纸箱 打开 物品",
+        "search_queries": [
+          "纸箱 打开 物品",
+          "快递箱 日常用品",
+          "纸箱 里面 书籍"
+        ],
+        "subject": "一只普通纸箱",
+        "visual": "一只普通纸箱，箱盖被打开露出里面的书和鞋等物品。场景：室内桌面或地面。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "室内桌面或地面",
+            "subject": "一只普通纸箱",
+            "action": "箱盖被打开露出里面的书和鞋等物品",
+            "query": "纸箱 打开 物品",
+            "search_queries": [
+              "纸箱 打开 物品",
+              "快递箱 日常用品",
+              "纸箱 里面 书籍"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "e82ce1e6e443461fa4bf4e6ce9bf66d7",
+        "source_unit_id": "u0006",
+        "narration": "对整个行业来说是一件，对收件人来说却有自己的用途和期待。",
+        "duration": 6.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "收件人 拆快递",
+        "search_queries": [
+          "收件人 拆快递",
+          "居民 收包裹",
+          "拆快递 日常"
+        ],
+        "subject": "收件人",
+        "visual": "收件人，接过或拆开快递纸箱。场景：居民家门口或室内。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "居民家门口或室内",
+            "subject": "收件人",
+            "action": "接过或拆开快递纸箱",
+            "query": "收件人 拆快递",
+            "search_queries": [
+              "收件人 拆快递",
+              "居民 收包裹",
+              "拆快递 日常"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "93b699896512456d9befd9ecea3b8878",
+        "source_unit_id": "u0007",
+        "narration": "它的移动也不是一条没有接头的直线。包裹要被接收、分拨、装载、运输，到了末端还要派送。",
+        "duration": 9.3,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "分拨中心 传送带 包裹",
+        "search_queries": [
+          "分拨中心 传送带 包裹",
+          "快递 分拨 流水线",
+          "包裹 传送带 运输"
+        ],
+        "subject": "分拨传送带上的包裹",
+        "visual": "分拨传送带上的包裹，包裹沿着传送带持续移动。场景：快递分拨中心传送带区域。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心传送带区域",
+            "subject": "分拨传送带上的包裹",
+            "action": "包裹沿着传送带持续移动",
+            "query": "分拨中心 传送带 包裹",
+            "search_queries": [
+              "分拨中心 传送带 包裹",
+              "快递 分拨 流水线",
+              "包裹 传送带 运输"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "315491cb20b24f699500c46792386fde",
+        "source_unit_id": "u0008",
+        "narration": "不同环节由不同岗位接力，消费者最容易看见的那个人，只站在这条链路靠近自己的地方。",
+        "duration": 8.9,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 派送 包裹",
+        "search_queries": [
+          "快递员 派送 包裹",
+          "快递员 小区 送货",
+          "快递员 交件"
+        ],
+        "subject": "快递员",
+        "visual": "快递员，将包裹递给收件人。场景：小区门口或楼下。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "小区门口或楼下",
+            "subject": "快递员",
+            "action": "将包裹递给收件人",
+            "query": "快递员 派送 包裹",
+            "search_queries": [
+              "快递员 派送 包裹",
+              "快递员 小区 送货",
+              "快递员 交件"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "4ddb9301e4f844a980a7fb4777986e12",
+        "source_unit_id": "u0009",
+        "narration": "在人社部门介绍的职业分工里，快件处理员要承担接收、卸载、分拨、集包、装载和发运等工作，快递员则直接面对揽收、派送和客户沟通。",
+        "duration": 13.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "职业分工资料画面",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快件处理员 分拨 包裹",
+        "search_queries": [
+          "快件处理员 分拨 包裹",
+          "快递分拨 作业",
+          "快递员 揽收 派送"
+        ],
+        "subject": "快件处理员",
+        "visual": "快件处理员，在传送带旁卸载或搬动包裹。场景：快递分拨中心作业区。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心作业区",
+            "subject": "快件处理员",
+            "action": "在传送带旁卸载或搬动包裹",
+            "query": "快件处理员 分拨 包裹",
+            "search_queries": [
+              "快件处理员 分拨 包裹",
+              "快递分拨 作业",
+              "快递员 揽收 派送"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "91dde3f6dc75490bb2723c9db5911fe9",
+        "source_unit_id": "u0010",
+        "narration": "把他们全部叫成一个模糊的送货人，会漏掉很多具体劳动。",
+        "duration": 5.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快件处理员 搬包裹",
+        "search_queries": [
+          "快件处理员 搬包裹",
+          "分拨中心 人工 作业",
+          "快递 分拣 工人"
+        ],
+        "subject": "快件处理员",
+        "visual": "快件处理员，在传送带旁弯腰搬动包裹。场景：快递分拨中心作业区。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心作业区",
+            "subject": "快件处理员",
+            "action": "在传送带旁弯腰搬动包裹",
+            "query": "快件处理员 搬包裹",
+            "search_queries": [
+              "快件处理员 搬包裹",
+              "分拨中心 人工 作业",
+              "快递 分拣 工人"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "453ac1ca92c846f0b3525f2480c59716",
+        "source_unit_id": "u0011",
+        "narration": "现在设想一个生活场景：你写的楼号少了一位，电话又暂时没接。",
+        "duration": 6.4,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "image",
+        "query": "快递 派送信息 手机",
+        "search_queries": [
+          "快递 派送信息 手机",
+          "手机 未接来电 快递",
+          "快递单 地址页面"
+        ],
+        "subject": "手机屏幕上的快递派送信息",
+        "visual": "手机屏幕上的快递派送信息，页面显示地址信息与未接来电提示。场景：手机通讯页面特写。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "手机通讯页面特写",
+            "subject": "手机屏幕上的快递派送信息",
+            "action": "页面显示地址信息与未接来电提示",
+            "query": "快递 派送信息 手机",
+            "search_queries": [
+              "快递 派送信息 手机",
+              "手机 未接来电 快递",
+              "快递单 地址页面"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "a084377d7a014c1d873a9a83578c3699",
+        "source_unit_id": "u0012",
+        "narration": "对你来说只是一个疏忽，到了送件的人那里，就多了确认地址、再次联系、调整安排这些动作。",
+        "duration": 9.3,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 打电话 派件",
+        "search_queries": [
+          "快递员 打电话 派件",
+          "快递员 联系客户 手机",
+          "快递员 确认地址"
+        ],
+        "subject": "快递员",
+        "visual": "快递员，拿着手机在楼道口打电话。场景：小区楼下或单元门口。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "小区楼下或单元门口",
+            "subject": "快递员",
+            "action": "拿着手机在楼道口打电话",
+            "query": "快递员 打电话 派件",
+            "search_queries": [
+              "快递员 打电话 派件",
+              "快递员 联系客户 手机",
+              "快递员 确认地址"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "fa129a71eb3945169dd0bbf73d4b7bf9",
+        "source_unit_id": "u0013",
+        "narration": "事情不会因为页面显示很近就自动完成。",
+        "duration": 4.0,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "image",
+        "query": "快递 配送 地图定位",
+        "search_queries": [
+          "快递 配送 地图定位",
+          "手机地图 配送路线",
+          "快递 位置显示"
+        ],
+        "subject": "手机屏幕上的配送地图",
+        "visual": "手机屏幕上的配送地图，地图上配送路线与位置点被显示。场景：手机地图导航页面特写。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "手机地图导航页面特写",
+            "subject": "手机屏幕上的配送地图",
+            "action": "地图上配送路线与位置点被显示",
+            "query": "快递 配送 地图定位",
+            "search_queries": [
+              "快递 配送 地图定位",
+              "手机地图 配送路线",
+              "快递 位置显示"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "226e099e11da44cabd154037feff6661",
+        "source_unit_id": "u0014",
+        "narration": "再换一个场景，同一个小区里，有人正在家里等，有人已经出门，有人想换个时间收件。",
+        "duration": 8.7,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 小区 门口 等待",
+        "search_queries": [
+          "快递员 小区 门口 等待",
+          "快递员 按门禁",
+          "小区 派件 现场"
+        ],
+        "subject": "快递员",
+        "visual": "快递员，站在单元门口等待或按门禁。场景：居民小区单元门口。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "居民小区单元门口",
+            "subject": "快递员",
+            "action": "站在单元门口等待或按门禁",
+            "query": "快递员 小区 门口 等待",
+            "search_queries": [
+              "快递员 小区 门口 等待",
+              "快递员 按门禁",
+              "小区 派件 现场"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "7c6f652f44184c69b08e750476f09d5f",
+        "source_unit_id": "u0015",
+        "narration": "地图上看起来紧挨着的几栋楼，落到现实里，变成了不同的门、不同的作息和不同的沟通。",
+        "duration": 8.9,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "小区 楼栋 外观",
+        "search_queries": [
+          "小区 楼栋 外观",
+          "居民楼 门牌 楼道",
+          "小区 单元门"
+        ],
+        "subject": "相邻的居民楼",
+        "visual": "相邻的居民楼，楼栋间的门窗被从外部展示。场景：小区楼栋外观。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "小区楼栋外观",
+            "subject": "相邻的居民楼",
+            "action": "楼栋间的门窗被从外部展示",
+            "query": "小区 楼栋 外观",
+            "search_queries": [
+              "小区 楼栋 外观",
+              "居民楼 门牌 楼道",
+              "小区 单元门"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "4da835fbe9d6456f818daf55fec63163",
+        "source_unit_id": "u0016",
+        "narration": "这些只是用来理解工作的例子，不是在讲某位快递员的真实遭遇。恰恰因为不需要离奇故事，日常的复杂才值得看见。",
+        "duration": 11.6,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "日常快递作业资料",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递 作业 现场",
+        "search_queries": [
+          "快递 作业 现场",
+          "快递分拨 日常",
+          "快递员 派件 途中"
+        ],
+        "subject": "快递作业现场",
+        "visual": "快递作业现场，包裹在传送带或快递车内被处理。场景：快递分拨中心或派送途中。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心或派送途中",
+            "subject": "快递作业现场",
+            "action": "包裹在传送带或快递车内被处理",
+            "query": "快递 作业 现场",
+            "search_queries": [
+              "快递 作业 现场",
+              "快递分拨 日常",
+              "快递员 派件 途中"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "081628a21e3a4d3986f730988b49f5ce",
+        "source_unit_id": "u0017",
+        "narration": "楼道、电梯、门禁、天气，都可能参与一件东西最后怎样到达。",
+        "duration": 6.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 楼道 送件",
+        "search_queries": [
+          "快递员 楼道 送件",
+          "快递员 电梯 送包裹",
+          "小区 楼道 快递"
+        ],
+        "subject": "快递员",
+        "visual": "快递员，抱着包裹走进楼道或电梯。场景：居民楼楼道或电梯间。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "居民楼楼道或电梯间",
+            "subject": "快递员",
+            "action": "抱着包裹走进楼道或电梯",
+            "query": "快递员 楼道 送件",
+            "search_queries": [
+              "快递员 楼道 送件",
+              "快递员 电梯 送包裹",
+              "小区 楼道 快递"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "c1394c51ff2c4bce92503348920553c0",
+        "source_unit_id": "u0018",
+        "narration": "你可能会说，现在不是有机器吗？确实，自动化分拣设备、手持终端、智能快件箱，都已进入相关职业技能的内容。",
+        "duration": 11.3,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "快递技术设备资料",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "自动化分拣设备 包裹",
+        "search_queries": [
+          "自动化分拣设备 包裹",
+          "智能快件箱 取件",
+          "手持终端 快递"
+        ],
+        "subject": "自动化分拣设备",
+        "visual": "自动化分拣设备，分拣设备上的包裹持续移动。场景：快递分拨中心。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心",
+            "subject": "自动化分拣设备",
+            "action": "分拣设备上的包裹持续移动",
+            "query": "自动化分拣设备 包裹",
+            "search_queries": [
+              "自动化分拣设备 包裹",
+              "智能快件箱 取件",
+              "手持终端 快递"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "b8b7119007c146d69ebff35e50ee72ef",
+        "source_unit_id": "u0019",
+        "narration": "技术可以帮忙处理一些环节，但设备照样需要操作，信息照样需要判断。",
+        "duration": 7.1,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "手持终端 扫描 包裹",
+        "search_queries": [
+          "手持终端 扫描 包裹",
+          "快递员 操作设备",
+          "快递 信息录入 现场"
+        ],
+        "subject": "快递工作人员",
+        "visual": "快递工作人员，操作手持终端扫描包裹。场景：快递分拨中心或末端网点。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心或末端网点",
+            "subject": "快递工作人员",
+            "action": "操作手持终端扫描包裹",
+            "query": "手持终端 扫描 包裹",
+            "search_queries": [
+              "手持终端 扫描 包裹",
+              "快递员 操作设备",
+              "快递 信息录入 现场"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "e36fa723be194b8e87684fadad14e578",
+        "source_unit_id": "u0020",
+        "narration": "一台机器顺畅运行的时候，人很容易从画面里消失。出了异常，人才重新被看见。",
+        "duration": 8.0,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "分拣线 包裹 运行",
+        "search_queries": [
+          "分拣线 包裹 运行",
+          "自动分拣 传送带",
+          "快递设备 运行"
+        ],
+        "subject": "自动化分拣设备",
+        "visual": "自动化分拣设备，包裹在分拣线上连续流动。场景：快递分拨中心。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递分拨中心",
+            "subject": "自动化分拣设备",
+            "action": "包裹在分拣线上连续流动",
+            "query": "分拣线 包裹 运行",
+            "search_queries": [
+              "分拣线 包裹 运行",
+              "自动分拣 传送带",
+              "快递设备 运行"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "791b68f250e74079b20f213ef5a45d08",
+        "source_unit_id": "u0021",
+        "narration": "可真正稳定的服务，需要有人在平常就把问题接住，而不是等到包裹已经丢失或送错，才承认工作存在。",
+        "duration": 10.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递 异常件 处理",
+        "search_queries": [
+          "快递 异常件 处理",
+          "快递员 检查包裹",
+          "快递网点 人工处理"
+        ],
+        "subject": "快递工作人员",
+        "visual": "快递工作人员，查看或处理一件问题包裹。场景：快递网点或分拨中心。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递网点或分拨中心",
+            "subject": "快递工作人员",
+            "action": "查看或处理一件问题包裹",
+            "query": "快递 异常件 处理",
+            "search_queries": [
+              "快递 异常件 处理",
+              "快递员 检查包裹",
+              "快递网点 人工处理"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "7cde1b12d32a4368b7c93f49b42b7e46",
+        "source_unit_id": "u0022",
+        "narration": "理解这些，也不是要求消费者对所有问题都说算了。东西没收到、包装有损坏、沟通没做到位，都可以把事实说清楚，要求解决。",
+        "duration": 12.7,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递 客服 沟通",
+        "search_queries": [
+          "快递 客服 沟通",
+          "快递网点 客户投诉",
+          "快递 问题件 登记"
+        ],
+        "subject": "客服或快递工作人员",
+        "visual": "客服或快递工作人员，与客户沟通并记录问题。场景：快递服务网点或客服柜台。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递服务网点或客服柜台",
+            "subject": "客服或快递工作人员",
+            "action": "与客户沟通并记录问题",
+            "query": "快递 客服 沟通",
+            "search_queries": [
+              "快递 客服 沟通",
+              "快递网点 客户投诉",
+              "快递 问题件 登记"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "7bd61e773e7b46518e8d6e6afaab3c33",
+        "source_unit_id": "u0023",
+        "narration": "尊重劳动和认真对待服务，本来就能放在同一件事里。",
+        "duration": 5.3,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 递送包裹",
+        "search_queries": [
+          "快递员 递送包裹",
+          "快递员 送货上门",
+          "收件人 签收快递"
+        ],
+        "subject": "快递员与收件人",
+        "visual": "快递员与收件人，递送包裹并当面确认。场景：住宅门口。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "住宅门口",
+            "subject": "快递员与收件人",
+            "action": "递送包裹并当面确认",
+            "query": "快递员 递送包裹",
+            "search_queries": [
+              "快递员 递送包裹",
+              "快递员 送货上门",
+              "收件人 签收快递"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "c517ae26521848e897025287f1e17c40",
+        "source_unit_id": "u0024",
+        "narration": "比起一句很空的互相理解，更有用的做法也许很小：地址写完整，能够联系时把情况说明白，需求变了及时沟通。",
+        "duration": 11.1,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "手机 填写 收货地址",
+        "search_queries": [
+          "手机 填写 收货地址",
+          "寄件 地址填写",
+          "快递下单 手机操作"
+        ],
+        "subject": "寄件人",
+        "visual": "寄件人，在手机下单页面逐项填写收货地址。场景：手机屏幕前。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "手机屏幕前",
+            "subject": "寄件人",
+            "action": "在手机下单页面逐项填写收货地址",
+            "query": "手机 填写 收货地址",
+            "search_queries": [
+              "手机 填写 收货地址",
+              "寄件 地址填写",
+              "快递下单 手机操作"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "9ed2a01631ae47009e45c9058882b52c",
+        "source_unit_id": "u0025",
+        "narration": "一个少绕的弯，一次不用反复打的电话，都比想象中的英雄故事更贴近每天的工作。",
+        "duration": 8.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快件处理员 装载包裹",
+        "search_queries": [
+          "快件处理员 装载包裹",
+          "分拣中心 搬运包裹",
+          "快递 装卸作业"
+        ],
+        "subject": "快件处理员",
+        "visual": "快件处理员，搬运并装载包裹。场景：分拣场地。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "分拣场地",
+            "subject": "快件处理员",
+            "action": "搬运并装载包裹",
+            "query": "快件处理员 装载包裹",
+            "search_queries": [
+              "快件处理员 装载包裹",
+              "分拣中心 搬运包裹",
+              "快递 装卸作业"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "fff755dcbdf2499b99d75a17715d5b88",
+        "source_unit_id": "u0026",
+        "narration": "对企业来说同样如此。消费者不该靠猜测安排自己的收件时间，劳动者也不该总靠临场补救维持流程。",
+        "duration": 10.0,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递网点 工作人员 手持终端",
+        "search_queries": [
+          "快递网点 工作人员 手持终端",
+          "快递员 查询派送信息",
+          "网点 分派包裹"
+        ],
+        "subject": "网点工作人员",
+        "visual": "网点工作人员，通过手持终端确认派送信息。场景：快递网点内。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递网点内",
+            "subject": "网点工作人员",
+            "action": "通过手持终端确认派送信息",
+            "query": "快递网点 工作人员 手持终端",
+            "search_queries": [
+              "快递网点 工作人员 手持终端",
+              "快递员 查询派送信息",
+              "网点 分派包裹"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "81b4e24c6c02481fb50f4645a3e28207",
+        "source_unit_id": "u0027",
+        "narration": "清晰的信息、合理的安排、遇到问题能找到人，才会让一件小事真正顺下来。",
+        "duration": 7.6,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 按门铃 核对地址",
+        "search_queries": [
+          "快递员 按门铃 核对地址",
+          "快递员 楼道 送达",
+          "派送 确认收件信息"
+        ],
+        "subject": "快递员",
+        "visual": "快递员，对照手机上的地址信息按门铃。场景：小区楼道。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "小区楼道",
+            "subject": "快递员",
+            "action": "对照手机上的地址信息按门铃",
+            "query": "快递员 按门铃 核对地址",
+            "search_queries": [
+              "快递员 按门铃 核对地址",
+              "快递员 楼道 送达",
+              "派送 确认收件信息"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "0eb52be88436463db4b3a58751ad8ae7",
+        "source_unit_id": "u0028",
+        "narration": "我们说现代生活方便，常常说的是结果：东西到了，消息收到了，事情办成了。",
+        "duration": 7.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "收件人 接过包裹",
+        "search_queries": [
+          "收件人 接过包裹",
+          "收货 开门 快递",
+          "签收 包裹 到手"
+        ],
+        "subject": "收件人",
+        "visual": "收件人，开门接过包裹。场景：住宅门口。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "住宅门口",
+            "subject": "收件人",
+            "action": "开门接过包裹",
+            "query": "收件人 接过包裹",
+            "search_queries": [
+              "收件人 接过包裹",
+              "收货 开门 快递",
+              "签收 包裹 到手"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "c14bbe8064634119afea2ef8f7993738",
+        "source_unit_id": "u0029",
+        "narration": "方便的背面却是一连串有人完成的动作。把这些动作看清楚，不会让生活变沉重，只会让方便有了更准确的来处。",
+        "duration": 11.1,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "分拣人员 包裹上传送带",
+        "search_queries": [
+          "分拣人员 包裹上传送带",
+          "分拣中心 传送带 包裹",
+          "快件 分拨作业"
+        ],
+        "subject": "分拣人员",
+        "visual": "分拣人员，将包裹放上传送带。场景：传送带旁。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "传送带旁",
+            "subject": "分拣人员",
+            "action": "将包裹放上传送带",
+            "query": "分拣人员 包裹上传送带",
+            "search_queries": [
+              "分拣人员 包裹上传送带",
+              "分拣中心 传送带 包裹",
+              "快件 分拨作业"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "4356d0594741479ab52dc3e3a13af7f6",
+        "source_unit_id": "u0030",
+        "narration": "下次拆快递时，可以想一秒钟：这只箱子经历了多少次接力，最后才来到这里。",
+        "duration": 7.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "收件人 拆快递",
+        "search_queries": [
+          "收件人 拆快递",
+          "拆纸箱 取件",
+          "开箱 快递包裹"
+        ],
+        "subject": "收件人",
+        "visual": "收件人，拆开快递纸箱。场景：室内。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "室内",
+            "subject": "收件人",
+            "action": "拆开快递纸箱",
+            "query": "收件人 拆快递",
+            "search_queries": [
+              "收件人 拆快递",
+              "拆纸箱 取件",
+              "开箱 快递包裹"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "3e949d74c05e437396545586b4be73c8",
+        "source_unit_id": "u0031",
+        "narration": "你不必对一只纸箱产生多么宏大的感慨，只要知道，屏幕上短短几行进度，装不下它走过的全部路。",
+        "duration": 9.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "image",
+        "query": "快递 物流进度 手机页面",
+        "search_queries": [
+          "快递 物流进度 手机页面",
+          "物流跟踪 页面",
+          "快递查询 界面"
+        ],
+        "subject": "手机快递进度页面",
+        "visual": "手机快递进度页面，页面上的物流进度条目静态显示。场景：手机屏幕前。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "手机屏幕前",
+            "subject": "手机快递进度页面",
+            "action": "页面上的物流进度条目静态显示",
+            "query": "快递 物流进度 手机页面",
+            "search_queries": [
+              "快递 物流进度 手机页面",
+              "物流跟踪 页面",
+              "快递查询 界面"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "e42132db41394c0eabdc654c27a4b0b7",
+        "source_unit_id": "u0032",
+        "narration": "真正值得我们习惯的，是一种更完整的目光。既看见商品，也看见运输；既提出需求，也说清需求。",
+        "duration": 9.8,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递运输车 行驶",
+        "search_queries": [
+          "快递运输车 行驶",
+          "快递干线运输",
+          "物流货车 运输"
+        ],
+        "subject": "运输车辆",
+        "visual": "运输车辆，在道路上行驶。场景：快递运输路线上。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递运输路线上",
+            "subject": "运输车辆",
+            "action": "在道路上行驶",
+            "query": "快递运输车 行驶",
+            "search_queries": [
+              "快递运输车 行驶",
+              "快递干线运输",
+              "物流货车 运输"
+            ]
+          },
+          "alternatives": []
+        }
+      },
+      {
+        "shot_id": "f0604aa223134128a0db290350f05663",
+        "source_unit_id": "u0033",
+        "narration": "快递不是从天上掉下来的，你轻轻一点之后，许多人的一天，就这样与你连接起来。",
+        "duration": 8.2,
+        "era": "",
+        "event": "",
+        "event_scope": "background",
+        "evidence_mode": "generic",
+        "exclusions": "",
+        "location": "",
+        "overlay_label": "",
+        "persons": [],
+        "preferred_media": "video",
+        "query": "快递员 装载派送包裹",
+        "search_queries": [
+          "快递员 装载派送包裹",
+          "末端派送 装车",
+          "快递员 出发派件"
+        ],
+        "subject": "快递员",
+        "visual": "快递员，将包裹装上派送车辆。场景：快递末端派送点。",
+        "visual_plan": {
+          "mode": "single",
+          "primary": {
+            "scene": "快递末端派送点",
+            "subject": "快递员",
+            "action": "将包裹装上派送车辆",
+            "query": "快递员 装载派送包裹",
+            "search_queries": [
+              "快递员 装载派送包裹",
+              "末端派送 装车",
+              "快递员 出发派件"
+            ]
+          },
+          "alternatives": []
+        }
+      }
+    ],
+    "planning_checks": []
+  },
+  "response": {
+    "requirements_preserved": true,
+    "reviews": [
+      {
+        "shot_id": "9fc19e219678493a81e02965be12e1c4",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "口播是购物下单与收货的泛化设问，可仅取末端送达的说明性画面；原primary“放在门口或递到手中”是两种动作二选一未定，需收为实测一个可观察动作。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "买东西的时候，手指只动了几下，收货的时候，箱子却像自己长了腿一样出现在附近？"
+          },
+          {
+            "source": "script",
+            "quote": "消费者最容易看见的那个人，只站在这条链路靠近自己的地方。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "居民小区门口",
+              "subject": "快递员",
+              "action": "将一只快递箱递到收件人手中",
+              "query": "快递 送件",
+              "search_queries": [
+                "快递 送件",
+                "快递员 递包裹",
+                "小区 收快递"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "646ca9939d4641aebc9703033f44b804",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "用手机物流页示意“几行字”是合理资料镜；但“条目向下滚动”要求一段动态滚动，静态图片更稳，改为页面上物流条目清晰呈现。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "中间那么长一段路，在手机上往往只剩几行字。"
+          },
+          {
+            "source": "script",
+            "quote": "今天，就把这几行字重新展开。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "手机屏幕特写",
+              "subject": "快递物流跟踪页面",
+              "action": "页面上显示数条物流进度条目",
+              "query": "快递 物流跟踪 手机",
+              "search_queries": [
+                "快递 物流跟踪 手机",
+                "快递单号 查询页面",
+                "手机 查物流"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "c963aad37c9b4af4a14381c1d508a6bc",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "原稿引用国家邮政局公布的年度业务量，并未要求必须展示公报页面；可改为说明性行业数据资料镜头，年度数字由口播与字幕表达。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "国家邮政局公布，二〇二四年我国快递业务量完成一千七百五十点八亿件。"
+          },
+          {
+            "source": "script",
+            "quote": "先看一个有明确年份的数字。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "快递数据展示环境",
+              "subject": "快递业务量数据展示画面",
+              "action": "画面上的快递业务量年度数字与包裹示意被呈现",
+              "query": "国家邮政局 快递业务量 数据",
+              "search_queries": [
+                "国家邮政局 快递业务量 数据",
+                "快递业务量 数据展示",
+                "中国快递 年度数据"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "统计数据资料",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "0327dc405de44b16b217caa391d136dc",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "以数据示意图说明“不是人口数、不是人人同量”的限定，属说明性资料；单一页面静态呈现可完成，不承诺具体统计表原件。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "这说的是那一年的业务量，不是人口数，也不是每个人都收到了同样多的包裹。"
+          },
+          {
+            "source": "script",
+            "quote": "二〇二四年我国快递业务量完成一千七百五十点八亿件。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "a74d62e035df4d3f9c1e557e7ad68c9b",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "口播列举书、鞋、日用品是备选而非要求同箱全出；应选一个代表性开箱可观察动作，避免把多个物品清单都变成必现条件。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "把这个数字缩小，缩成你手边一只普通纸箱，就容易理解一些。"
+          },
+          {
+            "source": "script",
+            "quote": "它里面可能是一本书、一双鞋，也可能是给家里补的一点日用品。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "室内桌面",
+              "subject": "一只普通纸箱",
+              "action": "箱盖被打开露出箱内物品",
+              "query": "纸箱 打开 物品",
+              "search_queries": [
+                "纸箱 打开 物品",
+                "快递箱 日常用品",
+                "纸箱 里面 书籍"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "e82ce1e6e443461fa4bf4e6ce9bf66d7",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "该镜说明收件人的期待，属泛化人物动作；原primary“接过或拆开”为两个动作未定，需收为接过包裹一个可观察动作。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "对整个行业来说是一件，对收件人来说却有自己的用途和期待。"
+          },
+          {
+            "source": "script",
+            "quote": "收货的时候，箱子却像自己长了腿一样出现在附近？"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "居民家门口",
+              "subject": "收件人",
+              "action": "从快递员手中接过快递箱",
+              "query": "收件人 拆快递",
+              "search_queries": [
+                "收件人 接快递",
+                "居民 收包裹",
+                "拆快递 日常"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "93b699896512456d9befd9ecea3b8878",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "原稿讲包裹要经历接收、分拨、装载、运输、派送，本镜只取分拨传送带上包裹移动这一代表性动作，属说明性资料，未强求全流程。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "包裹要被接收、分拨、装载、运输，到了末端还要派送。"
+          },
+          {
+            "source": "script",
+            "quote": "它的移动也不是一条没有接头的直线。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "315491cb20b24f699500c46792386fde",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "口播说消费者最容易看见末端的那个人，快递员递包裹给收件人是单一可观察动作，属说明性资料。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "消费者最容易看见的那个人，只站在这条链路靠近自己的地方。"
+          },
+          {
+            "source": "script",
+            "quote": "不同环节由不同岗位接力。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "4ddb9301e4f844a980a7fb4777986e12",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "原稿列举快件处理员多个工种动作与快递员动作，不能全部塞进primary；“卸载或搬动”二选一未定，需收为卸载包裹一个代表性动作。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "快件处理员要承担接收、卸载、分拨、集包、装载和发运等工作。"
+          },
+          {
+            "source": "script",
+            "quote": "快递员则直接面对揽收、派送和客户沟通。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "快递分拨中心作业区",
+              "subject": "快件处理员",
+              "action": "从车辆或传送带旁卸下一件包裹",
+              "query": "快件处理员 分拨 包裹",
+              "search_queries": [
+                "快件处理员 卸货 包裹",
+                "快递分拨 作业",
+                "快递员 揽收 派送"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "职业分工资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "91dde3f6dc75490bb2723c9db5911fe9",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "此镜强调具体劳动而非模糊送货人，快件处理员弯腰搬动包裹是单一可观察动作，说明性资料可承担。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "把他们全部叫成一个模糊的送货人，会漏掉很多具体劳动。"
+          },
+          {
+            "source": "script",
+            "quote": "快件处理员要承担接收、卸载、分拨、集包、装载和发运等工作。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "453ac1ca92c846f0b3525f2480c59716",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "口播是设想场景，用手机派送信息页面示意楼号少一位、电话未接，属资料性说明；页面静态显示可完成。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "现在设想一个生活场景：你写的楼号少了一位，电话又暂时没接。"
+          },
+          {
+            "source": "script",
+            "quote": "这些只是用来理解工作的例子，不是在讲某位快递员的真实遭遇。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "a084377d7a014c1d873a9a83578c3699",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "原稿说送件者需确认地址、再次联系、调整安排，打电话是可观察的代表动作；属设想场景的资料性画面。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "到了送件的人那里，就多了确认地址、再次联系、调整安排这些动作。"
+          },
+          {
+            "source": "script",
+            "quote": "电话又暂时没接。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "fa129a71eb3945169dd0bbf73d4b7bf9",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“页面显示很近”对应手机配送地图资料镜头，静态地图可说明，不承诺展示完整配送过程。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "事情不会因为页面显示很近就自动完成。"
+          },
+          {
+            "source": "script",
+            "quote": "地图上看起来紧挨着的几栋楼。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "226e099e11da44cabd154037feff6661",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "原稿同时说有人在等、有人出门、有人想改约，镜头只应选快递员在单元门口按门禁这一代表性动作，避免“等待或按门禁”二选一未定。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "同一个小区里，有人正在家里等，有人已经出门，有人想换个时间收件。"
+          },
+          {
+            "source": "script",
+            "quote": "楼道、电梯、门禁、天气，都可能参与一件东西最后怎样到达。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "居民小区单元门口",
+              "subject": "快递员",
+              "action": "在单元门口按门禁",
+              "query": "快递员 按门禁",
+              "search_queries": [
+                "快递员 按门禁",
+                "小区 派件 现场",
+                "快递员 小区 门口"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "7c6f652f44184c69b08e750476f09d5f",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "该镜仅需示意相邻楼栋与不同门，原primary“门窗被从外部展示”动作空泛且偏被动，宜选可观察的外部镜头。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "地图上看起来紧挨着的几栋楼，落到现实里，变成了不同的门、不同的作息和不同的沟通。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "小区楼栋外观",
+              "subject": "相邻的居民楼",
+              "action": "相邻楼栋与各自单元门从外景中可见",
+              "query": "小区 楼栋 外观",
+              "search_queries": [
+                "小区 楼栋 外观",
+                "居民楼 单元门",
+                "小区 几栋楼"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "4da835fbe9d6456f818daf55fec63163",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "原稿明示这些只是理解工作的例子，不是真实遭遇；视觉应选一个日常快递作业动作，不宜同时承诺传送带和快递车两种场景。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "这些只是用来理解工作的例子，不是在讲某位快递员的真实遭遇。"
+          },
+          {
+            "source": "script",
+            "quote": "日常的复杂才值得看见。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "快递分拨中心作业区",
+              "subject": "快递作业现场",
+              "action": "工作人员在传送带旁处理包裹",
+              "query": "快递 作业 现场",
+              "search_queries": [
+                "快递 作业 现场",
+                "快递分拨 日常",
+                "快递员 派件 途中"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "日常快递作业资料",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "081628a21e3a4d3986f730988b49f5ce",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "楼道、电梯、门禁是并列因素，镜头应选快递员抱包裹走进楼道这一代表性的连续动作，避免“楼道或电梯”二选一。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "楼道、电梯、门禁、天气，都可能参与一件东西最后怎样到达。"
+          },
+          {
+            "source": "script",
+            "quote": "日常的复杂才值得看见。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "居民楼楼道",
+              "subject": "快递员",
+              "action": "抱着包裹走进楼道",
+              "query": "快递员 楼道 送件",
+              "search_queries": [
+                "快递员 楼道 送件",
+                "快递员 电梯 送包裹",
+                "小区 楼道 快递"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "c1394c51ff2c4bce92503348920553c0",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "原稿介绍自动化分拣设备、手持终端、智能快件箱都进入职业技能内容，选自动化分拣设备并只拍包裹持续移动，符合设备应用主动作，不额外要求看清扫描分流。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "自动化分拣设备、手持终端、智能快件箱，都已进入相关职业技能的内容。"
+          },
+          {
+            "source": "script",
+            "quote": "确实，自动化分拣设备、手持终端、智能快件箱，都已进入相关职业技能的内容。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "b8b7119007c146d69ebff35e50ee72ef",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“设备照样需要操作，信息照样需要判断”可落为工作人员操作手持终端扫描包裹这一可观察动作，属设备应用的说明性资料。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "技术可以帮忙处理一些环节，但设备照样需要操作，信息照样需要判断。"
+          },
+          {
+            "source": "script",
+            "quote": "手持终端"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "e36fa723be194b8e87684fadad14e578",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "该镜只需示意机器顺畅运行时人容易消失，自动化分拣设备上包裹连续流动是单一可观察动作，未强求扫描识别或分流。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "一台机器顺畅运行的时候，人很容易从画面里消失。"
+          },
+          {
+            "source": "script",
+            "quote": "自动化分拣设备"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "791b68f250e74079b20f213ef5a45d08",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "口播强调平常把问题接住，快递工作人员查看或处理问题包裹方向正确；但“查看或处理”二选一未定，需收为查看一件包裹。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "真正稳定的服务，需要有人在平常就把问题接住。"
+          },
+          {
+            "source": "script",
+            "quote": "而不是等到包裹已经丢失或送错，才承认工作存在。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "快递网点",
+              "subject": "快递工作人员",
+              "action": "拿起一件包裹查看面单",
+              "query": "快递 异常件 处理",
+              "search_queries": [
+                "快递 异常件 处理",
+                "快递员 检查包裹",
+                "快递网点 人工处理"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "7cde1b12d32a4368b7c93f49b42b7e46",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "原稿说可把事实说清楚、要求解决，客服或快递工作人员与客户沟通记录问题是说明性资料；但“客服或快递工作人员”主体未定，需收为客服人员。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "东西没收到、包装有损坏、沟通没做到位，都可以把事实说清楚，要求解决。"
+          },
+          {
+            "source": "script",
+            "quote": "尊重劳动和认真对待服务，本来就能放在同一件事里。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "快递服务网点柜台",
+              "subject": "客服人员",
+              "action": "与客户面对面沟通并记录问题",
+              "query": "快递 客服 沟通",
+              "search_queries": [
+                "快递 客服 沟通",
+                "快递网点 客户投诉",
+                "快递 问题件 登记"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "7bd61e773e7b46518e8d6e6afaab3c33",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "这是对尊重劳动与服务态度的评论，快递员递送包裹可示意；但“快递员与收件人”双主体和“递送并当面确认”偏复合，需收为递送包裹一个动作。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "尊重劳动和认真对待服务，本来就能放在同一件事里。"
+          },
+          {
+            "source": "script",
+            "quote": "他们全部叫成一个模糊的送货人，会漏掉很多具体劳动。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "住宅门口",
+              "subject": "快递员",
+              "action": "将包裹递给收件人",
+              "query": "快递员 递送包裹",
+              "search_queries": [
+                "快递员 递送包裹",
+                "快递员 送货上门",
+                "收件人 签收快递"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "c517ae26521848e897025287f1e17c40",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "地址写完整、能联系时说明白对应手机填写收货地址，单个连续动作可完成，属日常建议的资料性画面。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "更有用的做法也许很小：地址写完整，能够联系时把情况说明白，需求变了及时沟通。"
+          },
+          {
+            "source": "script",
+            "quote": "一个少绕的弯，一次不用反复打的电话。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "9ed2a01631ae47009e45c9058882b52c",
+        "status": "revised",
+        "purpose": "illustration",
+        "reason": "该句偏抽象评论，用快件处理员装载包裹呈现日常劳动可行；但“搬运并装载”是两个动作复合，需收为装载包裹一个动作。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "一个少绕的弯，一次不用反复打的电话，都比想象中的英雄故事更贴近每天的工作。"
+          },
+          {
+            "source": "script",
+            "quote": "快件处理员要承担接收、卸载、分拨、集包、装载和发运等工作。"
+          }
+        ],
+        "patch": {
+          "visual_plan": {
+            "mode": "single",
+            "primary": {
+              "scene": "分拣场地",
+              "subject": "快件处理员",
+              "action": "将一件包裹装上车辆",
+              "query": "快件处理员 装载包裹",
+              "search_queries": [
+                "快件处理员 装载包裹",
+                "分拣中心 搬运包裹",
+                "快递 装卸作业"
+              ]
+            },
+            "alternatives": []
+          },
+          "overlay_label": "资料画面",
+          "evidence_mode": "generic",
+          "event_scope": "background"
+        }
+      },
+      {
+        "shot_id": "fff755dcbdf2499b99d75a17715d5b88",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "对企业信息安排与劳动者不临场补救的评论，可用网点工作人员通过手持终端确认派送信息这一操作设备动作说明。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "消费者不该靠猜测安排自己的收件时间，劳动者也不该总靠临场补救维持流程。"
+          },
+          {
+            "source": "script",
+            "quote": "清晰的信息、合理的安排、遇到问题能找到人。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "81b4e24c6c02481fb50f4645a3e28207",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“清晰信息、合理、能找到人”可落为快递员对照手机地址按门铃，单一可观察动作，资料性可完成。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "清晰的信息、合理的安排、遇到问题能找到人，才会让一件小事真正顺下来。"
+          },
+          {
+            "source": "script",
+            "quote": "地图上看起来紧挨着的几栋楼。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "0eb52be88436463db4b3a58751ad8ae7",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“东西到了”是结果状态，收件人开门接过包裹是单一可观察动作；属泛化生活资料，不涉及购买付款全流程。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "我们说现代生活方便，常常说的是结果：东西到了，消息收到了，事情办成了。"
+          },
+          {
+            "source": "script",
+            "quote": "方便的背面却是一连串有人完成的动作。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "c14bbe8064634119afea2ef8f7993738",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“一连串有人完成的动作”可只取分拣人员把包裹放上传送带这一代表性劳动动作，属说明性资料。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "方便的背面却是一连串有人完成的动作。"
+          },
+          {
+            "source": "script",
+            "quote": "把这些动作看清楚，不会让生活变沉重。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "4356d0594741479ab52dc3e3a13af7f6",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "口播让观众下次拆快递时想接力过程，收件人拆开纸箱是单一可观察动作，属资料性日常画面。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "下次拆快递时，可以想一秒钟：这只箱子经历了多少次接力，最后才来到这里。"
+          },
+          {
+            "source": "script",
+            "quote": "这只箱子经历了多少次接力。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "3e949d74c05e437396545586b4be73c8",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“屏幕上短短几行进度”可用手机物流进度页静态显示来示意，属说明性资料；不要求展示真实完整物流数据。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "只要知道，屏幕上短短几行进度，装不下它走过的全部路。"
+          },
+          {
+            "source": "script",
+            "quote": "在手机上往往只剩几行字。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "e42132db41394c0eabdc654c27a4b0b7",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "“既看见商品，也看见运输”可只取运输车辆在道路行驶这一代表性动作，属说明性资料，未强求全运输链。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "既看见商品，也看见运输；既提出需求，也说清需求。"
+          },
+          {
+            "source": "script",
+            "quote": "包裹要被接收、分拨、装载、运输，到了末端还要派送。"
+          }
+        ],
+        "patch": {}
+      },
+      {
+        "shot_id": "f0604aa223134128a0db290350f05663",
+        "status": "consistent",
+        "purpose": "illustration",
+        "reason": "结尾讲轻轻一点后许多人一天连接起来，快递员把包裹装上派送车辆是一个可观察的末端劳动动作，属说明性资料。",
+        "evidence": [
+          {
+            "source": "script",
+            "quote": "快递不是从天上掉下来的，你轻轻一点之后，许多人的一天，就这样与你连接起来。"
+          },
+          {
+            "source": "script",
+            "quote": "到了末端还要派送。"
+          }
+        ],
+        "patch": {}
+      }
+    ]
+  }
+}

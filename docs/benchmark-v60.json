@@ -1,0 +1,40 @@
+{
+  "script_sha256": "6e1e13b794f0a9fd7abb25889342821ff476ce6498ab88b24b9ffca1a20591a6",
+  "wall_limit_seconds": 600,
+  "model_budget_cny": 0.1,
+  "baidu_pricing_verified": false,
+  "cache_condition": "existing application caches retained; unseen script; no project-specific presearch",
+  "new_independent_script": true,
+  "prior_projects_reset_or_cloned": false,
+  "manual_material_selection": false,
+  "status": "failed",
+  "elapsed_seconds": 529.718,
+  "shots": 28,
+  "timeline_seconds": 243.52,
+  "selected": 5,
+  "approved": 0,
+  "exports": 0,
+  "meets_full_goal": false,
+  "model_cost_cny": 0.09175,
+  "unpriced_baidu_requests": 1,
+  "stage_seconds": {
+    "plan": 22.253,
+    "voice_full": 45.9,
+    "align": 4.503,
+    "match": 456.704
+  },
+  "cost_cny_by_task": {
+    "requirements": 0.002985,
+    "retrieval_grouping": 0.001794,
+    "library_ranking": 0.003814,
+    "source_ranking": 0.004075,
+    "scene_ranking": 0.014823,
+    "pixel_observation": 0.015255,
+    "pixel_observation_joint": 0.036758,
+    "evidence_review": 0.012246
+  },
+  "stopped_before_request": {
+    "next_reservation_cny": 0.0245,
+    "reason": "project/job model budget would be exceeded"
+  }
+}
