@@ -97,6 +97,26 @@ def create_app() -> FastAPI:
         from .baidu_http import status
         return status()
 
+    @app.post("/api/bilibili/qr")
+    def bilibili_qr():
+        import base64
+        from .express_sources import qr_login_start
+        start = qr_login_start()
+        return {"key": start["key"], "image": "data:image/png;base64," + base64.b64encode(start["png"]).decode()}
+
+    @app.get("/api/bilibili/qr/{key}")
+    def bilibili_qr_poll(key: str):
+        import re
+        from .express_sources import qr_login_poll
+        if not re.fullmatch(r"[A-Za-z0-9]{8,64}", key):
+            raise ValueError("登录二维码无效")
+        return qr_login_poll(key)
+
+    @app.get("/api/bilibili/status")
+    def bilibili_status():
+        from .express_sources import login_status
+        return login_status()
+
     @app.get("/api/projects")
     def list_projects():
         return store.list_projects()

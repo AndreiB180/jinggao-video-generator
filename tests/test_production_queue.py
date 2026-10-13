@@ -14,7 +14,8 @@ from test_workflow import audio_bytes
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path / "批量 字幕")
     with TestClient(create_app()) as c:
-        c.patch("/api/settings", json={"model_api_key": "test-only"})
+        # These cases cover the classic (v60) pipeline; the express pipeline has its own tests.
+        c.patch("/api/settings", json={"model_api_key": "test-only", "pipeline": "classic"})
         yield c
 
 

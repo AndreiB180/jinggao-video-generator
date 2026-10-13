@@ -17,7 +17,7 @@ from functools import lru_cache
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from . import captions, config, curation, execution, paths, store
+from . import captions, config, curation, execution, express_clean, paths, store
 
 
 class Cancelled(Exception):
@@ -185,7 +185,7 @@ def synthesize(text: str, target: Path, check=None) -> None:
         elif sys.platform == "darwin":
             aiff = target.with_suffix(".aiff")
             charge.mark_sent()
-            run(["/usr/bin/say", "-v", "Tingting", "-f", str(text_file), "-o", str(aiff)], check=check)
+            run(["/usr/bin/say", "-v", _say_voice(), "-f", str(text_file), "-o", str(aiff)], check=check)
             run([paths.binary("ffmpeg"), "-v", "error", "-y", "-i", str(aiff), "-ar", "24000", str(target)], check=check)
             aiff.unlink(missing_ok=True)
             charge.success()
@@ -368,6 +368,27 @@ def subtitle_overlays(segments: list[tuple], w: int, h: int, work: Path, visual:
     return inputs, ";".join(graph)
 
 
+@lru_cache(maxsize=1)
+def _say_voice() -> str:
+    """The Mandarin voice is "Tingting" on older macOS and "Ting-Ting" on newer releases."""
+    try:
+        voices = subprocess.run(["/usr/bin/say", "-v", "?"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "Tingting"
+    return next((v for v in ("Tingting", "Ting-Ting") if re.search(rf"^{v}\s", voices, re.M)), "Tingting")
+
+
+def _derived_from(assets: dict, asset: dict, target) -> bool:
+    """Is asset the target file itself or a privacy-redacted copy of it?"""
+    seen = set()
+    while asset and asset["id"] not in seen:
+        if asset["id"] == target:
+            return True
+        seen.add(asset["id"])
+        asset = assets.get((asset.get("privacy_redaction") or {}).get("original_asset_id"))
+    return False
+
+
 def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
     shots = project["shots"]
     if not shots:
@@ -435,6 +456,16 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         ass, segments = subtitles(shot["narration"], duration, w, h, label, timed_segments=timed)
         (shot_work / "subtitle.ass").write_text(ass, "utf-8-sig")
         visual = f"scale={w}:{h}:force_original_aspect_ratio="
+        # Express crops were measured on one downloaded file (or its privacy-processed copy); a different
+        # asset chosen later renders uncropped. Shots saved before crop_asset existed keep their crop.
+        measured = asset["kind"] == "video" and (shot.get("crop_asset") is None
+                                                 or _derived_from(assets, asset, shot["crop_asset"]))
+        crop = float(shot.get("crop_bottom") or 0)
+        prefix = f"crop=iw:trunc(ih*{1-crop:.3f}/2)*2:0:0," if measured and 0 < crop < .3 else ""
+        if measured and shot.get("frame_crop"):
+            # Express footage: blur leftover logos, then show the watermark/subtitle-free rectangle.
+            clean = express_clean.video_filter(shot["frame_crop"])
+            prefix = clean + "," if clean else prefix
         if shot.get("fit") == "contain":
             # Preserve all source pixels in the foreground. A dim, blurred
             # copy fills aspect-ratio gaps without cropping evidence or adding
@@ -456,6 +487,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
             # Supersample before subpixel zoom to keep slow photographic motion smooth.
             visual += (f",scale={w*2}:{h*2},zoompan=z='1+0.055*on/{max(1,round(duration*25))}':"
                        f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={w}x{h}:fps=25")
+        visual = prefix + visual
         visual += f",setsar=1,fps=25,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}"
         args = [paths.binary("ffmpeg"), "-v", "error", "-y"]
         if asset["kind"] == "image":

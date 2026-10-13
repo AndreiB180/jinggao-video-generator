@@ -224,6 +224,7 @@ def test_local_voice_has_explicit_offline_basis_and_no_cloud_tariff(environment,
     monkeypatch.setattr(media.sys, "platform", "darwin")
     calls = []
     monkeypatch.setattr(media, "run", lambda args, **kwargs: calls.append(args))
+    monkeypatch.setattr(media, "_say_voice", lambda: "Tingting")   # newer macOS names it "Ting-Ting"
     monkeypatch.setattr(paths, "binary", lambda name: name)
     monkeypatch.setattr(media.httpx, "Client", lambda **kwargs: pytest.fail("no cloud client"))
     cfg["model_project_budget_cny"] = "0.00"

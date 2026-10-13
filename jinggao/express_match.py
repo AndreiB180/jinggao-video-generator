@@ -1,0 +1,1286 @@
+"""Express matcher: fill the whole narration timeline with real footage, cheaply.
+
+Ordinary shots only need roughly related, natural footage, so they share one
+batched visual pick per search group over labelled contact sheets of free
+preview thumbnails. Shots that name a real person use a strict lane: the
+source text must carry the full name and the visual pick must show a real
+person as the subject; otherwise they fall back to people-free context
+footage instead of someone else. A final cheap visual QA over the actually
+downloaded windows replaces off-topic, black, talking-head or covered clips.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import math
+import re
+import threading
+import time
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont, ImageStat
+
+from . import config, curation, execution, express_clean, express_sources as es, media, paths, planner, store
+
+VERSION = 1
+BILI_PER_QUERY = 3
+PERSON_PER_QUERY = 4   # named people have little real footage: look a little wider before falling back
+PIXA_PER_QUERY = 2
+TILES_PER_BILI = 8
+PERSON_TILES = 10
+QA_W, QA_H = 320, 180
+SHEET_COLS, SHEET_ROWS = 5, 4
+TILE_W, TILE_H = es.TILE
+LABEL_H = 0
+WINDOW_GAP = 0.6
+MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
+FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
+NOISE_WORDS = re.compile(
+    r"教程|讲解|解说|课程|讲座|课件|PPT|ppt|直播|游戏|动画|MMD|手书|鬼畜|CAD|图纸|三维模型|建模|广告|带货|测评|开箱|"
+    r"reaction|反应|翻唱|MV|AMV|搞笑|模拟器|我的世界|原神|王者|AI绘|AI生成|配音秀|考研|考试|答辩|股票|基金|大A|"
+    r"财经|行情|招聘|面试|求职|小说|有声书|电台|音乐|歌曲|BGM|bgm|伴奏")
+DRAMA_WORDS = re.compile(r"电视剧|电影|剧照|饰演|扮演|演员|剧情|混剪|AI|特型演员|模仿|cos|动画|动漫|漫画|手绘|配音|片段合集|"
+                         r"朗诵|背景视频|LED|舞台|情景")
+PERSON_EVIDENCE = re.compile(r"影像|纪录|新闻|讲话|原声|视频|资料|珍贵|历史|现场|采访|发言|报道")
+# Named people must never be shown by an actor: drop drama/edit categories, tags and dialogue-style titles.
+DRAMA_TYPES = {"影视剪辑", "影视杂谈", "小剧场", "短片", "电影", "电视剧", "综艺", "娱乐杂谈", "搞笑", "鬼畜调教",
+               "鬼畜剧场", "动画", "MAD·AMV", "手书", "短剧"}
+DRAMA_TAGS = re.compile(r"电影|电视剧|影视剪辑|影视|演技|演员|饰演|扮演|混剪|二创|剧情|短剧|名场面|配音")
+DIALOGUE_TITLE = re.compile(r"(说|道|问|答)[：:]|[“\"].{2,}[”\"].*(说|道)")
+IDENTITY_REJECTION = re.compile(r"演员|扮演|影视|情景|再现|不是|非|主体为|他人|别人|其他人|冒充|主持|博主|嘉宾|访谈|采访|"
+                                r"镜头讲话|对镜|口播画面|演播室|黑屏|纯色|模糊|动画|AI|字幕遮挡|台标|"
+                                r"葬礼|遗体|遗像|灵堂|灵柩|追悼|悼念|花圈")
+# Rejections that make a clip unusable for any line, even as a last resort before a title card.
+BROKEN_REJECTION = re.compile(r"黑屏|纯色|模糊|动画|游戏|AI|PPT|文字页|图表|主持|博主|嘉宾|访谈|采访|出镜|镜头讲话|对镜|"
+                              r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告")
+FUNERAL = re.compile(r"葬礼|遗体|遗容|遗像|灵堂|灵柩|追悼|悼念|花圈|讣告|火化|送别|逝世后|告别仪式")
+DEATH_LINE = re.compile(r"逝世|去世|病逝|离世|悼念|追悼|葬礼|长眠|告别")
+ARCHIVE_TITLE = re.compile(r"珍贵|影像|纪录片|央视|新闻|原声|档案|讲课|讲话|采访|实录")
+
+PICK_SYSTEM = """你在为营销号视频挑选实拍素材。图片是若干视频的缩略图联系表，每格左上角有黄色编号。
+请为每个镜头挑出合适的格子编号（最好的在前，最多6个），只输出 JSON：{"S1":["12","7"],"S2":[]}。
+普通镜头标准：画面与口播所讲的主题场景大致相关、看起来自然即可（画面建议只是参考），不要求型号、年份、地点、动作逐一一致。
+必须排除：主持人或博主对镜头口播、PPT/文字页/图表为主、片头片尾和转场、黑屏或严重模糊、大面积硬字幕/弹幕/贴纸/台标遮挡画面、游戏/动画/CG（除非口播就是讲这些）、与口播明显无关的内容、广告。
+画面中出现具体人物脸部特写时，除非该镜头要求此人物，否则尽量不选。"""
+
+PERSON_RULES = """
+本组是具名人物镜头，要求出现的人物：{names}。这些格子来自标题含该姓名的视频。
+只选：真实拍摄的历史影像/新闻/纪录片画面，以人物为主体（讲话、会见、视察、出场等），与口播一致。
+排除：影视剧/情景再现中的演员扮演（较早年代的事件却是彩色高清、布光像电影的场景，通常是扮演）、动画/手绘/AI图、只有文字或照片墙、多人画面中看不出谁是主体、字幕上写着其他人姓名的画面。
+如画面上能读到该人物姓名字幕更好。另外请用键 "_ctx" 列出不含任何可辨认人物、但与口播背景相关的环境/资料画面编号（如场景、建筑、文件），用于无合适人物画面时补位。"""
+
+TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体画面，不出现可辨认人物特写"
+
+QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
+对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
+bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
+wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
+普通镜头只要和口播所讲的主题场景大致相关、看着自然即可：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、地点、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。只有画面题材与口播完全无关才算跑题。
+要求具名人物的镜头：只要画面是此人本人的真实影像或照片就合格，即使与口播所讲的具体事件、场景不一致也不要判不合格。
+任何镜头：口播没讲到逝世、悼念时，葬礼、遗体、遗像、灵堂、花圈、追悼会画面不合格。"""
+
+
+class Budget(RuntimeError):
+    pass
+
+
+def _font(size):
+    try:
+        return ImageFont.truetype(str(paths.font_path()), size)
+    except (OSError, RuntimeError):
+        return ImageFont.load_default()
+
+
+def _jpeg(image: Image.Image, quality=80) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, "JPEG", quality=quality)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
+
+
+def _dark(image: Image.Image) -> bool:
+    stat = ImageStat.Stat(image.convert("L").resize((64, 36)))
+    return stat.mean[0] < 22 or stat.stddev[0] < 10
+
+
+def _dhash(image: Image.Image) -> int:
+    small = image.convert("L").resize((9, 8))
+    pixels = list(small.getdata())
+    bits = 0
+    for row in range(8):
+        for col in range(8):
+            bits = bits << 1 | (pixels[row * 9 + col] > pixels[row * 9 + col + 1])
+    return bits
+
+
+def _tokens(text: str) -> list[str]:
+    import jieba
+    words = [w.strip() for w in jieba.lcut(text) if len(w.strip()) >= 2]
+    return list(dict.fromkeys(words))
+
+
+def _sheet(tiles: list[dict], start_label: int) -> tuple[Image.Image, dict]:
+    rows = math.ceil(len(tiles) / SHEET_COLS)
+    sheet = Image.new("RGB", (SHEET_COLS * TILE_W, rows * TILE_H), (0, 0, 0))
+    draw = ImageDraw.Draw(sheet)
+    font = _font(26)
+    labels = {}
+    for index, tile in enumerate(tiles):
+        label = str(start_label + index)
+        x, y = (index % SHEET_COLS) * TILE_W, (index // SHEET_COLS) * TILE_H
+        sheet.paste(tile["image"].resize((TILE_W, TILE_H)), (x, y))
+        box = draw.textbbox((x + 4, y + 2), label, font=font)
+        draw.rectangle((box[0] - 3, box[1] - 2, box[2] + 3, box[3] + 2), fill=(255, 214, 0))
+        draw.text((x + 4, y + 2), label, font=font, fill=(0, 0, 0))
+        draw.rectangle((x, y, x + TILE_W - 1, y + TILE_H - 1), outline=(0, 0, 0), width=2)
+        labels[label] = tile
+    return sheet, labels
+
+
+class Matcher:
+    def __init__(self, project: dict, shots: list[dict], check, progress):
+        self.project = project
+        self.pid = project["id"]
+        self.shots = shots
+        self.check = check
+        self.progress = progress
+        self.started = time.monotonic()
+        self.cfg = config.read()
+        self.bili = es.Bilibili()
+        key = es.stock_key()
+        self.pixa = es.Pixabay(key) if key else None
+        self.plan = project.get("plan_info") or {}
+        self.min_height = int(project.get("min_video_height", 720) or 720)
+        self.notes = []
+        self.lock = threading.Lock()
+        self.calls = {"pick": 0, "qa": 0}
+        self.timing = {}
+        self.fetch_seconds = []
+        self.qa_unchecked = set()
+        self.job_choice = {}
+        self.subtitled = set()
+        self.clean = {}       # job id -> express_clean analysis of the downloaded window
+        self.pool = None      # downloads outlive a round: on a slow link their progress is kept
+        self.inflight = {}    # future -> (job_id, sid, choice)
+        self.abandon = threading.Event()
+        self.soft = {}        # job id -> {"wm", "still"} flags from the visual check
+        self.profiles = {}
+        self.sheets = {}
+        self.timeline = project["shots"]
+        self.shots_by_id_all = {s["id"]: s for s in project["shots"]}
+        self.position = {s["id"]: i for i, s in enumerate(self.timeline)}
+        self.placed = self.existing_placements()
+        # Every named person in this script: a dramatisation about them must not slip in as filler either.
+        self.names = {g.get("person") for g in self.plan.get("groups", []) if g.get("person")}
+        self.names |= {p["name"] for s in project["shots"] for p in s.get("persons") or []}
+        self.unfilmed = set()   # names no candidate source carries (no real footage of them was found)
+
+    def chat(self, system, content, *, max_tokens, task, timeout=40, attempts=3):
+        """Vision call with short timeouts and retries; Germany->Beijing calls occasionally stall."""
+        last = None
+        for attempt in range(attempts):
+            self.check()
+            try:
+                return planner.chat(system, content, vision=True, max_tokens=max_tokens, timeout=timeout, task=task)
+            except ValueError as exc:
+                message = str(exc)
+                if not any(k in message for k in ("连接失败或超时", "HTTP 5", "没有返回有效 JSON", "响应必须是 JSON")):
+                    raise
+                last = exc
+                time.sleep(1.5 * (attempt + 1))
+        raise last
+
+    # ------------------------------------------------------------------ groups
+    def groups(self) -> list[dict]:
+        wanted = {s["id"] for s in self.shots}
+        groups = []
+        for g in self.plan.get("groups", []):
+            ids = [sid for sid in g.get("shots", []) if sid in wanted]
+            if ids:
+                groups.append(g | {"shots": ids})
+        known = {sid for g in groups for sid in g["shots"]}
+        for shot in self.shots:
+            if shot["id"] not in known:
+                express = shot.get("express") or {}
+                groups.append({"id": f"R{shot['id'][:6]}", "zh": express.get("zh") or [shot.get("query") or shot["narration"][:30]],
+                               "en": express.get("en", []),
+                               "person": (shot.get("persons") or [{}])[0].get("name", ""), "shots": [shot["id"]]})
+        topic = self.plan.get("topic") or {}
+        groups.append({"id": "TOPIC", "zh": topic.get("zh", [])[:2], "en": topic.get("en", [])[:2],
+                       "person": "", "shots": [], "topic": True})
+        return groups
+
+    # ------------------------------------------------------------------ search
+    def search(self, groups):
+        tasks = []
+        for g in groups:
+            for q in g["zh"][:2]:
+                tasks.append(("bili", q))
+            if self.pixa:
+                for q in g["en"][:2]:
+                    tasks.append(("pixa", q))
+        tasks = list(dict.fromkeys(tasks))
+        results = {}
+        def run(task):
+            self.check()
+            kind, q = task
+            try:
+                return task, (self.bili.search(q) if kind == "bili" else self.pixa.search(q))
+            except Exception as exc:  # network/provider errors only cost this query
+                self.notes.append(f"检索失败 {kind}:{q}: {type(exc).__name__}")
+                return task, []
+        with execution.ThreadPoolExecutor(max_workers=6) as pool:
+            for task, rows in pool.map(run, tasks):
+                results[task] = rows
+        return results
+
+    def score(self, row, group, shots_by_id):
+        text = " ".join((row.get("title", ""), row.get("tags", ""), row.get("description", "")))
+        if group.get("person"):
+            name = group["person"]
+            title = row.get("title", "")
+            if (name not in text or DRAMA_WORDS.search(title + row.get("tags", ""))
+                    or row.get("typename", "") in DRAMA_TYPES or DRAMA_TAGS.search(row.get("tags", ""))
+                    or DIALOGUE_TITLE.search(title)):
+                return None
+        elif any(name in row.get("title", "") for name in getattr(self, "names", ())) and \
+                DRAMA_WORDS.search(row.get("title", "") + row.get("tags", "")):
+            return None
+        words = []
+        for q in group["zh"] + group["en"]:
+            words += _tokens(q) if row["provider"] == "bilibili" else [w.lower() for w in re.findall(r"[A-Za-z]{3,}", q)]
+        words = list(dict.fromkeys(words))
+        haystack = text.lower()
+        overlap = sum(1 for w in words if w.lower() in haystack) / max(1, len(words))
+        score = overlap * 2
+        duration = row.get("duration", 0)
+        need = max([float(shots_by_id[s]["duration"]) for s in group["shots"]] or [8])
+        if row["provider"] == "bilibili":
+            if duration < 12 or duration > 3 * 3600:
+                return None
+            if NOISE_WORDS.search(row.get("title", "")):
+                score -= 1.2
+            if FOOTAGE_WORDS.search(text):
+                score += 0.5
+            if group.get("person") and PERSON_EVIDENCE.search(text):
+                score += 0.5
+            if group.get("person") and ARCHIVE_TITLE.search(row.get("title", "")):
+                score += 0.6
+            score += 0.3 if 45 <= duration <= 1200 else 0
+            score += min(0.3, math.log10(1 + row.get("play", 0)) / 20)
+        else:
+            if duration + 0.05 < min(need, 6):
+                return None
+            score += 0.4 if duration >= need + 1 else -0.4
+        return score
+
+    def candidates(self, groups, results):
+        """Per group: top Bilibili results of EACH Chinese query, plus stock clips whose tags match."""
+        shots_by_id = {s["id"]: s for s in self.shots}
+        chosen = {}
+        for g in groups:
+            picked, seen = [], set()
+            bili_quota = PERSON_PER_QUERY if g.get("person") else BILI_PER_QUERY
+            for kind, queries, quota in (("bili", g["zh"][:2], bili_quota),
+                                         ("pixa", g["en"][:2] if self.pixa else [], PIXA_PER_QUERY)):
+                for q in queries:
+                    ranked = []
+                    for rank, row in enumerate(results.get((kind, q), [])):
+                        score = self.score(row, g, shots_by_id)
+                        if score is None:
+                            continue
+                        if kind == "pixa" and (self.stock_overlap(row, q) == 0 or not self.oriented(row)):
+                            continue
+                        ranked.append((score - rank * 0.04, row))
+                    ranked.sort(key=lambda item: -item[0])
+                    taken = 0
+                    for _, row in ranked:
+                        key = (row["provider"], row["id"])
+                        title_key = (row["provider"], row.get("title", "")[:30])
+                        if key in seen or title_key in seen:
+                            continue
+                        seen.update((key, title_key))
+                        picked.append(row)
+                        taken += 1
+                        if taken >= quota:
+                            break
+            chosen[g["id"]] = picked
+        return chosen
+
+    def oriented(self, source) -> bool:
+        """A portrait stock clip in a landscape project would be a thin strip; landscape stock crops fine to 9:16."""
+        r = source.get("rendition") or {}
+        if not (r.get("width") and r.get("height")) or self.project.get("aspect", "16:9") == "9:16":
+            return True
+        return r["width"] >= r["height"]
+
+    @staticmethod
+    def stock_overlap(row, query) -> int:
+        tags = {t.strip().lower() for t in row.get("tags", "").split(",")}
+        words = {w.lower() for w in re.findall(r"[A-Za-z]{3,}", query)}
+        tag_words = {w for t in tags for w in t.split()}
+        return len(words & tag_words)
+
+    # ----------------------------------------------------------------- tiles
+    def tiles_for(self, row, count=TILES_PER_BILI) -> list[dict]:
+        if row["provider"] == "pixabay":
+            image = self.pixa.thumbnail(row)
+            if image is None or _dark(image):
+                return []
+            return [{"source": row, "t": row["duration"] / 2, "image": image}]
+        previews = self.bili.previews(row["id"], row["duration"])
+        if not previews:
+            return []
+        duration = row["duration"] or previews[-1]["t"]
+        inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
+        step = max(1, len(inner) / count)
+        picked = [inner[min(len(inner) - 1, int(i * step + step / 2))] for i in range(min(count, len(inner)))]
+        tiles, hashes = [], []
+        for p in picked:
+            image = es.bilibili_tile(self.bili, p)
+            if _dark(image):
+                continue
+            h = _dhash(image)
+            if any(bin(h ^ other).count("1") <= 5 for other in hashes):
+                continue
+            hashes.append(h)
+            tiles.append({"source": row, "t": p["t"], "image": image})
+        if express_clean.available():
+            try:
+                frames = self.sprite_frames(row, picked[0]["t"] if picked else 0)
+                frames = frames[::max(1, len(frames) // 120)]
+                size = (express_clean.WIDTH, round(express_clean.WIDTH * 9 / 16))
+                profile = express_clean.profile([im for _, im in frames], size)
+                with self.lock:
+                    self.profiles[(row["id"], size)] = profile
+                if express_clean.central_marks(profile):
+                    row["dirty"] = True   # an uploader mark across the middle of the picture
+            except Exception as exc:  # the check is an optimisation only
+                self.notes.append(f"水印预检失败 {row['id']}: {type(exc).__name__}")
+        return tiles
+
+    def all_tiles(self, chosen, person_groups=()):
+        sources, person = {}, set()
+        for gid, rows in chosen.items():
+            for row in rows:
+                sources[(row["provider"], row["id"])] = row
+                if gid in person_groups:
+                    person.add((row["provider"], row["id"]))
+        tiles = {}
+        def run(item):
+            key, row = item
+            self.check()
+            try:
+                return key, self.tiles_for(row, PERSON_TILES if key in person else TILES_PER_BILI)
+            except Exception as exc:
+                self.notes.append(f"预览失败 {key[1]}: {type(exc).__name__}")
+                return key, []
+        with execution.ThreadPoolExecutor(max_workers=8) as pool:
+            for key, rows in pool.map(run, list(sources.items())):
+                tiles[key] = rows
+        return tiles
+
+    # ------------------------------------------------------------------ picks
+    def pick(self, group, tiles, shots_by_id):
+        if not tiles:
+            return {}, {}
+        tiles = tiles[:3 * SHEET_COLS * SHEET_ROWS]
+        sheets, labels = [], {}
+        for start in range(0, len(tiles), SHEET_COLS * SHEET_ROWS):
+            sheet, part = _sheet(tiles[start:start + SHEET_COLS * SHEET_ROWS], start + 1)
+            sheets.append(sheet)
+            labels.update(part)
+        if group.get("topic"):
+            lines = [f"S1：{TOPIC_SHOT}（主题：{'、'.join(group['zh'])}）"]
+            ids = {"S1": "TOPIC"}
+        else:
+            lines, ids = [], {}
+            for n, sid in enumerate(group["shots"], 1):
+                shot = shots_by_id[sid]
+                extra = ""
+                names = [x["name"] for x in shot.get("persons") or []]
+                if names and group.get("person") not in names:
+                    extra = f"｜注意：口播提到{'、'.join(names)}，本组素材不能确认其身份，只选不含可辨认人物的相关画面"
+                lines.append(f"S{n}（约{float(shot['duration']):.0f}秒）口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{extra}")
+                ids[f"S{n}"] = sid
+        system = PICK_SYSTEM
+        if group.get("person"):
+            system += PERSON_RULES.format(names=group["person"])
+        requirement = (self.project.get("requirements") or "").strip()
+        text = ("用户画面要求：" + (requirement or "无") + "\n全文主题：" + self.project.get("title", "")
+                + "\n镜头：\n" + "\n".join(lines))
+        content = [{"type": "text", "text": text}] + [
+            {"type": "image_url", "image_url": {"url": _jpeg(s)}} for s in sheets]
+        cache_key = hashlib.sha256((system + text + "".join(
+            f"{t['source']['provider']}:{t['source']['id']}:{t['t']:.1f}" for t in tiles)).encode()).hexdigest()[:40]
+        cache = es._cache("picks") / f"{cache_key}.json"
+        result = es._read_json(cache, 30 * 24 * 3600)
+        if result is None:
+            self.check()
+            result, _ = self.chat(system, content, max_tokens=60 + 40 * len(ids), task="express_pick")
+            with self.lock:
+                self.calls["pick"] += 1
+            es._write_json(cache, result)
+        picks, ctx = {}, []
+        for key, value in result.items() if isinstance(result, dict) else []:
+            values = [str(v).strip() for v in (value if isinstance(value, list) else []) if str(v).strip() in labels]
+            if key == "_ctx":
+                ctx = values
+            elif key in ids:
+                picks[ids[key]] = [labels[v] for v in dict.fromkeys(values)][:6]
+        return picks, {"ctx": [labels[v] for v in dict.fromkeys(ctx)]}
+
+    def title_card(self, shot):
+        """Neutral image card (counts as image seconds, never as fake footage)."""
+        w, h = (1280, 720) if self.project.get("aspect", "16:9") != "9:16" else (720, 1280)
+        image = Image.new("RGB", (w, h), (18, 22, 30))
+        draw = ImageDraw.Draw(image)
+        for y in range(h):
+            shade = int(18 + 22 * y / h)
+            draw.line([(0, y), (w, y)], fill=(shade, shade + 4, shade + 12))
+        names = "、".join(p["name"] for p in shot.get("persons") or [])
+        text = names or (shot.get("visual") or shot["narration"])[:16]
+        font = _font(64 if len(text) <= 10 else 48)
+        draw.text((w / 2, h / 2), text, font=font, fill=(235, 235, 235), anchor="mm")
+        root = paths.project_dir(self.pid) / "assets"
+        root.mkdir(exist_ok=True)
+        path = root / f"express-card-{shot['id'][:8]}.jpg"
+        image.save(path, quality=92)
+        return path
+
+    def unfilmed_shot(self, shot) -> bool:
+        """A named-person line whose people have no real footage at all (e.g. a Qing-dynasty cook):
+        it takes related background footage like an ordinary line instead of falling back to a card."""
+        return bool(shot.get("persons")) and all(p["name"] in self.unfilmed for p in shot["persons"])
+
+    @staticmethod
+    def names_in_source(shot, source) -> bool:
+        text = " ".join(str(source.get(k, "")) for k in ("title", "tags", "description"))
+        return all(p["name"] in text for p in shot.get("persons") or [])
+
+    # -------------------------------------------------------------- allocation
+    def window(self, tile, duration, reserved):
+        source = tile["source"]
+        length = float(source.get("duration") or 0)
+        need = duration + MARGIN
+        if length < need + 0.1:
+            return None
+        t = float(tile["t"])
+        key = (source["provider"], source["id"])
+        taken = reserved.get(key, [])
+        lo = max(0.0, t - need + 1.0)
+        hi = min(length - need - 0.1, t - 1.0 if need > 2.5 else t)
+        if hi < lo:
+            lo, hi = 0.0, max(0.0, length - need - 0.1)
+        preferred = min(max(t - need * 0.3, lo), hi)
+        steps = [preferred] + [preferred + d * s for s in range(1, 40) for d in (0.5, -0.5)]
+        for start in steps:
+            if not lo - 1e-6 <= start <= hi + 1e-6:
+                continue
+            end = start + need
+            if all(end + WINDOW_GAP <= a or start >= b + WINDOW_GAP for a, b in taken):
+                return round(start, 2)
+        return None
+
+    def existing_placements(self) -> dict:
+        assets = {a["id"]: a for a in self.project.get("assets", [])}
+        wanted = {s["id"] for s in self.shots}
+        placed = {}
+        for index, shot in enumerate(self.timeline):
+            asset = assets.get(shot.get("selected_asset")) or {}
+            candidate = str(asset.get("candidate_id", ""))
+            if shot["id"] not in wanted and ":" in candidate:
+                placed[index] = tuple(candidate.split(":", 1))
+        return placed
+
+    def existing_windows(self) -> dict:
+        wanted = {s["id"] for s in self.shots}
+        assets = {a["id"]: a for a in self.project.get("assets", [])}
+        reserved = {}
+        for shot in self.project.get("shots", []):
+            if shot["id"] in wanted:
+                continue
+            asset = assets.get(shot.get("selected_asset")) or {}
+            provider_id = str(asset.get("candidate_id", ""))
+            if ":" not in provider_id or asset.get("download_mode") != "express":
+                continue
+            provider, source_id = provider_id.split(":", 1)
+            start = float(asset.get("source_clip_start") or 0) + float(shot.get("clip_start") or 0)
+            reserved.setdefault((provider, source_id), []).append((start, start + float(shot["duration"])))
+        return reserved
+
+    def allocate(self, options, reserved, usage, shots, exclude=None):
+        exclude = exclude or {}
+        assigned = {}
+        assigned_keys = dict(self.placed)
+        order = sorted(shots, key=lambda s: (len(options.get(s["id"], [])), self.position[s["id"]]))
+        for shot in order:
+            sid = shot["id"]
+            best = None
+            for rank, (tile, lane) in enumerate(options.get(sid, [])):
+                key = (tile["source"]["provider"], tile["source"]["id"])
+                if (key, round(tile["t"], 1)) in exclude.get(sid, set()):
+                    continue
+                start = self.window(tile, float(shot["duration"]), reserved)
+                if start is None:
+                    continue
+                index = self.position[sid]
+                adjacent = sum(1 for other in (index - 1, index + 1)
+                               if other in assigned_keys and assigned_keys[other] == key)
+                cost = (rank + 2.0 * usage.get(key, 0) + 1.5 * adjacent
+                        + {"pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
+                           "near": 6}.get(lane, 6)
+                        # A line about a named person should show that person, not generic topic footage.
+                        + (5 if lane == "topic" and shot.get("persons") and not self.unfilmed_shot(shot) else 0)
+                        + (6 if tile["source"].get("dirty") else 0))
+                if best is None or cost < best[0]:
+                    best = (cost, tile, start, lane, rank)
+                if rank > 8 and best:
+                    break
+            if best:
+                _, tile, start, lane, rank = best
+                key = (tile["source"]["provider"], tile["source"]["id"])
+                reserved.setdefault(key, []).append((start, start + float(shot["duration"]) + MARGIN))
+                usage[key] = usage.get(key, 0) + 1
+                assigned[sid] = {"tile": tile, "start": start, "lane": lane, "rank": rank}
+                assigned_keys[self.position[sid]] = key
+        return assigned
+
+    # ---------------------------------------------------------------- download
+    def fetch(self, shot, choice, streams, check=None):
+        check = check or self.check
+        source = choice["tile"]["source"]
+        duration = float(shot["duration"]) + MARGIN
+        root = paths.project_dir(self.pid) / "assets"
+        root.mkdir(exist_ok=True)
+        out = root / f"express-{shot['id'][:8]}-{source['id']}-{int(choice['start']*100)}.mp4"
+        need = float(shot["duration"]) - 0.25   # the render holds the last frame for a few missing frames
+        try:
+            ready = out.exists() and es.probe_duration(out) >= need
+        except ValueError:
+            ready = False
+        if not ready:
+            out.unlink(missing_ok=True)
+            if source["provider"] == "pixabay":
+                local = self.pixa.download(source, check)
+                es.cut_window(str(local), choice["start"], duration, out, check=check, short_edge=self.min_height)
+            else:
+                stream = streams.get(source["id"]) or {}
+                if not stream.get("available"):
+                    raise ValueError("该视频没有满足最低清晰度的可用流")
+                es.dash_window(stream, choice["start"], duration, out, check=check, short_edge=self.min_height)
+            got = es.probe_duration(out)
+            if got < need:
+                out.unlink(missing_ok=True)
+                raise ValueError(f"下载片段时长不足（{got:.1f}/{need:.1f} 秒）")
+        return out
+
+    def resolve(self, sources: dict) -> dict:
+        streams = {}
+        def run(item):
+            bvid, source = item
+            self.check()
+            try:
+                return bvid, self.bili.stream(bvid, self.min_height)
+            except media.Cancelled:
+                raise
+            except Exception as exc:
+                self.notes.append(f"播放地址失败 {bvid}: {str(exc)[:100]}")
+                return bvid, None
+        with execution.ThreadPoolExecutor(max_workers=4) as pool:
+            for bvid, stream in pool.map(run, list(sources.items())):
+                streams[bvid] = stream
+                if stream and stream.get("available") and stream.get("duration"):
+                    sources[bvid]["duration"] = min(float(sources[bvid].get("duration") or 1e9), stream["duration"])
+        return streams
+
+    def _fetch_job(self, job_id, sid, choice, streams):
+        def check():
+            self.check()
+            if self.abandon.is_set():   # matching is over: stop instead of eating bandwidth
+                raise TimeoutError("downloads stopped")
+        shot = self.shots_by_id_all[sid]
+        self.check()
+        began = time.monotonic()
+        try:
+            path = self.fetch(shot, choice, streams, check)
+            with self.lock:
+                self.fetch_seconds.append((choice["tile"]["source"]["provider"], round(time.monotonic() - began, 2)))
+            clean = self.analyse(shot, choice, path)
+            with self.lock:
+                self.clean[job_id] = clean
+            if clean.get("central"):
+                choice["tile"]["source"]["dirty"] = True   # mid-picture watermark: avoid this source
+            return job_id, sid, path, None
+        except media.Cancelled:
+            raise
+        except Exception as exc:
+            return job_id, sid, None, f"{type(exc).__name__}: {str(exc)[:160]}"
+
+    def download(self, jobs, streams, qa=False, deadline=None):
+        """jobs: [(job_id, sid, choice)]. Downloads in parallel; QA batches of six as they land.
+
+        Returns {job_id: path}, {job_id: error}, {job_id: qa_reason} and the ids still downloading.
+        Results of jobs started by earlier calls are included. Jobs still running at the deadline keep
+        going into the next call instead of being thrown away; stop_downloads() ends them.
+        """
+        from concurrent.futures import FIRST_COMPLETED, wait
+        if self.pool is None:
+            self.pool = execution.ThreadPoolExecutor(max_workers=16)
+        for job in jobs:
+            self.inflight[self.pool.submit(self._fetch_job, *job, streams)] = job
+        results, failures, bad = {}, {}, {}
+        shots_by_id = self.shots_by_id_all
+        qa_pool = execution.ThreadPoolExecutor(max_workers=4)
+        try:
+            pending, reviews, batch = set(self.inflight), [], []
+            while pending:
+                timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+                done, pending = wait(pending, timeout=timeout, return_when=FIRST_COMPLETED)
+                if not done:
+                    break
+                for future in done:
+                    self.inflight.pop(future, None)
+                    job_id, sid, path, error = future.result()
+                    if path:
+                        results[job_id] = path
+                        batch.append((job_id, sid, path))
+                    else:
+                        failures[job_id] = error
+                if qa and (len(batch) >= 6 or (not pending and batch)):
+                    reviews.append(qa_pool.submit(self.qa_batch, batch, shots_by_id))
+                    batch = []
+            if qa and batch:
+                reviews.append(qa_pool.submit(self.qa_batch, batch, shots_by_id))
+            for review in reviews:
+                bad.update(review.result())
+        finally:
+            qa_pool.shutdown(wait=True)
+        running = {job[0] for job in self.inflight.values()}
+        if running:
+            self.notes.append(f"{len(running)} 个片段本轮未下载完，继续下载")
+        return results, failures, bad, running
+
+    def stop_downloads(self) -> dict:
+        """Abandon whatever is still downloading; returns {job_id: reason}."""
+        self.abandon.set()
+        left = {job_id: "下载超时，已放弃该片段" for job_id, _, _ in self.inflight.values()}
+        self.inflight.clear()
+        if self.pool is not None:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+            self.pool = None
+        if left:
+            self.notes.append(f"{len(left)} 个片段到匹配结束仍未下载完，已放弃")
+        return left
+
+    # ------------------------------------------------------------- clean-up
+    def out_aspect(self) -> float:
+        return 9 / 16 if self.project.get("aspect") == "9:16" else 16 / 9
+
+    def sprite_frames(self, source, start) -> list:
+        """Preview frames of a Bilibili source: sheets already on disk plus the one around the window."""
+        previews = self.bili.previews(source["id"], float(source.get("duration") or 0))
+        if not previews:
+            return []
+        meta, root = previews[0]["meta"], previews[0]["root"]
+        # Sheets fetched for the thumbnails are enough; extra 1-2 MB sheets would compete with clip downloads.
+        sheets = sorted({p["sheet"] for p in previews if (Path(root) / f"sprite-{p['sheet']}.jpg").exists()})[:4]
+        if not sheets:
+            sheets = [min((abs(p["t"] - start), p["sheet"]) for p in previews)[1]]
+        frames = []
+        for sheet in sheets:
+            key = (source["id"], sheet)
+            with self.lock:
+                cached = self.sheets.get(key)
+            if cached is None:
+                cached = []
+                with Image.open(self.bili.sprite(root, meta, sheet)) as im:
+                    im = im.convert("RGB")
+                    for p in previews:
+                        if p["sheet"] != sheet:
+                            continue
+                        x, y = (p["cell"] % meta["x"]) * meta["w"], (p["cell"] // meta["x"]) * meta["h"]
+                        if y + meta["h"] <= im.height:
+                            cached.append((p["t"], im.crop((x, y, x + meta["w"], y + meta["h"]))))
+                with self.lock:
+                    self.sheets[key] = cached
+            frames += cached
+        return frames
+
+    def analyse(self, shot, choice, path) -> dict:
+        """Find logos/watermarks/subtitles in a downloaded Bilibili window (stock footage is clean)."""
+        source = choice["tile"]["source"]
+        if source["provider"] != "bilibili" or not express_clean.available():
+            return {}
+        try:
+            stream = next(s for s in media.probe(path)["streams"] if s.get("codec_type") == "video")
+            size = (int(stream["width"]), int(stream["height"]))
+            sprites = self.sprite_frames(source, choice["start"])
+            if sprites and size[1] > size[0] and sprites[0][1].width > sprites[0][1].height:
+                # Portrait videos sit pillarboxed inside landscape preview cells: keep only the picture.
+                cw, ch = sprites[0][1].size
+                inner = max(2, round(ch * size[0] / size[1]))
+                left = (cw - inner) // 2
+                sprites = [(t, im.crop((left, 0, left + inner, ch))) for t, im in sprites]
+            analysis = (express_clean.WIDTH, max(2, round(express_clean.WIDTH * size[1] / size[0])))
+            key = (source["id"], analysis)
+            with self.lock:
+                profile = self.profiles.get(key)
+            if profile is None:
+                profile = express_clean.profile([im for _, im in sprites], analysis)
+                with self.lock:
+                    self.profiles[key] = profile
+            return express_clean.analyse(path, float(shot["duration"]), size, self.out_aspect(), profile,
+                                         sprites, choice["start"])
+        except media.Cancelled:
+            raise
+        except Exception as exc:
+            self.notes.append(f"去水印分析失败 {source['id']}: {type(exc).__name__}: {str(exc)[:80]}")
+            return {}
+
+    def flags(self, job_id) -> set:
+        clean = self.clean.get(job_id) or {}
+        flags = set(self.soft.get(job_id, ()))
+        if (clean.get("motion") or {}).get("still"):
+            flags.add("still")
+        if express_clean.dirty(clean):
+            flags.add("wm")
+        return flags
+
+    # ---------------------------------------------------------------------- QA
+    def qa_frames(self, job_id, path, shot):
+        frames = []
+        duration = float(shot["duration"])
+        prefix = express_clean.video_filter(self.clean.get(job_id))
+        tag = hashlib.sha1(prefix.encode()).hexdigest()[:8] if prefix else "raw"
+        for fraction in (0.15, 0.5, 0.85):
+            target = path.parent / f"{path.stem}-qa{int(fraction*100)}-{tag}.jpg"
+            if not target.exists():
+                media.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-ss", f"{duration*fraction:.2f}", "-i",
+                           str(path), "-frames:v", "1", "-vf",
+                           (prefix + "," if prefix else "") +
+                           f"scale={QA_W}:{QA_H}:force_original_aspect_ratio=decrease,"
+                           f"pad={QA_W}:{QA_H}:(ow-iw)/2:(oh-ih)/2", str(target)], timeout=30)
+            with Image.open(target) as im:
+                frames.append(im.convert("RGB"))
+        return frames
+
+    def qa_batch(self, batch, shots_by_id):
+        """batch: [(job_id, sid, path)] -> {job_id: reason}; a QA failure leaves the batch unchecked."""
+        try:
+            return self._qa_batch(batch, shots_by_id)
+        except media.Cancelled:
+            raise
+        except Exception as exc:
+            if type(exc).__name__ in ("BudgetExceeded", "ModelUnavailable", "PricingUnavailable"):
+                raise
+            if "HTTP 400" in str(exc):
+                # Usually the content check refusing one picture: check the halves so the others still get QA.
+                # A single clip it still refuses (bodies, funerals, violence) is not used.
+                if len(batch) > 1:
+                    half = len(batch) // 2
+                    return self.qa_batch(batch[:half], shots_by_id) | self.qa_batch(batch[half:], shots_by_id)
+                return {batch[0][0]: "抽检被内容审核拒绝"}
+            with self.lock:
+                self.qa_unchecked.update(job_id for job_id, _, _ in batch)
+            self.notes.append(f"抽检未完成（{type(exc).__name__}）：{str(exc)[:80]}")
+            return {}
+
+    def _qa_batch(self, batch, shots_by_id):
+        rows = [(job_id, sid, self.qa_frames(job_id, path, shots_by_id[sid])) for job_id, sid, path in batch]
+        bad = {job_id: "黑屏或纯色画面" for job_id, sid, frames in rows if sum(_dark(f) for f in frames) >= 2}
+        rows = [(job_id, sid, frames) for job_id, sid, frames in rows if job_id not in bad]
+        if not rows:
+            return bad
+        label_w = 70
+        sheet = Image.new("RGB", (label_w + 3 * QA_W, len(rows) * QA_H), (0, 0, 0))
+        draw = ImageDraw.Draw(sheet)
+        font = _font(30)
+        lines, ids = [], {}
+        for r, (job_id, sid, frames) in enumerate(rows):
+            label = f"S{r+1}"
+            ids[label] = job_id
+            draw.rectangle((0, r * QA_H, label_w - 4, r * QA_H + 44), fill=(255, 214, 0))
+            draw.text((6, r * QA_H + 4), label, font=font, fill=(0, 0, 0))
+            for c, frame in enumerate(frames):
+                sheet.paste(frame.resize((QA_W, QA_H)), (label_w + c * QA_W, r * QA_H))
+            shot = shots_by_id[sid]
+            names = "、".join(p["name"] for p in shot.get("persons") or [])
+            role = ""
+            if names:
+                choice = self.job_choice.get(job_id) or {}
+                source = choice.get("tile", {}).get("source", {})
+                lane = choice.get("base_lane", choice.get("lane"))
+                if self.names_in_source(shot, source) and lane in ("pick", "person", "person_near"):
+                    role = f"｜要求人物：{names}（来源标题含此姓名，画面主体应是此人，不能是演员或他人）"
+                elif self.unfilmed_shot(shot):
+                    role = (f"｜背景画面：找不到{names}本人的真实影像，此镜用与口播主题相关的背景画面即可，不要求出现此人，"
+                            "不要因没有此人而判不合格；但不能出现冒充他的人物")
+                else:   # people-free context footage for this line
+                    role = (f"｜背景画面：口播提到{names}；画面可以是不含人物的相关场景、文件、建筑，也可以是此人本人的真实影像，"
+                            "不要因没有此人而判不合格；但不能是演员扮演，也不应以其他可辨认的具名人物为主体")
+            lines.append(f"{label} 口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{role}")
+        content = [{"type": "text", "text": "\n".join(lines)}, {"type": "image_url", "image_url": {"url": _jpeg(sheet)}}]
+        result, _ = self.chat(QA_SYSTEM, content, max_tokens=900, task="express_qa", attempts=2)
+        with self.lock:
+            self.calls["qa"] += 1
+        result = result if isinstance(result, dict) else {}
+        found = result.get("bad") if isinstance(result.get("bad"), dict) else {}
+        bad.update({ids[k]: str(v)[:60] for k, v in found.items() if k in ids})
+        marks = result.get("wm") if isinstance(result.get("wm"), dict) else {}
+        with self.lock:
+            for label, where in marks.items():
+                if label in ids:
+                    self.residual_mark(ids[label], where)
+        return bad
+
+    VIEW_BOXES = {"左上": [0, 0, 0.36, 0.16], "右上": [0.64, 0, 1, 0.16], "左下": [0, 0.84, 0.36, 1],
+                  "右下": [0.64, 0.84, 1, 1], "底部": [0.12, 0.8, 0.88, 1], "顶部": [0.12, 0, 0.88, 0.14],
+                  "左侧": [0, 0.2, 0.2, 0.8], "右侧": [0.8, 0.2, 1, 0.8]}
+
+    def residual_mark(self, job_id, where):
+        """The visual check still sees marks: crop them too, or mark the clip dirty when that is not certain."""
+        where = "、".join(map(str, where)) if isinstance(where, (list, tuple)) else str(where or "")
+        if not where.strip() or re.fullmatch(r"\s*(无|没有|否|none|null|None|\[\])\s*", where):
+            return   # "nothing found" written as a value
+        hits = [(k, b) for k, b in self.VIEW_BOXES.items() if k in where]
+        # Mid-picture marks cannot be cropped; side marks have no known extent, so the crop may not clear them.
+        if not hits or any(k in where for k in ("中间", "左侧", "右侧")):
+            self.soft.setdefault(job_id, set()).add("wm")
+        if "中间" in where:   # a mid-picture "@name" is on the whole video: other windows of it are no better
+            source = ((self.job_choice.get(job_id) or {}).get("tile") or {}).get("source")
+            if source is not None:
+                source["dirty"] = True
+        if not hits:
+            return
+        clean = self.clean.get(job_id)
+        if not clean:
+            if any(k == "底部" for k, _ in hits):
+                self.subtitled.add(job_id)   # stock/unanalysed clip: old bottom crop
+            if any(k != "底部" for k, _ in hits):
+                self.soft.setdefault(job_id, set()).add("wm")
+            return
+        extra = [{"kind": "subtitle" if k == "底部" else "logo", "box": express_clean.from_view(b, clean["crop"])}
+                 for k, b in hits]
+        clean = express_clean.recrop(clean, extra, self.out_aspect())
+        self.clean[job_id] = clean
+        if express_clean.dirty(clean):
+            self.soft.setdefault(job_id, set()).add("wm")
+
+    # ------------------------------------------------------------------- save
+    def save(self, final, files):
+        assets = {}
+        for sid, choice in final.items():
+            source = choice["tile"]["source"]
+            path = files[sid]
+            asset = media.inspect_asset(self.pid, path, source.get("title") or source["id"],
+                                        source_url=source.get("url", ""),
+                                        license=source.get("license", "公开平台视频，使用前请自行确认授权"),
+                                        license_url=source.get("license_url", ""),
+                                        author=source.get("author", ""),
+                                        description=(source.get("tags") or "")[:300],
+                                        provider=source["provider"])
+            asset.update(source_clip_start=choice["start"], download_mode="express",
+                         candidate_id=f"{source['provider']}:{source['id']}")
+            assets[sid] = asset
+        def apply(p):
+            for sid, asset in assets.items():
+                p["assets"].append(asset)
+                shot = next(s for s in p["shots"] if s["id"] == sid)
+                choice = final[sid]
+                source = choice["tile"]["source"]
+                person = [x["name"] for x in shot.get("persons") or []]
+                if person and choice.get("base_lane", choice["lane"]) in ("pick", "person", "person_near") and \
+                        self.names_in_source(shot, source) and not str(choice.get("qa", "")).startswith("rejected"):
+                    identity = {"status": "supported", "basis": "source_title_and_frame_subject",
+                                "source_text": source.get("title", ""), "names": person}
+                elif person:
+                    identity = {"status": "not_shown", "basis": "people_free_context_footage", "names": person}
+                else:
+                    identity = None
+                verification = {
+                    "verdict": "match", "scene_alignment": "match", "selection_blocked": False,
+                    "needs_source_check": False,
+                    "reason": {"pick": "快速通道：缩略图批量选片通过", "person": "快速通道：使用同一人物的其他真实影像",
+                               "person_near": "快速通道：使用同一人物影像来源中的相邻片段",
+                               "ctx": "快速通道：人物镜头无可靠人物素材，改用不含人物的相关画面",
+                               "topic": "快速通道：本组素材不足，使用全片通用相关画面补位",
+                               "neighbor": "快速通道：使用相邻镜头同组的相关画面补位",
+                               "near": "快速通道：使用已选画面相邻片段补位",
+                               "repeat": "快速通道：素材不足，复用已通过抽检的相关画面",
+                               "card": "快速通道：没有可用实拍素材，使用文字卡片"}.get(choice["lane"], "快速通道"),
+                    "visual_quality": {"representation": "live_action" if choice["lane"] != "card" else "illustration"},
+                    "identity_evidence": identity,
+                    "express": {"version": VERSION, "lane": choice["lane"], "rank": choice["rank"],
+                                "provider": source["provider"], "source_id": source["id"],
+                                "source_url": source.get("url", ""), "source_title": source.get("title", ""),
+                                "tile_time": round(float(choice["tile"]["t"]), 2),
+                                "window": [choice["start"], round(choice["start"] + float(shot["duration"]), 2)],
+                                "qa": choice.get("qa", "pass"), "identity": (identity or {}).get("status", ""),
+                                "flags": sorted(self.flags(choice.get("job"))) if choice.get("job") else []},
+                }
+                clean = self.clean.get(choice.get("job")) or {}
+                framed = asset
+                if clean.get("crop"):
+                    shot["frame_crop"] = {"crop": clean["crop"], "zoom": clean["zoom"],
+                                          "residual": [r for r in clean["residual"] if r["kind"] != "subtitle"],
+                                          "overlays": [o["kind"] for o in clean["overlays"]]}
+                    framed = asset | {"width": asset.get("width", 0) * clean["crop"][2],
+                                      "height": asset.get("height", 0) * clean["crop"][3]}
+                    shot["crop_bottom"] = 0
+                else:
+                    shot.pop("frame_crop", None)
+                    shot["crop_bottom"] = 0.16 if choice.get("job") in self.subtitled else 0
+                shot["crop_asset"] = asset["id"]   # the crop was measured on this file only
+                shot.update(selected_asset=asset["id"], clip_start=0, verification=verification, approved=True,
+                            search_note=verification["reason"],
+                            fit=curation.preferred_fit(shot, framed, p.get("aspect", "16:9")))
+        store.mutate(self.pid, apply, internal=True)
+
+    # -------------------------------------------------------------------- run
+    def run(self):
+        def stamp(name, began):
+            self.timing[name] = round(time.monotonic() - began, 2)
+        shots_by_id = {s["id"]: s for s in self.shots}
+        groups = self.groups()
+        began = time.monotonic()
+        self.progress(3, f"检索素材：{len(groups)} 组")
+        results = self.search(groups)
+        chosen = self.candidates(groups, results)
+        def carries(row, name):
+            return name in " ".join(str(row.get(k, "")) for k in ("title", "tags", "description"))
+        self.unfilmed = {name for name in self.names
+                         if not any(carries(row, name) for rows in chosen.values() for row in rows)}
+        stamp("search", began)
+        began = time.monotonic()
+        self.progress(15, f"读取 {sum(len(v) for v in chosen.values())} 个候选的预览")
+        tiles = self.all_tiles(chosen, {g["id"] for g in groups if g.get("person")})
+        stamp("previews", began)
+        began = time.monotonic()
+        self.progress(30, "批量判断画面")
+        picks, ctx_tiles, topic_tiles = {}, {}, []
+        def run_pick(group):
+            group_tiles = []
+            rows = chosen.get(group["id"], [])
+            clean_rows = [r for r in rows if not r.get("dirty") and tiles.get((r["provider"], r["id"]))]
+            if len(clean_rows) >= 2:
+                rows = clean_rows   # watermarked-across-the-picture sources only when little else exists
+            per_source = [tiles.get((r["provider"], r["id"]), []) for r in rows]
+            # Interleave sources so a sheet never shows only one video.
+            for i in range(max([len(x) for x in per_source] or [0])):
+                group_tiles += [x[i] for x in per_source if i < len(x)]
+            try:
+                return group, self.pick(group, group_tiles, shots_by_id)
+            except media.Cancelled:
+                raise
+            except Exception as exc:
+                if type(exc).__name__ in ("BudgetExceeded", "ModelUnavailable", "PricingUnavailable"):
+                    raise
+                if "设置中填写" in str(exc):
+                    raise
+                self.notes.append(f"选片失败 {group['id']}: {str(exc)[:120]}")
+                return group, ({}, {})
+        with execution.ThreadPoolExecutor(max_workers=6) as pool:
+            for group, (group_picks, extra) in pool.map(run_pick, groups):
+                if group.get("topic"):
+                    topic_tiles = group_picks.get("TOPIC", [])
+                    continue
+                picks.update(group_picks)
+                for sid in group["shots"]:
+                    ctx_tiles[sid] = extra.get("ctx", [])
+        stamp("pick", began)
+        # Build ranked options per shot: own picks, then context/topic/neighbour fills.
+        group_of = {sid: g for g in groups for sid in g["shots"]}
+        options = {}
+        for shot in self.shots:
+            sid = shot["id"]
+            index = self.position[sid]
+            person = bool(shot.get("persons")) and not self.unfilmed_shot(shot)
+            own = [(t, "pick") for t in picks.get(sid, [])]
+            fill = []
+            if person:
+                # Other footage of the same person (picked for other lines) before any people-free filler.
+                names = {p["name"] for p in shot["persons"]}
+                for g in groups:
+                    if g.get("person") in names:
+                        for other in g["shots"]:
+                            if other != sid:
+                                fill += [(t, "person") for t in picks.get(other, [])
+                                         if self.names_in_source(shot, t["source"])]
+                fill += [(t, "ctx") for t in ctx_tiles.get(sid, [])]
+            fill += [(t, "topic") for t in topic_tiles]
+            if not person:
+                neighbours = []
+                for other in self.timeline[max(0, index - 3):index + 4]:
+                    if other["id"] != sid and group_of.get(other["id"], {}).get("id") == group_of.get(sid, {}).get("id"):
+                        neighbours += picks.get(other["id"], [])
+                for other in self.timeline[max(0, index - 2):index + 3]:
+                    if other["id"] != sid and not other.get("persons"):
+                        neighbours += picks.get(other["id"], [])
+                fill += [(t, "neighbor") for t in neighbours]
+            seen, merged = set(), []
+            for tile, lane in own + fill:
+                k = (tile["source"]["provider"], tile["source"]["id"], round(tile["t"], 1))
+                if k not in seen:
+                    seen.add(k)
+                    merged.append((tile, lane))
+            options[sid] = merged
+        began = time.monotonic()
+        self.progress(42, "确认清晰度与播放地址")
+        referenced = {}
+        for rows in options.values():
+            for tile, _ in rows:
+                if tile["source"]["provider"] == "bilibili":
+                    referenced[tile["source"]["id"]] = tile["source"]
+        streams = self.resolve(referenced)
+        landscape = self.project.get("aspect", "16:9") != "9:16"
+        def usable(tile):
+            source = tile["source"]
+            if source["provider"] != "bilibili":
+                return self.oriented(source)
+            stream = streams.get(source["id"]) or {}
+            w, h = stream.get("width") or 0, stream.get("height") or 0
+            # A portrait re-upload of landscape footage is a small picture between caption bars.
+            return bool(stream.get("available")) and (not (w and h) or (w >= h) == landscape)
+        low = sum(1 for st in streams.values() if st and not st.get("available"))
+        if low:
+            self.notes.append(f"{low} 个B站来源最高清晰度低于 {self.min_height}p，已跳过" +
+                              ("（登录B站可获得 720p/1080p）" if not self.bili.logged_in else ""))
+        # Spare windows next to tiles the model accepted (same scene is likely), as the final fill lane.
+        accepted = {}
+        for tile_list in list(picks.values()) + [topic_tiles]:
+            for tile in tile_list:
+                if usable(tile):
+                    accepted[(tile["source"]["provider"], tile["source"]["id"], round(tile["t"], 1))] = tile
+        spare_all = []
+        for tile in accepted.values():
+            length = float(tile["source"].get("duration") or 0)
+            for delta in (-12, 12, -24, 24):
+                t = float(tile["t"]) + delta
+                if 1 <= t <= length - 1:
+                    spare_all.append(({"source": tile["source"], "t": t, "near": tile["t"]}, "near"))
+        for shot in self.shots:
+            sid = shot["id"]
+            rows = [(t, lane) for t, lane in options[sid] if usable(t)]
+            if not shot.get("persons") or self.unfilmed_shot(shot):
+                rows += spare_all
+            else:   # more of a documentary about this person, right next to footage the model accepted
+                rows += [(t, "person_near") for t, _ in spare_all if self.names_in_source(shot, t["source"])]
+            if not DEATH_LINE.search(shot["narration"]):   # a funeral video only for the line about the death
+                rows = [(t, lane) for t, lane in rows if not FUNERAL.search(t["source"].get("title", ""))]
+            options[sid] = rows
+        stamp("streams", began)
+        reserved, usage = self.existing_windows(), {}
+        tried = {s["id"]: set() for s in self.shots}
+        final, files, rejected, failures, qa_bad = {}, {}, {}, {}, {}
+        provisional = {}   # sid -> (choice, path, flags): usable but watermarked or a still picture
+        def key_of(choice):
+            tile = choice["tile"]
+            return (tile["source"]["provider"], tile["source"]["id"]), round(float(tile["t"]), 1)
+        def release(choice):
+            k = key_of(choice)[0]
+            reserved[k] = [w for w in reserved.get(k, []) if abs(w[0] - choice["start"]) > 1e-6]
+            usage[k] = max(0, usage.get(k, 1) - 1)
+        pending = list(self.shots)
+        checking = self.cfg.get("express_final_check", "1") != "0"
+        carried = []   # (job_id, sid, choice) still downloading from an earlier round
+        def settle(jobs, got, bad, running, last):
+            """Take the landed jobs; returns those still downloading (their windows stay reserved)."""
+            # Clean, moving clips first: in the last round a flagged clip must not beat a clean one of the same shot.
+            jobs = sorted(jobs, key=lambda job: bool(got.get(job[0])) and job[0] not in bad
+                          and bool(self.flags(job[0])))
+            for job_id, sid, choice in jobs:
+                if job_id in running:
+                    continue
+                path = got.get(job_id)
+                if not path:
+                    release(choice)
+                    continue
+                if job_id in bad:
+                    rejected.setdefault(sid, []).append((choice | {"job": job_id}, path, bad[job_id]))   # region stays reserved
+                    continue
+                if sid in final:
+                    release(choice)   # the other candidate already won; free its window
+                    continue
+                passed = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
+                                   "job": job_id}
+                flags = self.flags(job_id)
+                held = provisional.get(sid)
+                if not flags or last:
+                    if flags and held and len(held[2]) <= len(flags):
+                        release(choice)   # last round: keep the earlier, no worse provisional clip
+                        continue
+                    if held:
+                        release(held[0])
+                        provisional.pop(sid)
+                    final[sid] = passed
+                    files[sid] = path
+                    self.placed[self.position[sid]] = key_of(choice)[0]
+                elif held is None or len(flags) < len(held[2]) or ("wm" in held[2] and "wm" not in flags):
+                    if held:
+                        release(held[0])
+                    provisional[sid] = (passed, path, flags)   # look for a clean, moving clip next round
+                else:
+                    release(choice)
+            return [job for job in jobs if job[0] in running]
+        for round_no in range(3):
+            if not pending:
+                break
+            began = time.monotonic()
+            self.progress(50 + round_no * 12, f"第 {round_no+1} 轮：下载并抽检 {len(pending)} 镜（每镜两个候选）")
+            # A shot whose clip is still downloading waits for it (a slow link gains nothing from more
+            # parallel downloads), except in the last round.
+            busy = {sid for _, sid, _ in carried}
+            fresh = pending if round_no == 2 else [s for s in pending if s["id"] not in busy]
+            primary = self.allocate(options, reserved, usage, fresh, exclude=tried)
+            for sid, choice in primary.items():
+                tried[sid].add(key_of(choice))
+            backup = self.allocate(options, reserved, usage, fresh, exclude=tried)
+            for sid, choice in backup.items():
+                tried[sid].add(key_of(choice))
+            # Job ids must be unique across rounds: per-job analysis and QA results are keyed by them.
+            jobs = ([(f"{sid}#{round_no}a", sid, c) for sid, c in primary.items()]
+                    + [(f"{sid}#{round_no}b", sid, c) for sid, c in backup.items()])
+            self.job_choice.update({job_id: c for job_id, _, c in jobs})
+            limit = time.monotonic() + (75 if round_no == 0 else 50)
+            got, failed, bad, running = self.download(jobs, streams, qa=checking, deadline=limit)
+            failures.update(failed)
+            qa_bad.update(bad)
+            carried = settle(carried + jobs, got, bad, running, last=round_no == 2)
+            stamp(f"round{round_no+1}", began)
+            pending = [s for s in pending if s["id"] not in final]   # provisional shots keep looking
+            if pending and time.monotonic() - self.started > 300:
+                self.notes.append("匹配已超过 300 秒，停止继续替换")
+                break
+        for sid, (choice, path, _) in provisional.items():
+            if sid not in final:   # no cleaner clip turned up: the provisional one is still relevant footage
+                final[sid] = choice
+                files[sid] = path
+                self.placed[self.position[sid]] = key_of(choice)[0]
+        pending = [s for s in pending if s["id"] not in final]
+        if pending:
+            # Last resort without unchecked footage: reuse a window that already passed QA,
+            # preferring the same search group, then the nearest shot on the timeline.
+            began = time.monotonic()
+            group_of_id = {sid: g["id"] for g in groups for sid in g["shots"]}
+            donors = sorted(final.items(), key=lambda item: self.position[item[0]])
+            jobs = []
+            for shot in pending:
+                sid = shot["id"]
+                person = bool(shot.get("persons")) and not self.unfilmed_shot(shot)
+                ranked = sorted(donors, key=lambda item: (group_of_id.get(item[0]) != group_of_id.get(sid),
+                                                          abs(self.position[item[0]] - self.position[sid])))
+                for donor_id, donor in ranked:
+                    # A named-person shot may only reuse footage verified for that name or people-free context.
+                    if person and not (self.names_in_source(shot, donor["tile"]["source"])
+                                       or donor["lane"] in ("ctx", "topic")):
+                        continue
+                    if donor_id not in self.position:
+                        continue
+                    if FUNERAL.search(donor["tile"]["source"].get("title", "")) and not DEATH_LINE.search(shot["narration"]):
+                        continue
+                    source = donor["tile"]["source"]
+                    length = float(source.get("duration") or 0)
+                    need = float(shot["duration"]) + MARGIN
+                    if length < need + 0.1:
+                        continue
+                    key = key_of(donor)[0]
+                    donor_end = donor["start"] + float(self.shots_by_id_all[donor_id]["duration"]) + MARGIN
+                    # Same scene, different frames: continue after (or before) the passed window.
+                    start = None
+                    for candidate in (donor_end + 0.2, donor["start"] - need - 0.2,
+                                      donor_end + need + 0.4, donor["start"] - 2 * need - 0.4):
+                        if 0 <= candidate <= length - need - 0.1 and all(
+                                candidate + need + 0.2 <= a or candidate >= b + 0.2 for a, b in reserved.get(key, [])):
+                            start = candidate
+                            break
+                    if start is None:
+                        continue
+                    reserved.setdefault(key, []).append((start, start + need))
+                    jobs.append((f"{sid}#r", sid, donor | {"start": round(start, 2), "lane": "repeat",
+                                                           "base_lane": donor.get("base_lane", donor["lane"]),
+                                                           "repeat_of": donor_id}))
+                    break
+            self.job_choice.update({job_id: c for job_id, _, c in jobs})
+            got, failed, bad, running = self.download(jobs, streams, qa=checking, deadline=time.monotonic() + 45)
+            failures.update(failed)
+            qa_bad.update(bad)
+            carried = settle(carried, got, bad, running, last=True)   # late clips of the main rounds win
+            for job_id, sid, choice in jobs:
+                if sid in final:
+                    continue
+                if job_id in got and job_id in bad:
+                    rejected.setdefault(sid, []).append((choice | {"job": job_id}, got[job_id], bad[job_id]))
+                elif job_id in got:
+                    final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
+                                           "job": job_id}
+                    files[sid] = got[job_id]
+            pending = [s for s in pending if s["id"] not in final]
+            stamp("repeat", began)
+        failures.update(self.stop_downloads())
+        def keepable(shot, choice, reason):
+            if BROKEN_REJECTION.search(reason) or (FUNERAL.search(reason) and not DEATH_LINE.search(shot["narration"])):
+                return False
+            if not shot.get("persons"):
+                return True
+            # Real footage of the person passes QA whatever its topic, so a rejection under the "must show
+            # this person" role means someone else, an actor or a broken clip: never kept. People-free
+            # background footage judged only off-topic may stay rather than a title card.
+            lane = choice.get("base_lane", choice["lane"])
+            if self.names_in_source(shot, choice["tile"]["source"]) and lane in ("pick", "person", "person_near") \
+                    and not self.unfilmed_shot(shot):
+                return False
+            return not IDENTITY_REJECTION.search(reason) and (lane in ("ctx", "topic") or self.unfilmed_shot(shot))
+        for shot in list(pending):
+            sid = shot["id"]
+            kept = next(((c, path, reason) for c, path, reason in rejected.get(sid, []) if keepable(shot, c, reason)), None)
+            if kept:
+                choice, path, reason = kept
+                final[sid] = choice | {"qa": "rejected_kept:" + reason}
+                files[sid] = path
+        cards = [s for s in self.shots if s["id"] not in final]
+        for shot in cards:
+            final[shot["id"]] = {"tile": {"source": {"provider": "card", "id": "card", "title": "文字卡片"}, "t": 0},
+                                 "start": 0, "lane": "card", "rank": 0, "qa": "card"}
+            files[shot["id"]] = self.title_card(shot)
+        if cards:
+            self.notes.append(f"{len(cards)} 镜没有可用实拍素材，使用文字卡片补位")
+        self.progress(92, "保存选片")
+        self.save(final, files)
+        unmatched = [s["id"] for s in self.shots if s["id"] not in final]
+        report = {"selected": len(final), "unmatched": unmatched, "elapsed_seconds": round(time.monotonic() - self.started, 2),
+                  "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
+                  "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
+                            for lane in ("pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "repeat",
+                                         "card")},
+                  "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
+                  "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),
+                            "wm": sum(1 for c in final.values() if "wm" in self.flags(c.get("job"))),
+                            "cropped": sum(1 for c in final.values()
+                                           if (self.clean.get(c.get("job")) or {}).get("zoom", 1) > 1.001)},
+                  "sources": len({key_of(c)[0] for c in final.values()}),
+                  "providers": {p: sum(1 for c in final.values() if c["tile"]["source"]["provider"] == p)
+                                for p in ("bilibili", "pixabay")},
+                  "clean": {sid: {"crop": (self.clean.get(c.get("job")) or {}).get("crop"),
+                                  "overlays": [(o["kind"], o["box"]) for o in
+                                               (self.clean.get(c.get("job")) or {}).get("overlays", [])],
+                                  "residual": [(o["kind"], o["box"]) for o in
+                                               (self.clean.get(c.get("job")) or {}).get("residual", [])],
+                                  "flags": sorted(self.flags(c.get("job")))} for sid, c in final.items()},
+                  "bilibili_logged_in": self.bili.logged_in, "notes": self.notes[:40],
+                  "fetch_seconds": {"count": len(self.fetch_seconds),
+                                    "max": max([x[1] for x in self.fetch_seconds] or [0]),
+                                    "mean": round(sum(x[1] for x in self.fetch_seconds) / max(1, len(self.fetch_seconds)), 2)}}
+        store.mutate(self.pid, lambda p: p.update(express_report=report), internal=True)
+        return report
+
+
+def match(project, shots, check, progress):
+    matcher = Matcher(project, shots, check, progress)
+    try:
+        return matcher.run()
+    finally:
+        matcher.stop_downloads()
+        matcher.bili.close()
+        if matcher.pixa:
+            matcher.pixa.close()

@@ -268,7 +268,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         # Generating a new full audio track can change durations and invalidate
         # old reviews. Recheck retained assets before deciding the job needs help.
         current_assets = {a["id"]: a for a in project["assets"]}
-        retained = [s for s in project["shots"] if s.get("selected_asset") and not s.get("locked")
+        express = config.read().get("pipeline", "express") == "express"
+        retained = [] if express else [s for s in project["shots"] if s.get("selected_asset") and not s.get("locked")
                     and (not s.get("approved") and (not (s.get("verification") or {}).get("scene_alignment")
                          or ((s.get("verification") or {}).get("identity_audit") or {}).get("version") != planner.FRAME_AUDIT_VERSION)
                          or curation.selection_error(project, s, current_assets.get(s["selected_asset"], {})))]
@@ -363,8 +364,13 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             else:
                 message = f"分批规划文稿 {done}/{batches} · 保留原文并提取人物条件"
             progress(5+done/max(total, 1)*85, message)
-        shots, info = planner.plan(project, options.get("mode", "auto"), options.get("rewrite", False), check=check,
-                                  progress=plan_progress)
+        if config.read().get("pipeline", "express") == "express" and options.get("mode", "auto") != "rules":
+            from . import express_plan
+            progress(10, "按句切分文稿并生成检索规划")
+            shots, info = express_plan.plan(project, check)
+        else:
+            shots, info = planner.plan(project, options.get("mode", "auto"), options.get("rewrite", False), check=check,
+                                      progress=plan_progress)
         check()
         def update(p):
             p["shots"] = shots
@@ -404,10 +410,47 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         selected = [s for s in selected if not s["locked"] and (not s["selected_asset"] or options.get("replace"))]
         if not selected:
             raise ValueError("没有需要自动配素材的镜头；可在单镜中重新匹配")
-        if len(selected) >= 4 or options.get("shared_pool"):
-            from . import pooled_match
-            info = pooled_match.match(project, selected, check, progress,
-                                      workers=int(options.get("match_workers") or config.read().get("match_workers", "3")))
+        express = config.read().get("pipeline", "express") == "express"
+        if express or len(selected) >= 4 or options.get("shared_pool"):
+            if express:
+                from . import express_match, express_plan
+                if not (project.get("plan_info") or {}).get("mode") == "express":
+                    # Older plans: add express queries without re-splitting shots. The paid
+                    # call runs outside the database transaction on a copy.
+                    draft = deepcopy(project["shots"])
+                    plan_info = express_plan.annotate(draft, project.get("script", ""),
+                                                      project.get("requirements", ""), check)
+                    fields = ("visual", "visual_origin", "query", "search_queries", "persons",
+                              "evidence_mode", "event", "event_scope", "express")
+                    targets = {s["id"] for s in selected}
+                    def annotate(p, draft=draft, plan_info=plan_info, targets=targets):
+                        rows = {s["id"]: s for s in draft}
+                        for shot in p["shots"]:
+                            row = rows.get(shot["id"])
+                            if not row or shot["id"] not in targets or shot.get("locked") or shot.get("approved"):
+                                continue
+                            update = {k: row[k] for k in fields if k in row}
+                            # User-entered people and visuals stay authoritative.
+                            if shot.get("persons"):
+                                names = {x["name"] for x in shot["persons"]}
+                                update["persons"] = shot["persons"] + [x for x in row.get("persons", [])
+                                                                       if x["name"] not in names]
+                                update["evidence_mode"] = "person"
+                            if shot.get("visual_origin") == "manual":
+                                update.pop("visual", None)
+                                update.pop("visual_origin", None)
+                            if shot.get("event"):
+                                update.pop("event", None)
+                                update.pop("event_scope", None)
+                            shot.update(update)
+                        p["plan_info"] = plan_info
+                    project = store.mutate(pid, annotate, internal=True)
+                    selected = [shot_by_id(project, s["id"]) for s in selected]
+                info = express_match.match(project, selected, check, progress)
+            else:
+                from . import pooled_match
+                info = pooled_match.match(project, selected, check, progress,
+                                          workers=int(options.get("match_workers") or config.read().get("match_workers", "3")))
             if info["unmatched"] and not info["selected"] and finalize:
                 raise ValueError(f"共享素材池在 {info['elapsed_seconds']:.1f} 秒内通过 {info['selected']}/{len(selected)} 镜；"
                                  "其余镜头缺少合格素材或来源证据，已保留具体核验结果")

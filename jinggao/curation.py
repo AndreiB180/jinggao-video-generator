@@ -34,9 +34,20 @@ def has_manual_source(shot: dict) -> bool:
             and not url.username and not url.password)
 
 
+def express_result(shot: dict) -> dict:
+    """Express-pipeline evidence; ordinary shots need no per-frame audit chain."""
+    result = shot.get("verification") or {}
+    return result.get("express") if isinstance(result.get("express"), dict) else {}
+
+
 def identity_ready(shot: dict) -> bool:
     if not needs_identity(shot):
         return True
+    express = express_result(shot)
+    if express:
+        # Supported: source text names the person and the pick shows a person
+        # as subject. not_shown: people-free context footage, never someone else.
+        return express.get("identity") in ("supported", "not_shown")
     evidence = (shot.get("verification") or {}).get("identity_evidence") or {}
     return (evidence.get("status") == "supported"
             and not (shot.get("verification") or {}).get("selection_blocked", True)) or has_manual_source(shot)
@@ -62,6 +73,17 @@ def approve_verified(project: dict) -> int:
 
 def selection_error(project, shot, asset, *, verify_files=False):
     from . import editorial_contract, editorial_review, frame_contract, frame_sampling, planner
+    if express_result(shot):
+        if not asset or asset.get("kind") not in ("video", "image"):
+            return "所选素材已失效，请重新匹配"
+        if verify_files:
+            from . import paths
+            try:
+                if not paths.file_path(project["id"], asset["path"]).exists():
+                    return "素材文件缺失，请重新匹配"
+            except ValueError:
+                return "素材文件路径无效，请重新匹配"
+        return ""
     error = privacy.selection_error(shot, asset) or context_labels.selection_error(
         shot, asset, project_id=project.get("id") if verify_files else None)
     if error:

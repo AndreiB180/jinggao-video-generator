@@ -25,6 +25,7 @@ DEFAULTS = {
     "model_provider_budget_cny": "",
     "cost_input_per_million": "", "cost_cached_per_million": "", "cost_output_per_million": "",
     "cost_image_tokens": "0",
+    "pipeline": "express", "express_final_check": "1",
 }
 SECRETS = {k for k in DEFAULTS if k.endswith("api_key")}
 _lock = threading.Lock()
@@ -65,6 +66,10 @@ def update(values: dict) -> dict:
     for key in ("plan_workers", "match_workers", "render_workers"):
         if key in values and values[key] not in ("1", "2", "3", "4"):
             raise ValueError("并发数须为 1 到 4")
+    if values.get("pipeline", "express") not in ("express", "classic"):
+        raise ValueError("制作流程须为 express 或 classic")
+    if values.get("express_final_check", "1") not in ("0", "1"):
+        raise ValueError("成片抽检开关须为 0 或 1")
     if values.get("plan_retries", "1") not in ("0", "1"):
         raise ValueError("分镜格式重试次数须为 0 或 1")
     if values.get("source_plan_mode", "legacy") not in ("legacy", "unified"):

@@ -14,7 +14,7 @@ from pathlib import Path
 from . import local_asr, paths
 
 VERSION = 1
-ALIGNMENT_VERSION = 2
+ALIGNMENT_VERSION = 3
 _locks_guard = threading.Lock()
 _locks = {}
 
@@ -102,10 +102,72 @@ def _normal(text):
     return "".join(c for c in unicodedata.normalize("NFKC", text).lower() if c.isalnum())
 
 
+_ZH_DIGITS = "零一二三四五六七八九"
+
+
+def _section(n):
+    out, zero = "", False
+    for power, unit in ((3, "千"), (2, "百"), (1, "十"), (0, "")):
+        digit = n // 10 ** power % 10
+        if not digit:
+            zero = bool(out)
+            continue
+        if zero:
+            out += "零"
+            zero = False
+        out += _ZH_DIGITS[digit] + unit
+    return out
+
+
+def _cardinal(n):
+    if n == 0:
+        return "零"
+    sections = []
+    while n:
+        sections.append(n % 10000)
+        n //= 10000
+    out = ""
+    for index in range(len(sections) - 1, -1, -1):
+        section = sections[index]
+        if not section:
+            continue
+        if out and section < 1000 and not out.endswith("零"):
+            out += "零"
+        out += _section(section) + ("", "万", "亿", "万亿")[index]
+    return out[1:] if out.startswith("一十") else out
+
+
+def _spoken(original):
+    """Spoken Mandarin form of digit runs for matching ASR output; owner maps back to original."""
+    spoken, owner, i = "", [], 0
+    while i < len(original):
+        if not original[i].isdigit() or not original[i].isascii():
+            spoken += original[i]
+            owner.append(i)
+            i += 1
+            continue
+        j = i
+        while j < len(original) and original[j].isdigit() and original[j].isascii():
+            j += 1
+        run = original[i:j]
+        following = original[j] if j < len(original) else ""
+        if (len(run) == 4 and following == "年") or len(run) > 8 or (len(run) > 1 and run.startswith("0")):
+            words = "".join(_ZH_DIGITS[int(d)] for d in run)
+        else:
+            words = _cardinal(int(run))
+        for k, char in enumerate(words):
+            spoken += char
+            owner.append(i + min(len(run) - 1, k * len(run) // len(words)))
+        i = j
+    return spoken, owner
+
+
 def align(text, words, duration):
     """Anchor original wording to recognized speech, rejecting broad mismatch."""
     text = clean(text)
-    original = _normal(text)
+    source = _normal(text)
+    # Match in spoken form (digits read aloud), then collapse back to source characters.
+    original, owner = _spoken(source)
     spoken, timings, acoustic, token_indices = "", [], [], []
     for token_index, word in enumerate(words):
         token = _normal(word["text"])
@@ -172,6 +234,14 @@ def align(text, words, duration):
             mapping[i] = (left + (right-left)*(i-index)/(end-index),
                           left + (right-left)*(i+1-index)/(end-index))
         index = end
+    positions = [[] for _ in source]
+    for index, origin in enumerate(owner):
+        positions[origin].append(index)
+    mapping = [(mapping[js[0]][0], mapping[js[-1]][1]) for js in positions]
+    anchors = [(anchors[js[0]][0], anchors[js[-1]][1]) for js in positions]
+    for row in substitutions:
+        row["character_offset"] = owner[row["character_offset"]]
+    original = source
     cues, offset = [], 0
     for phrase in parts(text):
         count = len(_normal(phrase))
@@ -316,10 +386,10 @@ def shot_timing(project, track):
         offset += count
         if spans is not None:
             left, right = spans[offset-1], spans[offset]
-            if not left[3] or not right[2]:
-                raise AcousticBoundaryRequired("镜头切点没有实测语音边界，已保留音频；请调整分镜切点后重试")
             left_end, right_start = float(left[1]), float(right[0])
-            kind = "token_edges"
+            # Prefer observed token edges; a cut inside a short recognised gap
+            # (numbers, names) uses the bounded interpolation instead of failing.
+            kind = "token_edges" if left[3] and right[2] else "interpolated_edge"
         elif offset in edges:
             # Legacy cache reuse is allowed only at an exact whole-cue text
             # offset; never estimate a position within its text or duration.

@@ -80,6 +80,8 @@ python-multipart==0.0.32
     # via
     #   -c requirements.lock
     #   jinggao (pyproject.toml)
+qrcode==8.2
+    # via jinggao (pyproject.toml)
 starlette==1.7.0
     # via
     #   -c requirements.lock

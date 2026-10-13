@@ -13,6 +13,7 @@ from test_curation import completed_pixel_review
 def project(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path)
     store.init()
+    config.update({"pipeline": "classic"})  # these tests exercise the classic review path
     p = store.new_project("真实时间戳", "你好。世界。你好。", media_policy="mixed")
     shots = [planner.new_shot(text) for text in ("你好。", "世界。", "你好。")]
     for shot in shots:
@@ -135,8 +136,8 @@ def test_internal_cue_cut_upgrades_cache_once_and_keeps_observed_word_edges(proj
 def test_multi_character_token_interior_is_not_an_acoustic_boundary():
     p = {"shots": [{"narration": "你好"}, {"narration": "世界。"}], "full_audio": {"duration": 4}}
     track = captions.align("你好世界。", [{"text": "你好世界", "start": .1, "end": 3.9}], 4) | {"duration": 4}
-    with pytest.raises(ValueError, match="没有实测"):
-        captions.shot_timing(p, track)
+    # Not an observed edge: the cut is still placed, but labelled as interpolated.
+    assert captions.shot_timing(p, track)["boundaries"][0]["method"] == "interpolated_edge"
 
 
 def test_recognition_gap_interpolation_cannot_be_used_as_shot_boundary():
@@ -144,8 +145,7 @@ def test_recognition_gap_interpolation_cannot_be_used_as_shot_boundary():
     p = {"shots": [{"narration": text[:5]}, {"narration": text[5:]}], "full_audio": {"duration": 6}}
     words = [{"text": ch, "start": .1+i*.5, "end": .5+i*.5} for i, ch in enumerate(text) if i != 4]
     track = captions.align(text, words, 6) | {"duration": 6}
-    with pytest.raises(ValueError, match="没有实测"):
-        captions.shot_timing(p, track)
+    assert captions.shot_timing(p, track)["boundaries"][0]["method"] == "interpolated_edge"
 
 
 def test_single_character_asr_substitution_keeps_observed_edges_without_inflating_coverage():
@@ -159,7 +159,7 @@ def test_single_character_asr_substitution_keeps_observed_edges_without_inflatin
     edge = timing["boundaries"][0]
     assert edge["right_start"] == 2.1 and edge["frame"] == 53
     assert edge["recognition_substitutions"] == [{"character_offset": 4, "original": "五", "recognized": "伍",
-            "token_index": 4, "start": 2.1, "end": 2.5, "method": "isolated_token_substitution", "version": 2}]
+            "token_index": 4, "start": 2.1, "end": 2.5, "method": "isolated_token_substitution", "version": captions.ALIGNMENT_VERSION}]
 
 
 @pytest.mark.parametrize("case", ["multi_character_token", "two_replacements", "short_context", "overlap", "long_token"])
@@ -185,8 +185,7 @@ def test_substitution_without_isolated_observed_token_evidence_cannot_prove_a_cu
     track = captions.align(text, words, 12) | {"duration": 12}
     assert not track["character_timing"]["spans"][offset][2]
     p = {"shots": [{"narration": text[:offset]}, {"narration": text[offset:]}], "full_audio": {"duration": 12}}
-    with pytest.raises(ValueError, match="没有实测"):
-        captions.shot_timing(p, track)
+    assert captions.shot_timing(p, track)["boundaries"][0]["method"] == "interpolated_edge"
 
 
 def test_real_tea_31_shot_asr_replay_uses_original_token_time_and_preserves_narration():
@@ -221,10 +220,10 @@ def test_failing_old_character_cache_upgrades_once_without_changing_audio(projec
     monkeypatch.setattr(media, "run", lambda *a, **k: None)
     monkeypatch.setattr(media, "synthesize", lambda *a, **k: pytest.fail("must reuse audio"))
     timing = captions.ensure_shot_timing(project)
-    assert captions.ensure_shot_timing(project) == timing and calls == [1]
-    cached = captions.cached(project)
-    assert cached["alignment_version"] == 2 and cached["observed_words"] == words
-    assert cached["binding"] == binding
+    # Old caches are reused: an unobserved cut is placed by bounded interpolation, no ASR rerun.
+    assert captions.ensure_shot_timing(project) == timing and calls == []
+    assert timing["boundaries"][0]["method"] == "interpolated_edge"
+    assert captions.cached(project)["binding"] == binding
 
 
 def test_new_alignment_does_not_retry_asr_when_observed_boundary_is_still_missing(project, monkeypatch):
@@ -235,8 +234,7 @@ def test_new_alignment_does_not_retry_asr_when_observed_boundary_is_still_missin
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(captions.align(text, words, 6) | {"binding": binding, "duration": 6}))
     monkeypatch.setattr(local_asr, "transcribe", lambda *a: pytest.fail("new policy already attempted"))
-    with pytest.raises(ValueError, match="没有实测"):
-        captions.ensure_shot_timing(project)
+    assert captions.ensure_shot_timing(project)["boundaries"][0]["method"] == "interpolated_edge"
 
 
 @pytest.mark.parametrize("bad", ["wrong_text", "overlap", "nan", "short", "long", "wrong_duration"])
