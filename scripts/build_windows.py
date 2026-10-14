@@ -152,14 +152,18 @@ def load_release(path):
     return source, manifest
 
 
+# Shipped asset folders: subtitle fonts, voice samples (试听) and the footage index seed (素材库).
+ASSET_FOLDERS = ("assets/fonts/", "assets/voices/", "assets/footage-index/")
+
+
 def app_path(rel):
     return (rel in {"launch.py", "scripts/sapi.ps1", "assets/source-index.jsonl.gz"}
-            or rel.startswith(("jinggao/", "frontend/dist/", "assets/fonts/")))
+            or rel.startswith(("jinggao/", "frontend/dist/") + ASSET_FOLDERS))
 
 
 def copy_release(source, manifest):
     """Only declared application files; never development code or caches."""
-    for folder in ("jinggao", "frontend/dist", "assets/fonts"):
+    for folder in ("jinggao", "frontend/dist", *(f.rstrip("/") for f in ASSET_FOLDERS)):
         dst = OUTPUT / folder
         if dst.exists():
             shutil.rmtree(dst)
@@ -217,11 +221,12 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
             raise ValueError("A release build needs --model-directory for offline subtitle alignment")
         model_manifest = bundle_captions(source, model_directory)
     else:
-        for folder in ("jinggao", "frontend/dist", "assets/fonts"):
+        for folder in ("jinggao", "frontend/dist", *(f.rstrip("/") for f in ASSET_FOLDERS)):
             dst = OUTPUT / folder
             if dst.exists():
                 shutil.rmtree(dst)
-            shutil.copytree(ROOT / folder, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            if (ROOT / folder).is_dir():
+                shutil.copytree(ROOT / folder, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         seed = ROOT / "assets" / "source-index.jsonl.gz"
         if seed.is_file():
             shutil.copy2(seed, OUTPUT / "assets" / seed.name)
