@@ -34,6 +34,7 @@ def test_described_moments_find_the_video_and_the_frame(data):
     hits = fi.search("码头 搬运 粮食")
     assert [h["id"] for h in hits][:2] == ["BV1dock", "BV1title"]
     assert hits[0]["moments"][0] == 30 and hits[0]["indexed"] and hits[0]["provider"] == "bilibili"
+    assert hits[0]["avoid"] == [150.0]                            # the presenter frame is to be kept out
     assert fi.search("演播室 主持人") == []                       # unusable frames are not searchable
     assert fi.search("码头", exclude={"bilibili:BV1dock"})[0]["id"] == "BV1title"
     stats = fi.stats()
@@ -142,3 +143,5 @@ def test_matcher_prefers_indexed_videos_and_their_matching_frames(data, monkeypa
     monkeypatch.setattr(em.express_clean, "available", lambda: False)
     tiles = m.tiles_for(picked[0], 4)
     assert tiles[0]["t"] == 200.0
+    tiles = m.tiles_for(picked[0] | {"avoid": [200.0, 450.0]}, 6)
+    assert tiles and not any(abs(t["t"] - 200) < 6 or abs(t["t"] - 450) < 6 for t in tiles)

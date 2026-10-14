@@ -375,10 +375,13 @@ class Matcher:
         inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
         step = max(1, len(inner) / count)
         picked = [inner[min(len(inner) - 1, int(i * step + step / 2))] for i in range(min(count, len(inner)))]
-        if row.get("moments"):
-            # Indexed video: the frames whose descriptions matched come first, the even spread fills up.
-            near = [min(inner, key=lambda p, t=t: abs(p["t"] - t)) for t in row["moments"]]
-            picked = list({id(p): p for p in near + picked}.values())[:count]
+        if row.get("moments") or row.get("avoid"):
+            # Indexed video: the frames whose descriptions matched come first, the even spread fills up;
+            # nothing near a frame described as a presenter, a text page or black.
+            near = [min(inner, key=lambda p, t=t: abs(p["t"] - t)) for t in row.get("moments") or []]
+            avoid = row.get("avoid") or []
+            picked = [p for p in {id(p): p for p in near + picked}.values()
+                      if not any(abs(p["t"] - t) < 6 for t in avoid)][:count]
         tiles, hashes = [], []
         for p in picked:
             image = es.bilibili_tile(self.bili, p)
@@ -1525,6 +1528,7 @@ class Matcher:
                             "cropped": sum(1 for c in final.values()
                                            if (self.clean.get(c.get("job")) or {}).get("zoom", 1) > 1.001)},
                   "sources": len({key_of(c)[0] for c in final.values()}),
+                  "from_index": sum(1 for c in final.values() if c["tile"]["source"].get("indexed")),
                   "providers": {p: sum(1 for c in final.values() if c["tile"]["source"]["provider"] == p)
                                 for p in ("bilibili", "pixabay")},
                   "clean": {sid: {"crop": (self.clean.get(c.get("job")) or {}).get("crop"),

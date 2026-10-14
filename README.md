@@ -68,7 +68,7 @@ npm run build --prefix frontend
   tests/test_downloaded_pool_v59.py
 ```
 
-整套测试（`.venv/bin/python scripts/test_offline.py`，约 2 分钟）应全部通过：2026-10-14 晚（v0.3）为 2161 通过、0 失败、138 跳过。机器负载很高时，`test_segment_discovery` / `test_source_audio_v60` / `test_source_timeouts_v53` 里几项按毫秒计时的网络超时测试会偶发失败，空闲时重跑即通过。跳过的是经典流程中已移除功能的旧测试，逐条列在 `tests/retired_tests.txt`（或在测试文件中以 skip 标注原因），以及 `tests/conftest.py` 里忽略的 6 个引用了从未存在模块的文件。不要为迎合这些旧测试恢复已撤销的产品要求。`scripts/evaluate_*` 中部分脚本是历史研究工具，所依赖的私有本地产物不在仓库。
+整套测试（`.venv/bin/python scripts/test_offline.py`，约 2 分钟）应全部通过：2026-10-14 晚为 2169 通过、0 失败、138 跳过。机器负载很高时，`test_segment_discovery` / `test_source_audio_v60` / `test_source_timeouts_v53` 里几项按毫秒计时的网络超时测试会偶发失败，空闲时重跑即通过。跳过的是经典流程中已移除功能的旧测试，逐条列在 `tests/retired_tests.txt`（或在测试文件中以 skip 标注原因），以及 `tests/conftest.py` 里忽略的 6 个引用了从未存在模块的文件。不要为迎合这些旧测试恢复已撤销的产品要求。`scripts/evaluate_*` 中部分脚本是历史研究工具，所依赖的私有本地产物不在仓库。
 
 Windows 打包前先构建前端并下载字体，再使用 `scripts/build_windows.py`。当前源码快照尚未完成新一轮 Windows 成片验收；早期 Windows 11 ARM 虚拟机中的 x64 冒烟不等于客户 Windows 10 x64 / RTX 3060 验收。第三方依赖说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

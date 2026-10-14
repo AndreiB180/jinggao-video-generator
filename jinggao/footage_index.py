@@ -173,7 +173,10 @@ def search(query: str, limit: int = 8, *, exclude: set | None = None) -> list[di
             if not src or src["flags"] == "host":
                 continue
             row = json.loads(src["row"])
-            out.append(row | {"indexed": True, "moments": moments, "index_score": round(score, 3),
+            avoid = [r["t"] for r in con.execute(
+                f"SELECT t FROM moments WHERE source=? AND kind IN ({','.join('?' * len(BAD_KINDS))})",
+                (key, *sorted(BAD_KINDS)))]
+            out.append(row | {"indexed": True, "moments": moments, "avoid": avoid, "index_score": round(score, 3),
                               "index_used": src["used"]})
             if len(out) >= limit:
                 break
