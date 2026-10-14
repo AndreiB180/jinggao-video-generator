@@ -24,28 +24,14 @@ SHEET = (6, 4)          # describe sheet: columns x rows of frames
 SEARCH_WORKERS = 3      # Bilibili's search API answers bursts with 412 risk control
 SHOT_WORKERS = 8        # videoshot metadata (same API gateway as search) and its CDN sprites
 SPRITE_WORKERS = 16     # sprite images come from the CDN
-DESCRIBE_WORKERS = 6
+DESCRIBE_WORKERS = 10    # the background worker allows 10 model calls at a time (execution.MODEL_SLOTS)
 SKIP_TITLE = re.compile(r"直播|回放|教程|PPT|课件|歌曲|MV|翻唱|游戏|手游|原神|王者荣耀|和平精英|鬼畜|reaction|开箱|测评|"
                         r"带货|广告|招聘|网课|考研|公务员|英语|单词")
 BAD_KINDS = {"主持人出镜", "图表文字", "黑屏或模糊"}
 DESCRIBE_SYSTEM = """图片是视频预览帧的联系表，每格左上角有黄色编号。为每一格写一句画面描述（最多16个字，不要标点结尾）：主体、动作、场景，能看出时代的写上（古代/近代/现代），能认出地名或事物的写上；再给画面类型，只能是：实拍、影视剧、动画、图表文字、主持人出镜、黑屏或模糊。
 只输出 JSON：{"1":["描述","类型"],"2":["描述","类型"],...}，每个编号都要有。"""
 
-# Starting points for a general marketing-video library; each line is one Bilibili search.
-PACKS = {
-    "历史·宋朝": ["宋朝 纪录片 市井生活", "北宋 汴京 繁华 场景", "宋代 官员 朝堂", "清明上河图 动态", "宋朝 江南 水乡",
-                 "古代 粮仓 漕运", "古代 灾荒 饥民 赈灾", "古代 码头 商船", "宋朝 寺庙 僧人", "古代 酒楼 宴席"],
-    "历史·通用": ["古代 战争 场面 纪录片", "古代 皇宫 宫殿 航拍", "古代 农耕 农民 劳作", "古代 集市 街道", "古代 书生 读书",
-                 "古代 城墙 城门", "古代 衙门 县衙", "唐朝 长安 复原", "明朝 紫禁城 纪录片", "秦朝 兵马俑 纪录片"],
-    "军事": ["航母 编队 航行", "战斗机 起飞 着舰", "坦克 演习 实拍", "导弹 发射 实拍", "阅兵 方阵", "潜艇 下潜",
-            "士兵 训练 实拍", "军舰 海上 航拍", "无人机 作战", "炮兵 射击 演习"],
-    "科普·自然": ["太空 星系 宇宙", "地球 卫星 视角", "火山 喷发 实拍", "海洋 鱼群 水下", "森林 航拍 4K", "草原 动物 迁徙",
-                 "细胞 显微镜 动画", "极光 延时摄影", "暴雨 洪水 实拍", "沙漠 航拍"],
-    "城市·经济": ["港口 集装箱 航拍", "城市 夜景 延时", "工厂 生产线 实拍", "股市 交易所 大屏", "高铁 行驶 航拍",
-                 "工地 施工 塔吊", "商场 人流", "写字楼 上班族 通勤", "物流 仓库 分拣", "农村 田野 航拍"],
-    "美食·生活": ["街头 小吃 制作", "炒菜 特写 慢镜头", "火锅 沸腾", "面条 手工 制作", "早餐 摊 实拍", "菜市场 买菜",
-                 "家庭 吃饭 团圆", "老人 公园 散步", "学生 教室 上课", "医院 医生 病房"],
-}
+from .footage_topics import PACKS   # noqa: E402  (topic -> Bilibili searches)
 
 _lock = threading.Lock()
 CJK = re.compile(r"[㐀-鿿]+")
@@ -308,17 +294,44 @@ def _sheet(frames, cols):
     return sheet
 
 
+GENERIC_TAGS = {"生活记录", "日常", "vlog", "搞笑", "知识", "科普", "历史", "纪录片", "视频", "记录", "分享", "必剪创作",
+                "打卡挑战", "生活", "自制", "原创", "剪辑", "混剪", "合集", "教程", "高清", "4k", "中国", "bilibili", "哔哩哔哩",
+                "全能打卡挑战", "热点", "新闻", "社会", "美食", "旅行", "旅游", "风景", "科技", "军事", "财经", "人文", "趣味",
+                "涨知识", "干货", "热门", "推荐", "震撼", "经典", "解说", "影视", "电影", "电视剧", "音乐", "动画"}
+CHUNK = 160             # videos framed, described and saved together (a stopped build keeps finished chunks)
+
+
+def frame_count(duration: float) -> int:
+    """Longer videos hold more distinct scenes: 8 frames under 5 minutes, 12 under 20, else 16."""
+    return 8 if duration < 300 else 12 if duration < 1200 else 16
+
+
+def expand(found: dict, used: set, per_topic: int = 8) -> list[tuple[str, str]]:
+    """New searches from the tags a topic's results share (Bilibili's own words for the subject)."""
+    from collections import Counter
+    out = []
+    for topic, rows in found.items():
+        counts = Counter()
+        for row in rows:
+            for tag in {t.strip() for t in str(row.get("tags", "")).split(",")}:
+                if 2 <= len(tag) <= 10 and tag.lower() not in GENERIC_TAGS and not SKIP_TITLE.search(tag):
+                    counts[tag] += 1
+        picked = [tag for tag, n in counts.most_common() if n >= 3 and tag not in used][:per_topic]
+        out += [(topic, tag) for tag in picked]
+        used |= set(picked)
+    return out
+
+
 def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, describe: bool = True,
-          limit: int = 2000) -> dict:
-    """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions.
-    Videos already described are skipped; at most `limit` new videos per run."""
+          limit: int = 100000, widen: bool = True) -> dict:
+    """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions. Saved chunk
+    by chunk; videos already described are skipped, so a stopped or failed build continues where it was."""
     from . import express_sources as es
     bili = es.Bilibili()
     report = {"queries": len(queries), "found": 0, "new": 0, "indexed": 0, "described_frames": 0, "failed": 0,
-              "blocked": False}
+              "blocked": False, "expanded": 0}
     try:
-        progress(2, f"检索 {len(queries)} 个关键词")
-        rows, lock = {}, threading.Lock()
+        rows, lock, by_topic = {}, threading.Lock(), {}
         def find(item):
             topic, query = item
             found = []
@@ -333,84 +346,96 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
                 for row in found:
                     if 20 <= row.get("duration", 0) <= 3 * 3600 and not SKIP_TITLE.search(row.get("title", "")):
                         rows.setdefault(_key(row), (topic, row))
-        with execution.ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
-            for n, _ in enumerate(pool.map(find, queries), 1):
-                progress(2 + 18 * n / max(1, len(queries)), f"检索关键词 {n}/{len(queries)} · 已找到 {len(rows)} 个视频")
+                        by_topic.setdefault(topic, []).append(row)
+        def search_all(items, lo, hi, label):
+            with execution.ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
+                for n, _ in enumerate(pool.map(find, items), 1):
+                    progress(lo + (hi - lo) * n / max(1, len(items)), f"{label} {n}/{len(items)} · 已找到 {len(rows)} 个视频")
+        search_all(queries, 1, 12, "检索关键词")
+        if widen:
+            more = expand(by_topic, {q for _, q in queries})
+            report["expanded"] = len(more)
+            search_all(more, 12, 18, "按标签扩展检索")
         report["found"] = len(rows)
         done = known(rows)
         with _lock, _db() as con:
             described = {r["key"] for r in con.execute("SELECT key FROM sources WHERE described=1")}
         todo = [rows[k] for k in rows if k not in described][:limit]
         report["new"] = len([k for k in rows if k not in done])
-        progress(20, f"读取 {len(todo)} 个视频的预览帧")
-        framed = []
-        def frames(item):
-            topic, row = item
-            check()
-            try:
-                return topic, row, _frames(bili, row)
-            except Exception:
-                return topic, row, None
-        with execution.ThreadPoolExecutor(max_workers=SHOT_WORKERS) as pool:
-            for n, (topic, row, got) in enumerate(pool.map(frames, todo), 1):
-                if got:
-                    framed.append((topic, row, got))
-                else:
-                    report["failed"] += 1
-                if n % 10 == 0 or n == len(todo):
-                    progress(20 + 40 * n / max(1, len(todo)), f"预览帧 {n}/{len(todo)}")
-        report["blocked"] = bili.blocked >= 3
-        if not describe:
-            for topic, row, got in framed:
-                add(row, [{"t": f["t"], "hash": format(f["hash"], "x")} for f in got], topic=topic)
-            report["indexed"] = len(framed)
-            return report
-        per = SHEET[0] * SHEET[1]
-        batches, current = [], []
-        for topic, row, got in framed:
-            for frame in got:
-                current.append((topic, row, frame))
-                if len(current) == per:
-                    batches.append(current)
-                    current = []
-        if current:
-            batches.append(current)
-        results = {}
-        def run(batch):
-            check()
-            try:
-                return batch, _describe([f for _, _, f in batch], check)
-            except costs.BudgetExceeded:
-                raise
-            except Exception:
-                return batch, {}
-        missed = []
-        with execution.ThreadPoolExecutor(max_workers=DESCRIBE_WORKERS) as pool:
-            for n, (batch, answer) in enumerate(pool.map(run, batches), 1):
-                for i, item in enumerate(batch):
-                    if i in answer:
-                        results[id(item[2])] = (item, answer[i])
-                    else:
-                        missed.append(item)
-                progress(60 + 33 * n / max(1, len(batches)), f"描述画面 {n}/{len(batches)} 张联系表")
-            # Frames an answer skipped (cut-off output, refused sheet): one more try in new sheets.
-            again = [missed[i:i + per] for i in range(0, len(missed), per)]
-            for n, (batch, answer) in enumerate(pool.map(run, again), 1):
-                for i, item in enumerate(batch):
-                    if i in answer:
-                        results[id(item[2])] = (item, answer[i])
-                progress(93 + 5 * n / max(1, len(again)), f"补充描述 {n}/{len(again)} 张联系表")
-        by_video = {}
-        for topic, row, got in framed:
-            moments = []
-            for frame in got:
-                text, kind = results.get(id(frame), (None, ("", "")))[1]
-                moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind})
-                report["described_frames"] += bool(text)
-            by_video[_key(row)] = (topic, row, moments)
-        for topic, row, moments in by_video.values():
-            add(row, moments, topic=topic, described=any(m["text"] for m in moments))
-            report["indexed"] += 1
+        chunks = [todo[i:i + CHUNK] for i in range(0, len(todo), CHUNK)]
+        for index, chunk in enumerate(chunks):
+            lo = 18 + 81 * index / max(1, len(chunks))
+            hi = 18 + 81 * (index + 1) / max(1, len(chunks))
+            label = f"第 {index + 1}/{len(chunks)} 批（共 {len(todo)} 个视频）"
+            _build_chunk(bili, chunk, check, lambda share, message: progress(lo + (hi - lo) * share, f"{label} · {message}"),
+                         report, describe)
+            report["blocked"] = report["blocked"] or bili.blocked >= 3
         return report
     finally:
         bili.close()
+
+
+def _build_chunk(bili, chunk, check, progress, report, describe):
+    def frames(item):
+        topic, row = item
+        check()
+        for attempt in range(3):
+            try:
+                return topic, row, _frames(bili, row, frame_count(float(row.get("duration") or 0)))
+            except (costs.BudgetExceeded, KeyboardInterrupt):
+                raise
+            except Exception as exc:
+                if "风控" not in str(exc):
+                    return topic, row, None
+                time.sleep(10 * (attempt + 1))   # Bilibili risk control: back off, then try again
+        return topic, row, None
+    framed = []
+    with execution.ThreadPoolExecutor(max_workers=SHOT_WORKERS) as pool:
+        for n, (topic, row, got) in enumerate(pool.map(frames, chunk), 1):
+            if got:
+                framed.append((topic, row, got))
+            else:
+                report["failed"] += 1
+            if n % 20 == 0 or n == len(chunk):
+                progress(0.4 * n / max(1, len(chunk)), f"预览帧 {n}/{len(chunk)}")
+    if not describe:
+        for topic, row, got in framed:
+            add(row, [{"t": f["t"], "hash": format(f["hash"], "x")} for f in got], topic=topic)
+            report["indexed"] += 1
+        return
+    per = SHEET[0] * SHEET[1]
+    items = [(topic, row, frame) for topic, row, got in framed for frame in got]
+    batches = [items[i:i + per] for i in range(0, len(items), per)]
+    results = {}
+    def run(batch):
+        check()
+        try:
+            return batch, _describe([f for _, _, f in batch], check)
+        except costs.BudgetExceeded:
+            raise
+        except Exception:
+            return batch, {}
+    missed = []
+    with execution.ThreadPoolExecutor(max_workers=DESCRIBE_WORKERS) as pool:
+        for n, (batch, answer) in enumerate(pool.map(run, batches), 1):
+            for i, item in enumerate(batch):
+                if i in answer:
+                    results[id(item[2])] = answer[i]
+                else:
+                    missed.append(item)
+            progress(0.4 + 0.5 * n / max(1, len(batches)), f"描述画面 {n}/{len(batches)} 张联系表")
+        # Frames an answer skipped (cut-off output, refused sheet): one more try in new sheets.
+        again = [missed[i:i + per] for i in range(0, len(missed), per)]
+        for batch, answer in pool.map(run, again):
+            for i, item in enumerate(batch):
+                if i in answer:
+                    results[id(item[2])] = answer[i]
+    for topic, row, got in framed:
+        moments = []
+        for frame in got:
+            text, kind = results.get(id(frame), ("", ""))
+            moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind})
+            report["described_frames"] += bool(text)
+        add(row, moments, topic=topic, described=any(m["text"] for m in moments))
+        report["indexed"] += 1
+    progress(1.0, "已保存")

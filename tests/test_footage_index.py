@@ -85,18 +85,18 @@ def test_build_searches_describes_and_skips_known_videos(data, monkeypatch):
     monkeypatch.setattr(es, "Bilibili", Bili)
     monkeypatch.setattr(fi.time, "sleep", lambda s: None)
     frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (40 + t, 90, 120)), "hash": t * 7919} for t in range(1, 5)]
-    monkeypatch.setattr(fi, "_frames", lambda bili, r: frames)
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
     calls = []
     def chat(system, content, **kw):
         calls.append(kw["task"])
         assert kw["vision"] and "联系表" in system
         return {"1": ["码头工人装卸货物", "实拍"], "2": ["集装箱吊车", "实拍"], "3": ["字幕页", "图表文字"]}, {}
     monkeypatch.setattr(planner, "chat", chat)
-    report = fi.build([("城市", "码头 实拍")], lambda: None, lambda *a: None)
+    report = fi.build([("城市", "码头 实拍")], lambda: None, lambda *a: None, widen=False)
     assert report["found"] == 1 and report["indexed"] == 1 and report["described_frames"] == 4
     assert calls == ["footage_index", "footage_index"]      # frame 4 was skipped, so it is asked about once more
     assert fi.search("吊车 集装箱")[0]["moments"] == [2.0]
-    assert fi.build([("城市", "码头 实拍")], lambda: None, lambda *a: None)["indexed"] == 0   # already described
+    assert fi.build([("城市", "码头 实拍")], lambda: None, lambda *a: None, widen=False)["indexed"] == 0   # already described
 
 
 def test_library_building_has_its_own_daily_cap(data, monkeypatch):
@@ -145,3 +145,24 @@ def test_matcher_prefers_indexed_videos_and_their_matching_frames(data, monkeypa
     assert tiles[0]["t"] == 200.0
     tiles = m.tiles_for(picked[0] | {"avoid": [200.0, 450.0]}, 6)
     assert tiles and not any(abs(t["t"] - 200) < 6 or abs(t["t"] - 450) < 6 for t in tiles)
+
+
+def test_tags_shared_by_a_topics_results_become_new_searches():
+    rows = [row(f"BV{n}", "x", tags="漕运,运河,纪录片,宋朝,古代运输") for n in range(4)] + [row("BV9", "y", tags="漕运,游戏")]
+    more = fi.expand({"历史": rows}, {"运河"})
+    assert ("历史", "漕运") in more and ("历史", "古代运输") in more
+    assert not any(q in ("运河", "纪录片", "游戏") for _, q in more)       # used, generic or skipped words
+    assert [fi.frame_count(d) for d in (60, 600, 3600)] == [8, 12, 16]
+
+
+def test_index_building_runs_in_its_own_worker_lane(data):
+    from jinggao import store
+    paths.prepare()
+    store.init()
+    film = store.new_project("片子")
+    library = store.new_project("素材库采集")
+    store.enqueue(library["id"], "footage_index", {"packs": ["动物"]})
+    store.enqueue(film["id"], "produce", {})
+    assert store.claim("main")["kind"] == "produce"
+    assert store.claim("main") is None
+    assert store.claim("background")["kind"] == "footage_index"

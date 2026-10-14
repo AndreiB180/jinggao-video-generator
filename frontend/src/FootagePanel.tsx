@@ -39,7 +39,7 @@ export function FootagePanel({close}:{close:()=>void}) {
      <div className="progress-track big"><i style={{width:Math.max(2,job!.progress)+'%'}}/></div>
      <button className="secondary small" disabled={!!job!.cancel} onClick={()=>call('/jobs/'+job!.id+'/cancel','POST').then(load)}>停止</button></div>
     :job&&<p className="muted-note">上次扩充：{job.message}{job.status==='failed'&&job.error?` · ${job.error}`:''}</p>}
-   <h3>按题材扩充</h3>
+   <h3>按题材扩充 <button className="link" onClick={()=>setPacks(p=>p.length?[]:Object.keys(stats?.packs||{}))}>{packs.length?'清空':'全选'}</button></h3>
    <div className="pack-grid">{Object.entries(stats?.packs||{}).map(([name,n])=><label key={name} className={'pack'+(packs.includes(name)?' on':'')}>
     <input type="checkbox" checked={packs.includes(name)} onChange={e=>setPacks(p=>e.target.checked?[...p,name]:p.filter(x=>x!==name))}/>
     <strong>{name}</strong><small>{n} 个关键词 · 已收 {count(name)} 个视频</small></label>)}</div>

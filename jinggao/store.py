@@ -146,10 +146,19 @@ def jobs(project_id: str) -> list[dict]:
     return [dict(row) | {"payload": json.loads(row["payload"])} for row in rows]
 
 
-def claim() -> dict | None:
+# Long background work (building the footage index) runs in its own worker so videos never queue behind it.
+BACKGROUND_KINDS = ("footage_index",)
+
+
+def _lane(lane: str) -> str:
+    marks = ",".join("'" + k + "'" for k in BACKGROUND_KINDS)
+    return f"kind IN ({marks})" if lane == "background" else f"kind NOT IN ({marks})"
+
+
+def claim(lane: str = "main") -> dict | None:
     with connection() as con:
         con.execute("BEGIN IMMEDIATE")
-        row = con.execute("SELECT id FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+        row = con.execute(f"SELECT id FROM jobs WHERE status='queued' AND {_lane(lane)} ORDER BY created LIMIT 1").fetchone()
         if not row:
             return None
         con.execute("UPDATE jobs SET status='running',message='开始执行',updated=? WHERE id=?",
@@ -167,7 +176,7 @@ def job_update(job_id: str, **changes) -> None:
                     (*changes.values(), job_id))
 
 
-def recover() -> None:
+def recover(lane: str = "main") -> None:
     with connection() as con:
         con.execute("UPDATE jobs SET status='interrupted',message='程序上次退出时任务被中断，可手动重试',"
-                    "updated=? WHERE status='running'", (time.time(),))
+                    f"updated=? WHERE status='running' AND {_lane(lane)}", (time.time(),))

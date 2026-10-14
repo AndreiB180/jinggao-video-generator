@@ -915,8 +915,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         store.job_update(jid, status="completed", progress=100, message=message)
 
 
-def run_once(stop=None) -> bool:
-    job = store.claim()
+def run_once(stop=None, lane="main") -> bool:
+    job = store.claim(lane)
     if not job:
         return False
     began, wall_began = time.monotonic(), time.time()
@@ -953,7 +953,7 @@ def run_once(stop=None) -> bool:
     return True
 
 
-def loop(stop=None) -> None:
+def loop(stop=None, lane="main") -> None:
     parent = multiprocessing.parent_process()
     if parent is not None:
         def watch_parent():
@@ -967,14 +967,18 @@ def loop(stop=None) -> None:
     while ownership is None:
         if stop is not None and stop.is_set():
             return
-        ownership = instance.acquire("worker.lock")
+        ownership = instance.acquire("worker.lock" if lane == "main" else "worker-background.lock")
         if ownership is None:
             time.sleep(.2)
+    if lane == "background":
+        # Index building is many small picture descriptions; in its own process it may use more parallel
+        # model calls without taking any from video production.
+        execution.MODEL_SLOTS = threading.BoundedSemaphore(10)
     try:
         store.init()
-        store.recover()
+        store.recover(lane)
         while stop is None or not stop.is_set():
-            if not run_once(stop):
+            if not run_once(stop, lane):
                 time.sleep(0.5)
     finally:
         ownership.close()

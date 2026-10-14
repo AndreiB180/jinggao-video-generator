@@ -82,6 +82,8 @@ def main():
     stop = multiprocessing.Event()
     worker = multiprocessing.Process(target=loop, args=(stop,), daemon=True)
     worker.start()
+    background = multiprocessing.Process(target=loop, args=(stop, "background"), daemon=True)
+    background.start()
     url = f"http://127.0.0.1:{port}"
     (paths.DATA / "instance.json").write_text(json.dumps({"port": port}), "utf-8")
     if not args.no_browser:
@@ -97,10 +99,11 @@ def main():
         pass
     finally:
         stop.set()
-        worker.join(3)
-        if worker.is_alive():
-            worker.terminate()
-            worker.join()
+        for process in (worker, background):
+            process.join(3)
+            if process.is_alive():
+                process.terminate()
+                process.join()
         ownership.close()
         signal.signal(signal.SIGTERM, previous_term)
 
