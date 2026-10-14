@@ -216,6 +216,14 @@
 - 扩库任务走第二个 worker 进程（`store.BACKGROUND_KINDS`，`claim(lane)` / `recover(lane)`，`worker-background.lock`），出片不排在扩库后面；后台进程的模型并发上限设为 10（`execution.MODEL_SLOTS`），看图描述 10 路。
 - 花生（B 站官方，huasheng.cn，2025-12 正式上线）宣称“千万级”可商用素材（含视频、GIF、表情包、BGM），40+ 公共音色、音色克隆、MG 动画、文稿上限 1 万字、口播音频 1 小时；包月 29–59 元。我们的库来自 B 站 UP 主视频，不是授权素材，商业发布有版权风险；Pexels（需免费 Key）/ Pixabay 是可商用的补充。
 
+## 素材来源与版权调研（2026-10-14 夜，多代理调研 + 复核）
+
+- Pexels 约 2026-09-30 起停发新 API Key 与提额，没有排队通道；网上转卖的 Key 违反条款，不用。合法途径：找已有旧 Key 的人，或发邮件 api@pexels.com 申请。
+- 免费可商用、有 API：Pixabay（已接入，约 24 万视频，支持 lang=zh，条款禁止系统性批量下载，只按镜头即用即下）、NASA 视频库（约 8.8k，署名 NASA）、DVIDS（美军公开媒体，可商用需署名，补军事题材，英文、国内可达性待测）、维基共享资源（国内被墙，只能境外离线整理）。Coverr / Vecteezy / Mixkit 条款或接口不适合。
+- 付费正版：包图网（有公开 API 文档，企业年费 999–4,999 元，嵌入软件需旗舰版）、摄图网（企业可商用视频 84 万+，开放平台 API，年费 999 元起）；海洛（Shutterstock 国内代理）API 完善但零售贵，需谈包年。阿里云 IMS 公共素材库只有音乐、贴纸、背景图，没有视频素材。
+- 版权风险：B 站 UP 主视频用于商用营销号风险高（13 秒短视频即构成作品；《庆余年》“AI 一键成片”切片匹配案判赔 80 万元；B 站协议禁止脚本抓取、限非商业使用）。调研称花生用户协议写明“不可用于商业用途”。需客户知情并决定商用发布时是否只用授权素材。
+- 主要来源：pexels.com/api、help.pexels.com、pixabay.com/api/docs、api.dvidshub.net/docs、ibaotu API 文档（baotu-api.apifox.cn）、699pic.com/vip/api、open.hellorf.com、thepaper.cn《庆余年》案报道、court.gov.cn 13 秒短视频案。
+
 ## 代码入口
 
 | 路径 | 用途 |
