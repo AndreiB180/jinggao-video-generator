@@ -12,7 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import (__version__, captions, config, costs, curation, demo, library, library_collect, media, paths, source_index,
                sources, store, subtitle_style)
-from .models import (AssetPatch, BatchRequest, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
+from .models import (AssetPatch, BatchRequest, FootageBuild, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
                      NewsCrawl, NewsLink, NewsProduce, NewsText, RewriteRequest, ShotPatch)
 from .worker import shot_by_id
 
@@ -109,6 +109,52 @@ def create_app() -> FastAPI:
         else:
             subprocess.Popen(["xdg-open", str(folder)])
         return {"path": str(folder)}
+
+    @app.get("/api/footage-index")
+    def footage_index_status():
+        from . import footage_index
+        pid = library_collect.project_id()
+        job = next((j for j in store.jobs(pid) if j["kind"] == "footage_index"), None)
+        return footage_index.stats() | {"job": job, "report": store.get_project(pid).get("footage_index_report")}
+
+    @app.post("/api/footage-index/build", status_code=202)
+    def footage_index_build(body: FootageBuild):
+        from . import footage_index
+        unknown = [name for name in body.packs if name not in footage_index.PACKS]
+        if unknown:
+            raise ValueError("没有这个题材包：" + "、".join(unknown))
+        if not body.packs and not body.keywords:
+            raise ValueError("请选择题材包或填写关键词")
+        return store.enqueue(library_collect.project_id(), "footage_index", body.model_dump())
+
+    @app.get("/api/footage-index/file")
+    def footage_index_file():
+        import sqlite3
+        source = paths.DATA / "footage-index.sqlite"
+        if not source.exists():
+            raise KeyError("素材库还是空的")
+        target = paths.DATA / "footage-index-export.sqlite"
+        with sqlite3.connect(source) as con, sqlite3.connect(target) as out:
+            con.backup(out)       # a consistent copy while jobs may be writing
+        return FileResponse(target, filename="镜稿素材库.sqlite", media_type="application/octet-stream")
+
+    @app.post("/api/footage-index/import")
+    def footage_index_import(file: UploadFile = File(...)):
+        from . import footage_index
+        target = paths.DATA / "footage-index-import.sqlite"
+        size = 0
+        try:
+            with target.open("wb") as out:
+                while chunk := file.file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > 2 * 1024 ** 3:
+                        raise ValueError("素材库文件最大 2 GB")
+                    out.write(chunk)
+            added = footage_index.merge(target)
+        finally:
+            file.file.close()
+            target.unlink(missing_ok=True)
+        return footage_index.stats() | {"added": added}
 
     @app.get("/api/tts/voices")
     def tts_voices():

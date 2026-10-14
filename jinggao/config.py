@@ -12,7 +12,7 @@ DEFAULTS = {
     "model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model_api_key": "", "model_name": "qwen3.7-flash",
     "vision_model": "qwen3.7-flash", "tavily_api_key": "", "pixabay_api_key": "", "pexels_api_key": "", "coverr_api_key": "",
     "planning_model": "", "requirements_model": "", "review_model": "", "rewrite_model": "",
-    "tts_provider": "qwen_tts", "qwen_tts_voice": "Ethan", "tts_speed": "1.1", "tts_daily_budget_cny": "5.00",
+    "tts_provider": "qwen_tts", "qwen_tts_voice": "Ethan", "tts_speed": "1.1", "tts_daily_budget_cny": "5.00", "index_daily_budget_cny": "2.00",
     "tts_migrated": "",
     "export_dir": "", "auto_save_exports": "1",
     "tts_base_url": "https://api.openai.com/v1",
@@ -122,7 +122,7 @@ def update(values: dict) -> dict:
         from .tts_costs import validate_pricing
         validate_pricing(data["tts_pricing_json"])
         for key in ("model_project_budget_cny", "model_daily_budget_cny", "model_provider_budget_cny", "model_job_budget_cny",
-                    "tts_daily_budget_cny"):
+                    "tts_daily_budget_cny", "index_daily_budget_cny"):
             if key == "model_provider_budget_cny" and data[key] == "":
                 continue
             try:

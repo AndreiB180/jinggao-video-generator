@@ -444,6 +444,19 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             store.job_update(jid, status="completed", progress=100,
                              message=message)
         return
+    elif kind == "footage_index":
+        from . import footage_index
+        queries = [(name, q) for name in options.get("packs", []) for q in footage_index.PACKS.get(name, [])]
+        queries += [("自定义", q) for q in options.get("keywords", [])]
+        if not queries:
+            raise ValueError("请选择题材包或填写关键词")
+        report = footage_index.build(list(dict.fromkeys(queries)), check, progress, pages=int(options.get("pages", 1)))
+        store.mutate(pid, lambda p: p.update(footage_index_report=report), internal=True)
+        if finalize:
+            store.job_update(jid, status="completed", progress=100,
+                             message=f"素材库已更新 · 本次收录 {report['indexed']} 个视频、描述 {report['described_frames']} 帧"
+                                     + ("（B站接口限流，部分关键词没搜完，稍后可再跑一次）" if report.get("blocked") else ""))
+            return
     elif kind == "transcribe":
         from . import local_asr, script_norm
         import tempfile

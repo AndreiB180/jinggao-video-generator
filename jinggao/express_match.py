@@ -29,6 +29,7 @@ VERSION = 1
 BILI_PER_QUERY = 4
 PERSON_PER_QUERY = 5   # named people have little real footage: look a little wider before falling back
 PIXA_PER_QUERY = 2
+LOCAL_PER_QUERY = 3     # videos from the local footage index (footage_index) per query, ahead of live results
 TILES_PER_BILI = 8
 PERSON_TILES = 10
 QA_W, QA_H = 320, 180
@@ -257,6 +258,14 @@ class Matcher:
         with execution.ThreadPoolExecutor(max_workers=6) as pool:
             for task, rows in pool.map(run, tasks):
                 results[task] = rows
+        # The local index: videos found and described before (no network), with the matching moments.
+        from . import footage_index
+        for q in dict.fromkeys(q for g in groups for q in g["zh"][:2]):
+            try:
+                results[("local", q)] = footage_index.search(q, limit=8)
+            except Exception as exc:   # a missing or damaged index only costs this lane
+                self.notes.append(f"本地素材库检索失败: {type(exc).__name__}")
+                break
         return results
 
     def score(self, row, group, shots_by_id):
@@ -297,6 +306,8 @@ class Matcher:
                 score += 0.6
             score += 0.3 if 45 <= duration <= 1200 else 0
             score += min(0.3, math.log10(1 + row.get("play", 0)) / 20)
+            if row.get("moments"):
+                score += 0.6    # described frames of this video match the words, not just its title
         else:
             if duration + 0.05 < min(need, 6):
                 return None
@@ -310,7 +321,7 @@ class Matcher:
         for g in groups:
             picked, seen = [], set()
             bili_quota = PERSON_PER_QUERY if g.get("person") else BILI_PER_QUERY
-            for kind, queries, quota in (("bili", g["zh"][:2], bili_quota),
+            for kind, queries, quota in (("local", g["zh"][:2], LOCAL_PER_QUERY), ("bili", g["zh"][:2], bili_quota),
                                          ("pixa", g["en"][:2] if self.pixa else [], PIXA_PER_QUERY)):
                 for q in queries:
                     ranked = []
@@ -364,6 +375,10 @@ class Matcher:
         inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
         step = max(1, len(inner) / count)
         picked = [inner[min(len(inner) - 1, int(i * step + step / 2))] for i in range(min(count, len(inner)))]
+        if row.get("moments"):
+            # Indexed video: the frames whose descriptions matched come first, the even spread fills up.
+            near = [min(inner, key=lambda p, t=t: abs(p["t"] - t)) for t in row["moments"]]
+            picked = list({id(p): p for p in near + picked}.values())[:count]
         tiles, hashes = [], []
         for p in picked:
             image = es.bilibili_tile(self.bili, p)
@@ -1046,6 +1061,12 @@ class Matcher:
 
     # ------------------------------------------------------------------- save
     def save(self, final, files):
+        try:   # library videos used in a film rank a little lower next time (less repetition across videos)
+            from . import footage_index
+            footage_index.mark_used({f"{c['tile']['source']['provider']}:{c['tile']['source']['id']}"
+                                     for c in final.values() if c['tile']['source'].get('indexed')})
+        except Exception:
+            pass
         def prepare(item):
             sid, choice = item
             source = choice["tile"]["source"]
@@ -1156,6 +1177,12 @@ class Matcher:
         self.progress(15, f"读取 {sum(len(v) for v in chosen.values())} 个候选的预览")
         tiles = self.all_tiles(chosen, {g["id"] for g in groups if g.get("person")})
         self.presenter_sources = self.screen_presenters(chosen)
+        try:   # the library grows with every video made (title text and frame times; described in bulk later)
+            from . import footage_index
+            footage_index.add_seen([row for rows in chosen.values() for row in rows],
+                                   [t for rows in tiles.values() for t in rows], topic=self.plan.get("domain") or "")
+        except Exception as exc:
+            self.notes.append(f"写入本地素材库失败: {type(exc).__name__}")
         stamp("previews", began)
         began = time.monotonic()
         self.progress(30, "批量判断画面")

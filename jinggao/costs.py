@@ -255,6 +255,11 @@ def _usage(body):
     return prompt, output, cached
 
 
+# Work priced by its own volume (speech per character, library building per frame) has its own daily
+# cap; the task / project / daily model caps cover planning, rewriting and picture checks only.
+OWN_CAPS = {"tts": ("今日配音", "tts_daily_budget_cny"), "footage_index": ("今日素材库", "index_daily_budget_cny")}
+
+
 class request:
     def __init__(self, cfg, payload, category, *, task=None, check=None):
         self.cfg, self.payload, self.category = cfg, payload, category
@@ -314,12 +319,11 @@ class request:
                                    (pid, day, self.provider)).fetchall()
                 with _settlements:
                     active = _active.copy()
-                # Speech is priced per character and grows with the script, so it has its own daily
-                # cap; the model caps cover planning, rewriting and picture checks only.
-                speech = self.category == "tts"
-                rows = [r for r in rows if (r["category"] == "tts") == speech]
+                # Speech and library building have their own daily caps (OWN_CAPS).
+                own = OWN_CAPS.get(self.category)
+                rows = [r for r in rows if (r["category"] == self.category if own else r["category"] not in OWN_CAPS)]
                 today = [r for r in rows if r["day"] == day or r["state"] in {"reserved", "unknown"}]
-                caps = ((("今日配音", today, limits["tts_daily_budget_cny"]),) if speech else (
+                caps = (((own[0], today, limits[own[1]]),) if own else (
                     ("本次任务", [r for r in rows if r["job_id"] == jid], limits["model_job_budget_cny"] if jid else ""),
                     ("项目累计", [r for r in rows if r["project_id"] == pid], limits["model_project_budget_cny"]),
                     ("今日", today, limits["model_daily_budget_cny"]),
@@ -339,7 +343,7 @@ class request:
                         continue
                     if stopped is not None:
                         stopped.set()
-                    raise BudgetExceeded(f"{name}{'' if speech else '模型'}预算 ¥{Decimal(limit):.2f}：已记账/预留 ¥{used/MICROS:.4f}，"
+                    raise BudgetExceeded(f"{name}{'' if own else '模型'}预算 ¥{Decimal(limit):.2f}：已记账/预留 ¥{used/MICROS:.4f}，"
                                          f"下一请求需预留 ¥{reserve/MICROS:.4f}，已在发送前停止。已保存进度；重试不会清零费用。")
                 if not waiting:
                     self._insert(con, reserve)
@@ -413,12 +417,15 @@ def summary(project_id=None):
         # Speech has its own daily cap: show model and voice money side by side against their own limits.
         open_states = "state IN ('reserved','unknown','unpriced')"
         def split(where, args):
-            rows = con.execute("SELECT category='tts' AS speech, COALESCE(SUM(amount),0) AS total FROM charges WHERE ("
-                               + where + ") GROUP BY category='tts'", args).fetchall()
-            found = {bool(r["speech"]): r["total"] / MICROS for r in rows}
-            return found.get(False, 0.0), found.get(True, 0.0)
-        model_day, speech_day = split("day=? OR " + open_states, (day,))
-        model_project, speech_project = split("project_id=?", (project_id,)) if project_id else (None, None)
+            rows = con.execute("SELECT category, COALESCE(SUM(amount),0) AS total FROM charges WHERE ("
+                               + where + ") GROUP BY category", args).fetchall()
+            found = {}
+            for r in rows:
+                part = r["category"] if r["category"] in OWN_CAPS else "model"
+                found[part] = found.get(part, 0.0) + r["total"] / MICROS
+            return found.get("model", 0.0), found.get("tts", 0.0), found.get("footage_index", 0.0)
+        model_day, speech_day, index_day = split("day=? OR " + open_states, (day,))
+        model_project, speech_project, _ = split("project_id=?", (project_id,)) if project_id else (None, None, None)
         where, args = ("project_id=?", (project_id,)) if project_id else ("day=? OR state IN ('reserved','unknown','unpriced')", (day,))
         groups = con.execute("SELECT stage,category,model,COUNT(*) AS requests,SUM(amount) AS amount FROM charges WHERE "+where+" GROUP BY stage,category,model", args).fetchall()
         tasks = con.execute("SELECT stage,category,COALESCE(NULLIF(task,''),category) AS task,model,provider,pricing_status,COUNT(*) AS requests,SUM(amount) AS amount FROM charges WHERE "+where+" GROUP BY stage,category,task,model,provider,pricing_status", args).fetchall()
@@ -430,7 +437,8 @@ def summary(project_id=None):
     split_totals = {"model": {"daily_cny": model_day, "daily_limit_cny": float(cfg["model_daily_budget_cny"]),
                               "project_cny": model_project, "project_limit_cny": float(cfg["model_project_budget_cny"])},
                     "speech": {"daily_cny": speech_day, "daily_limit_cny": float(cfg["tts_daily_budget_cny"]),
-                               "project_cny": speech_project}}
+                               "project_cny": speech_project},
+                    "index": {"daily_cny": index_day, "daily_limit_cny": float(cfg["index_daily_budget_cny"])}}
     return {"day": day, "day_basis": "本机日期", "daily": daily, "project": project, "provider": provider, **split_totals,
             "categories": [{"stage": r["stage"], "category": r["category"], "model": r["model"], "requests": r["requests"],
                             "total_cny": r["amount"]/MICROS} for r in groups],

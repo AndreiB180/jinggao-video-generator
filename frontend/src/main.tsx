@@ -1,11 +1,11 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Aperture, LayoutGrid, ArrowRight, Check, CheckCircle2, ChevronRight, Clapperboard, Download, ExternalLink, Film, FolderOpen, Image as ImageIcon, Layers3, Loader2, Lock, Mic, Monitor, Music2, Newspaper, Play, RefreshCw, Save, Search, Settings2, ShieldCheck, Sparkles, Unlock, Upload, WandSparkles, X } from 'lucide-react';
+import { Aperture, Database, LayoutGrid, ArrowRight, Check, CheckCircle2, ChevronRight, Clapperboard, Download, ExternalLink, Film, FolderOpen, Image as ImageIcon, Layers3, Loader2, Lock, Mic, Monitor, Music2, Newspaper, Play, RefreshCw, Save, Search, Settings2, ShieldCheck, Sparkles, Unlock, Upload, WandSparkles, X } from 'lucide-react';
 import type { Asset, Candidate, Export, Job, Project, Shot, Summary } from './types';
 import './style.css';
 import {ShotPreview} from './ShotPreview';
 import {BatchPanel} from './BatchPanel';
-import {LibraryPanel} from './LibraryPanel';
+import {FootagePanel} from './FootagePanel';
 import {composition} from './composition';
 import {CostSettings, ModelCostBar} from './ModelCosts';
 import {BilibiliLogin} from './BilibiliLogin';
@@ -127,10 +127,11 @@ function App() {
     <button className={view==='works'?'on':''} onClick={()=>perform(async()=>{await savePending();await loadProjects();setView('works')})}><LayoutGrid size={17}/>我的作品</button>
     <button onClick={()=>perform(async()=>{await savePending();setNewsPanel(true)})}><Newspaper size={17}/>新闻选题</button>
     <button onClick={()=>perform(async()=>{await savePending();setBatch(true)})}><Layers3 size={17}/>批量制作</button>
+    <button onClick={()=>perform(async()=>{await savePending();setIndexLibrary(true)})}><Database size={17}/>素材库</button>
    </nav>
    <div className="section-label">最近</div>
    <nav className="project-list">{projects.map(p=><button key={p.id} aria-label={p.title} title={p.title} className={'project-item '+(view==='project'&&project?.id===p.id?'selected':'')} onClick={()=>chooseProject(p.id)}><Film size={17}/><div><strong>{p.title}</strong><small>{p.video?'已出片':p.shot_count?p.shot_count+' 个镜头':'草稿'}</small></div>{p.job&&['queued','running'].includes(p.job.status)&&<Loader2 className="spin" size={13}/>}</button>)}{!projects.length&&<p className="sidebar-hint">做好的视频会出现在这里。</p>}</nav>
-   <div className="sidebar-bottom"><div className="local-status"><span className="green-dot"/>本地工作台 <small>{system.nvenc?'NVIDIA 加速可用':'CPU 合成可用'}</small></div><button className="settings-btn" onClick={()=>setSettings(true)}><Settings2 size={17}/>设置<ChevronRight size={15}/></button><div className="more-links"><button onClick={()=>create()} disabled={loading}>空白项目</button><button onClick={()=>perform(async()=>{await savePending();setIndexLibrary(true)})}>素材索引库</button></div><small className="version">v0.3 测试版 · 项目保存在本机</small></div>
+   <div className="sidebar-bottom"><div className="local-status"><span className="green-dot"/>本地工作台 <small>{system.nvenc?'NVIDIA 加速可用':'CPU 合成可用'}</small></div><button className="settings-btn" onClick={()=>setSettings(true)}><Settings2 size={17}/>设置<ChevronRight size={15}/></button><div className="more-links"><button onClick={()=>create()} disabled={loading}>空白项目</button></div><small className="version">v0.3 测试版 · 项目保存在本机</small></div>
   </aside>
   <main>
    <header className="topbar"><div className="breadcrumb">{view==='home'?<span>一键成片</span>:view==='works'?<span>我的作品</span>:<><button className="crumb" onClick={()=>perform(async()=>{await savePending();await loadProjects();setView('works')})}>我的作品</button><ChevronRight size={14}/><span>{project?.title}</span></>}</div><div className="top-actions"><span className="local-chip"><Monitor size={13}/> 本地运行</span>{view==='project'&&project&&<button className="secondary small" disabled={busy||!(draft.script.trim()||project.news?.text||project.source_audio)} onClick={()=>perform(async()=>{await savePending();await job('produce',{resolution:'1080p'});setTab('overview')})}><Sparkles size={15}/>生成视频</button>}{view==='project'&&project&&<button className="primary small" disabled={busy||!project.shots.length} onClick={()=>perform(async()=>{await savePending();setExporting(true)})}><Download size={15}/>导出视频</button>}</div></header>
@@ -165,7 +166,7 @@ function App() {
   {filmPreview&&project&&<FilmPreview project={project} close={()=>setFilmPreview(false)} edit={id=>{setFilmPreview(false);setTab('board');setSelected(id);setTimeout(()=>document.querySelector('.shot-card.selected')?.scrollIntoView({block:'center'}),80)}}/>}
   {newsPanel&&<NewsPanel close={()=>setNewsPanel(false)} openProject={chooseProject} onCreated={()=>{loadProjects()}}/>}
   {batch&&<BatchPanel close={()=>setBatch(false)} openProject={chooseProject} onCreated={()=>{loadProjects()}}/>}
-  {indexLibrary&&<LibraryPanel close={()=>setIndexLibrary(false)} projectId={project?.id} onProject={setProject}/>}
+  {indexLibrary&&<FootagePanel close={()=>setIndexLibrary(false)}/>}
   {settings&&<SettingsModal close={()=>setSettings(false)} onError={setError}/>}
   {exporting&&project&&<ExportModal close={()=>setExporting(false)} preview={()=>{setExporting(false);setFilmPreview(true)}} project={project} submit={opts=>perform(async()=>{await job('render',opts);setExporting(false);setTab('exports')})}/>}
  </div>

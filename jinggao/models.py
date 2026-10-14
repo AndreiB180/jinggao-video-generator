@@ -133,6 +133,12 @@ class RemoteImport(Strict):
     license: str = Field(default="待确认", max_length=500)
 
 
+class FootageBuild(Strict):
+    packs: list[Annotated[str, Field(min_length=1, max_length=30)]] = Field(default_factory=list, max_length=20)
+    keywords: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=200)
+    pages: int = Field(default=1, ge=1, le=3)
+
+
 class LibraryBuild(Strict):
     action: Literal["collect", "rebuild", "index"] = "collect"
     queries: list[Annotated[str, Field(min_length=2, max_length=100)]] = Field(default_factory=list, max_length=4)
