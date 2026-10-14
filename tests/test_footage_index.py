@@ -79,6 +79,7 @@ def test_build_searches_describes_and_skips_known_videos(data, monkeypatch):
     found = {"码头 实拍": [row("BV1x", "码头 装卸 实拍"), row("BV1game", "原神 码头"), row("BV1short", "码头", duration=8)]}
     class Bili:
         blocked = search_refused = shots_blocked = 0
+        offline_search = False
         counts = __import__("threading").Lock()
         def search(self, q, page=1):
             return found.get(q, [])
@@ -291,6 +292,7 @@ def test_videos_whose_sheets_keep_failing_are_left_out(data, monkeypatch):
     monkeypatch.setattr(planner, "chat", refused)
     class Bili:
         blocked = search_refused = shots_blocked = 0
+        offline_search = False
         counts = __import__("threading").Lock()
         def search(self, q, page=1):
             return [row("BV1stubborn0", "码头")]
@@ -367,3 +369,31 @@ def test_service_wide_failures_do_not_count_against_videos(data, monkeypatch):
                     lambda *a: None, report, True)
     with fi._conn() as con:
         assert con.execute("SELECT COUNT(*) FROM sources WHERE tries>0").fetchone()[0] == 0
+
+
+def test_refused_searches_fall_back_to_todays_cached_results(data, monkeypatch):
+    from jinggao import express_sources as es, planner
+    calls = {"live": 0}
+    class Bili:
+        blocked = search_refused = shots_blocked = 0
+        offline_search = False
+        counts = __import__("threading").Lock()
+        def search(self, q, page=1):
+            if q == "已缓存":
+                return [row("BV1cached000", "码头")]
+            if self.offline_search:
+                return []
+            calls["live"] += 1
+            self.search_refused += 1
+            return []
+        def close(self):
+            pass
+    monkeypatch.setattr(es, "Bilibili", Bili)
+    monkeypatch.setattr(fi, "_sleep", lambda seconds, check: None)
+    monkeypatch.setattr(fi.time, "sleep", lambda s: None)
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in range(4)]
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    monkeypatch.setattr(planner, "chat", lambda *a, **k: ({str(i + 1): ["码头", "实拍"] for i in range(4)}, {}))
+    queries = [("城市", f"新词{n}") for n in range(100)] + [("城市", "已缓存")]
+    report = fi.build(queries, lambda: None, lambda *a: None, widen=0)
+    assert report["search_offline"] and report["indexed"] == 1 and calls["live"] < 70

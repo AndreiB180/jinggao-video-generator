@@ -136,7 +136,7 @@ def main():
 
 
 def run_rounds(args, log, ship, started, set_cap, PACKS):
-    round_index, retried = args.first_round, False
+    round_index, retried, offline_waits = args.first_round, False, 0
     while round_index < len(ROUNDS):
         set_cap()
         pages, widen = ROUNDS[round_index]
@@ -216,7 +216,14 @@ def run_rounds(args, log, ship, started, set_cap, PACKS):
         ship(f"round {number} {current.get('status')}")
         text = str(current.get("error") or "") + str(current.get("message") or "")
         if current.get("status") == "completed":
-            round_index, retried = round_index + 1, False
+            if (status.get("report") or {}).get("search_offline") and offline_waits < 4:
+                # Bilibili search was refused, so this round used today's cached searches only. Searching
+                # again later finds new videos: wait, then run the same round once more.
+                offline_waits += 1
+                log(f"round {number}: search was refused; waiting 45 min before running it again ({offline_waits}/4)")
+                time.sleep(45 * 60)
+                continue
+            round_index, retried, offline_waits = round_index + 1, False, 0
             continue
         if any(word in text for word in STOP_WORDS):
             log("stop: budget or account problem")

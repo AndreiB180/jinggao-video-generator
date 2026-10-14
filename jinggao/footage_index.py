@@ -584,8 +584,8 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
             found = []
             for page in range(1, pages + 1):
                 check()
-                if bili.search_refused >= 3:
-                    break                  # risk control: stop paging (the build pauses after this phase)
+                if bili.search_refused >= 3 and not bili.offline_search:
+                    break                  # risk control: stop paging (the build pauses after this batch)
                 try:
                     got = bili.search(query, page)
                 except Exception:
@@ -593,22 +593,36 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
                 found += got
                 if not got:
                     break
-                time.sleep(0.4)        # stay under the search API's burst limit
+                if not bili.offline_search:
+                    time.sleep(0.4)    # stay under the search API's burst limit
             with lock:
                 for row in found:
                     if 20 <= row.get("duration", 0) <= 3 * 3600 and not SKIP_TITLE.search(row.get("title", "")):
                         rows.setdefault(_key(row), (topic, row))
                         by_topic.setdefault(topic, {})[_key(row)] = row
+        search_pauses = 0
         def search_all(items, lo, hi, label):
-            nonlocal pauses
+            nonlocal search_pauses
             done = 0
             for start in range(0, len(items), 30):
                 with execution.ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
                     for _ in pool.map(find, items[start:start + 30]):
                         done += 1
                         progress(lo + (hi - lo) * done / max(1, len(items)), f"{label} {done}/{len(items)} · 已找到 {len(rows)} 个视频")
-                pauses = _risk_paused(bili, check, lambda m: progress(lo + (hi - lo) * done / max(1, len(items)), m),
-                                      report, pauses, label)
+                if bili.search_refused >= 3 and not bili.offline_search:
+                    report["blocked"] = True
+                    if search_pauses:
+                        # Still refused after a pause: go on with the searches cached today and describe those.
+                        bili.offline_search = True
+                        report["search_offline"] = True
+                        progress(lo + (hi - lo) * done / max(1, len(items)), f"{label} · B站搜索风控，本轮改用今天已缓存的搜索结果")
+                    else:
+                        progress(lo + (hi - lo) * done / max(1, len(items)),
+                                 f"{label} · B站搜索风控，暂停 {BLOCKED_PAUSE // 60} 分钟后继续")
+                        _sleep(BLOCKED_PAUSE, check)
+                        search_pauses += 1
+                    with bili.counts:
+                        bili.search_refused = 0
         search_all(queries, 1, 12, "检索关键词")
         if widen:
             more = expand({topic: list(found.values()) for topic, found in by_topic.items()},

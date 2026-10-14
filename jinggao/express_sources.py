@@ -109,6 +109,7 @@ class Bilibili:
         self.search_refused = 0       # searches refused in a row (risk control or network)
         self.shots_blocked = 0        # videoshot (preview) calls refused in a row
         self.shots_blocked_at = 0.0
+        self.offline_search = False   # index builds switch this on when search keeps being refused
         self.counts = threading.Lock()
         self.mixin = None
         self.cookies = saved_cookies()
@@ -186,6 +187,8 @@ class Bilibili:
         cached = _read_json(path, SEARCH_TTL)
         if cached is not None:
             return cached
+        if self.offline_search:      # risk control: only searches already cached today
+            return []
         rows = None
         with self.search_gate:
             for attempt in range(3):
