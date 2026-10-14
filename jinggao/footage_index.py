@@ -1,41 +1,52 @@
 """本地素材索引：B站视频的标题、标签、预览帧和画面描述，不下载视频本身。
 
-Each indexed video keeps its search row (title, tags, length, uploader) and 8-12 "moments": preview
+Each indexed video keeps its search row (title, tags, length, uploader) and 8-16 "moments": preview
 frames from Bilibili's own thumbnail sprites, each with a one-line description written by the vision
-model from a contact sheet (about 0.00005 元 a frame). Text is searched with Chinese character
+model from a contact sheet (about 0.00003 元 a frame). Text is searched with Chinese character
 bigrams in SQLite FTS5, so a shot's query finds the video and the moment in it that shows the thing.
 Production downloads only the chosen few seconds, as before.
 
 The index grows two ways: bulk builds from topic packs or keywords (build()), and every production run's
-live search results (add_seen()). The whole index is one SQLite file that can be copied between machines.
+live search results (add_seen()). The described part ships with the app as gzip JSON lines
+(assets/footage-index, export_seed/install_seed).
+
+Three processes use the file at once (the server, the production worker, the index-building worker):
+every write is its own short BEGIN IMMEDIATE transaction, reads need no lock (WAL), and nothing holds
+a connection open between calls.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 from . import costs, execution, paths
+from .footage_topics import PACKS   # topic -> Bilibili searches
 
-MOMENTS = 10            # preview frames kept (and described) per video
+MOMENTS = 10            # preview frames kept (and described) per video when the length is unknown
 SHEET = (6, 4)          # describe sheet: columns x rows of frames
 SEARCH_WORKERS = 3      # Bilibili's search API answers bursts with 412 risk control
 SHOT_WORKERS = 8        # videoshot metadata (same API gateway as search) and its CDN sprites
-SPRITE_WORKERS = 16     # sprite images come from the CDN
-DESCRIBE_WORKERS = 10    # the background worker allows 10 model calls at a time (execution.MODEL_SLOTS)
+DESCRIBE_WORKERS = 10   # the background worker allows 10 model calls at a time (execution.MODEL_SLOTS)
+MAX_TRIES = 2           # a video whose sheets failed this often is left out of later builds
 SKIP_TITLE = re.compile(r"直播|回放|教程|PPT|课件|歌曲|MV|翻唱|游戏|手游|原神|王者荣耀|和平精英|鬼畜|reaction|开箱|测评|"
                         r"带货|广告|招聘|网课|考研|公务员|英语|单词")
 BAD_KINDS = {"主持人出镜", "图表文字", "黑屏或模糊"}
 DESCRIBE_SYSTEM = """图片是视频预览帧的联系表，每格左上角有黄色编号。为每一格写一句画面描述（最多16个字，不要标点结尾）：主体、动作、场景，能看出时代的写上（古代/近代/现代），能认出地名或事物的写上；再给画面类型，只能是：实拍、影视剧、动画、图表文字、主持人出镜、黑屏或模糊。
 只输出 JSON：{"1":["描述","类型"],"2":["描述","类型"],...}，每个编号都要有。"""
+SEED = paths.ROOT / "assets" / "footage-index"
+SEED_PART_BYTES = 40 * 1024 * 1024     # GitHub refuses files over 100 MB and warns over 50 MB
+BATCH = 500                            # videos per write transaction when installing or merging
 
-from .footage_topics import PACKS   # noqa: E402  (topic -> Bilibili searches)
-
-_lock = threading.Lock()
+_lock = threading.Lock()               # one writer at a time inside a process (SQLite serialises processes)
+_ready, _ready_lock = set(), threading.Lock()
 CJK = re.compile(r"[㐀-鿿]+")
 WORD = re.compile(r"[A-Za-z0-9]{2,}")
+BV = re.compile(r"BV[0-9A-Za-z]{10}")
 
 
 def grams(text: str) -> list[str]:
@@ -47,22 +58,62 @@ def grams(text: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def _db() -> sqlite3.Connection:
-    paths.DATA.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(paths.DATA / "footage-index.sqlite", timeout=30, check_same_thread=False)
-    con.row_factory = sqlite3.Row
+def _file():
+    return paths.DATA / "footage-index.sqlite"
+
+
+def _schema(con):
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript("""
         CREATE TABLE IF NOT EXISTS sources (
             key TEXT PRIMARY KEY, provider TEXT NOT NULL, id TEXT NOT NULL, row TEXT NOT NULL,
             topic TEXT NOT NULL DEFAULT '', added REAL NOT NULL, described INTEGER NOT NULL DEFAULT 0,
-            used INTEGER NOT NULL DEFAULT 0, flags TEXT NOT NULL DEFAULT '');
+            used INTEGER NOT NULL DEFAULT 0, flags TEXT NOT NULL DEFAULT '', tries INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS moments (
             source TEXT NOT NULL, t REAL NOT NULL, hash TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',
             kind TEXT NOT NULL DEFAULT '', PRIMARY KEY (source, t));
         CREATE VIRTUAL TABLE IF NOT EXISTS terms USING fts5(source UNINDEXED, t UNINDEXED, words);
+        CREATE TABLE IF NOT EXISTS term_rows (source TEXT NOT NULL, rid INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS term_rows_source ON term_rows(source);
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """)
-    return con
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        try:   # indexes made before 'tries' existed
+            con.execute("ALTER TABLE sources ADD COLUMN tries INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        # term_rows lets a video's terms be deleted by rowid (an UNINDEXED FTS column would scan the table).
+        if (not con.execute("SELECT 1 FROM term_rows LIMIT 1").fetchone()
+                and con.execute("SELECT 1 FROM terms LIMIT 1").fetchone()):
+            con.execute("INSERT INTO term_rows (source, rid) SELECT source, rowid FROM terms")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+@contextmanager
+def _conn(write: bool = False, timeout: float = 30):
+    """A short-lived connection: commits on success, rolls back on error, always closes."""
+    path = _file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path, timeout=timeout, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    try:
+        with _ready_lock:
+            if str(path) not in _ready:
+                _schema(con)
+                _ready.add(str(path))
+        if write:
+            con.execute("BEGIN IMMEDIATE")     # the guard in _add and its writes see the same state
+        yield con
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def _key(row) -> str:
@@ -71,27 +122,25 @@ def _key(row) -> str:
 
 def known(keys) -> set:
     keys = list(keys)
-    if not keys:
-        return set()
-    with _lock, _db() as con:
-        found = set()
+    found = set()
+    with _conn() as con:
         for start in range(0, len(keys), 500):
             part = keys[start:start + 500]
             found |= {r["key"] for r in con.execute(
                 f"SELECT key FROM sources WHERE key IN ({','.join('?' * len(part))})", part)}
-        return found
+    return found
 
 
 def add(row: dict, moments: list[dict], *, topic: str = "", described: bool = False) -> None:
     """Save (or refresh) one video: its search row and moments [{t, hash, text, kind}]."""
-    with _lock, _db() as con:
+    with _lock, _conn(write=True) as con:
         _add(con, row, moments, topic=topic, described=described)
 
 
 def _add(con, row, moments, *, topic="", described=False) -> bool:
-    """One video into the open connection; False when a described copy is already there."""
+    """One video, inside the caller's write transaction; False when a described copy is already there."""
     key = _key(row)
-    old = con.execute("SELECT described, used, topic FROM sources WHERE key=?", (key,)).fetchone()
+    old = con.execute("SELECT described, used, topic, tries FROM sources WHERE key=?", (key,)).fetchone()
     if old and old["described"] and not described:
         return False      # never replace described moments with bare ones
     keep = {k: row.get(k) for k in ("provider", "id", "url", "title", "tags", "description", "duration", "author",
@@ -99,46 +148,60 @@ def _add(con, row, moments, *, topic="", described=False) -> bool:
     usable = [m for m in moments if m.get("kind") not in BAD_KINDS]
     hosted = sum(1 for m in moments if m.get("kind") == "主持人出镜")
     flags = "host" if moments and hosted * 2 >= len(moments) else ""
-    con.execute("INSERT OR REPLACE INTO sources (key,provider,id,row,topic,added,described,used,flags) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+    con.execute("INSERT OR REPLACE INTO sources (key,provider,id,row,topic,added,described,used,flags,tries) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (key, row["provider"], row["id"], json.dumps(keep, ensure_ascii=False),
-                 topic or (old["topic"] if old else ""), time.time(), int(described), old["used"] if old else 0, flags))
-    con.execute("DELETE FROM moments WHERE source=?", (key,))
-    con.execute("DELETE FROM terms WHERE source=?", (key,))
+                 topic or (old["topic"] if old else ""), time.time(), int(described), old["used"] if old else 0, flags,
+                 0 if described or not old else old["tries"]))
+    if old:
+        con.execute("DELETE FROM moments WHERE source=?", (key,))
+        con.execute("DELETE FROM terms WHERE rowid IN (SELECT rid FROM term_rows WHERE source=?)", (key,))
+        con.execute("DELETE FROM term_rows WHERE source=?", (key,))
     con.executemany("INSERT OR REPLACE INTO moments (source,t,hash,text,kind) VALUES (?,?,?,?,?)",
-                    [(key, round(float(m["t"]), 2), str(m.get("hash", "")), m.get("text", ""), m.get("kind", ""))
-                     for m in moments])
+                    [(key, round(float(m["t"]), 2), str(m.get("hash", "")), str(m.get("text") or ""),
+                      str(m.get("kind") or "")) for m in moments])
     head = " ".join(grams(" ".join(str(row.get(k) or "") for k in ("title", "tags", "query", "typename"))))
-    con.execute("INSERT INTO terms (source,t,words) VALUES (?,?,?)", (key, -1, head))
-    con.executemany("INSERT INTO terms (source,t,words) VALUES (?,?,?)",
-                    [(key, round(float(m["t"]), 2), " ".join(grams(m["text"]))) for m in usable if m.get("text")])
+    rows = [(-1.0, head)] + [(round(float(m["t"]), 2), " ".join(grams(m["text"]))) for m in usable if m.get("text")]
+    rids = []
+    for t, words in rows:
+        rids.append((key, con.execute("INSERT INTO terms (source,t,words) VALUES (?,?,?)", (key, t, words)).lastrowid))
+    con.executemany("INSERT INTO term_rows (source, rid) VALUES (?,?)", rids)
     return True
 
 
 def add_seen(rows: list[dict], tiles: list[dict], topic: str = "") -> int:
-    """Production found these videos live: keep them (title text and frame times; described later)."""
+    """Production found these videos live: keep the new ones (title text and frame times; described in a
+    later build). One short transaction; a busy index is skipped rather than holding up the film."""
     by_source = {}
     for tile in tiles:
         source = tile["source"]
         if source.get("provider") != "bilibili" or source.get("indexed"):
             continue
         by_source.setdefault(_key(source), []).append({"t": tile["t"], "hash": format(tile.get("hash") or 0, "x")})
-    new = 0
+    wanted = {}
     for row in rows:
         if row.get("provider") == "bilibili" and not row.get("indexed") and _key(row) in by_source:
-            add(row, by_source[_key(row)], topic=topic)
-            new += 1
+            wanted.setdefault(_key(row), row)
+    if not wanted:
+        return 0
+    have = known(wanted)
+    new = 0
+    with _lock, _conn(write=True, timeout=3) as con:
+        for key, row in wanted.items():
+            if key not in have and _add(con, row, by_source[key], topic=topic):
+                new += 1
     return new
 
 
 def search(query: str, limit: int = 8, *, exclude: set | None = None) -> list[dict]:
     """Videos whose title or described frames match the query, best first. Each row is shaped like a
-    live Bilibili search row plus "indexed", "moments" (matching frame times) and "index_score"."""
-    words = grams(query)
+    live Bilibili search row plus "indexed", "moments" (matching frame times), "avoid" (frames showing a
+    presenter, a text page or black) and "index_score"."""
+    words = grams(query)[:60]
     if not words:
         return []
     expression = " OR ".join('"' + w.replace('"', "") + '"' for w in words)
-    with _lock, _db() as con:
+    with _conn() as con:
         try:
             hits = con.execute("SELECT source, t, bm25(terms) AS rank FROM terms WHERE terms MATCH ? "
                                "ORDER BY rank LIMIT 600", (expression,)).fetchall()
@@ -175,45 +238,67 @@ def search(query: str, limit: int = 8, *, exclude: set | None = None) -> list[di
         return out
 
 
+def _valid(row) -> bool:
+    return isinstance(row, dict) and row.get("provider") == "bilibili" and bool(BV.fullmatch(str(row.get("id", ""))))
+
+
+def _write_batch(items) -> int:
+    """[(row, moments, topic, described)] in one write transaction; returns how many were saved."""
+    if not items:
+        return 0
+    with _lock, _conn(write=True) as con:
+        return sum(1 for row, moments, topic, described in items
+                   if _add(con, row, moments, topic=topic, described=described))
+
+
 def merge(other_file) -> int:
     """Take in another machine's index: videos this one lacks, or has without descriptions."""
-    other = sqlite3.connect(other_file)
+    from pathlib import Path
+    try:
+        # A read-only URI (percent-encoded, forward slashes) also works for Windows paths with Chinese names.
+        other = sqlite3.connect(Path(other_file).resolve().as_uri() + "?mode=ro", uri=True)
+    except sqlite3.DatabaseError:
+        raise ValueError("素材库文件无法读取") from None
     other.row_factory = sqlite3.Row
     try:
         tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {"sources", "moments"} <= tables:
             raise ValueError("不是镜稿素材库文件")
-        rows = other.execute("SELECT key, row, topic, described FROM sources").fetchall()
-        mine = {}
-        with _lock, _db() as con:
+        with _conn() as con:
             mine = {r["key"]: r["described"] for r in con.execute("SELECT key, described FROM sources")}
-        added = 0
-        for src in rows:
+        added, batch = 0, []
+        for src in other.execute("SELECT key, row, topic, described FROM sources"):
             if src["key"] in mine and (mine[src["key"]] or not src["described"]):
+                continue
+            try:
+                row = json.loads(src["row"])
+            except (TypeError, ValueError):
+                continue
+            if not _valid(row):
                 continue
             moments = [dict(m) for m in other.execute("SELECT t, hash, text, kind FROM moments WHERE source=?",
                                                      (src["key"],))]
-            add(json.loads(src["row"]), moments, topic=src["topic"], described=bool(src["described"]))
-            added += 1
-        return added
+            batch.append((row, moments, str(src["topic"] or "")[:30], bool(src["described"])))
+            if len(batch) >= BATCH:
+                added += _write_batch(batch)
+                batch = []
+        return added + _write_batch(batch)
     except sqlite3.DatabaseError:
         raise ValueError("素材库文件无法读取") from None
     finally:
         other.close()
 
 
-SEED = paths.ROOT / "assets" / "footage-index"
-SEED_PART_BYTES = 40 * 1024 * 1024     # GitHub refuses files over 100 MB and warns over 50 MB
-
-
 def export_seed(folder=SEED, part_bytes: int = SEED_PART_BYTES) -> list:
-    """The described part of the index as gzip JSON lines in numbered parts (shipped with the app)."""
+    """The described part of the index as gzip JSON lines in numbered parts (shipped with the app). Each
+    part is written beside its final name and moved into place; parts the new export no longer has go last,
+    so an interrupted export never leaves the folder empty or a part cut short."""
     import gzip
     import io
     folder.mkdir(parents=True, exist_ok=True)
-    for old in folder.glob("part-*.jsonl.gz"):
-        old.unlink()
-    with _lock, _db() as con:
+    for leftover in folder.glob("*.tmp"):
+        leftover.unlink()
+    with _conn() as con:
         sources = con.execute("SELECT key, row, topic FROM sources WHERE described=1 ORDER BY added").fetchall()
         moments = {}
         for m in con.execute("SELECT source, t, hash, text, kind FROM moments WHERE source IN "
@@ -224,10 +309,12 @@ def export_seed(folder=SEED, part_bytes: int = SEED_PART_BYTES) -> list:
     parts, lines, raw = [], [], 0
     def close():
         path = folder / f"part-{len(parts) + 1:02d}.jsonl.gz"
+        temporary = path.with_name(path.name + ".tmp")
         buffer = io.BytesIO()
         with gzip.GzipFile(fileobj=buffer, mode="wb", compresslevel=9, mtime=0) as writer:
             writer.write(b"".join(lines))
-        path.write_bytes(buffer.getvalue())
+        temporary.write_bytes(buffer.getvalue())
+        os.replace(temporary, path)
         parts.append(path)
         lines.clear()
     for src in sources:
@@ -240,11 +327,17 @@ def export_seed(folder=SEED, part_bytes: int = SEED_PART_BYTES) -> list:
             raw = 0
     if lines or not parts:
         close()
+    for stale in folder.glob("part-*.jsonl.gz"):
+        if stale not in parts:
+            stale.unlink()
     return parts
 
 
 def install_seed(folder=SEED, progress=lambda *_: None) -> int:
-    """Take in the index shipped with the app once per seed version (videos this machine lacks)."""
+    """Take in the index shipped with the app once per seed version: videos this machine lacks (its own
+    described videos stay). Written in batches, so closing the app part-way loses little and the next
+    start continues; the installed version is recorded inside the index, so a new or reset index file
+    is seeded again."""
     import gzip
     import hashlib
     parts = sorted(folder.glob("part-*.jsonl.gz")) if folder.is_dir() else []
@@ -254,90 +347,131 @@ def install_seed(folder=SEED, progress=lambda *_: None) -> int:
     for part in parts:
         digest.update(part.read_bytes())
     fingerprint = digest.hexdigest()
-    marker = paths.DATA / "footage-seed.sha256"
-    if marker.exists() and marker.read_text().strip() == fingerprint:
-        return 0
-    added = 0
-    with _lock, _db() as con:
+    with _conn() as con:
+        installed = con.execute("SELECT value FROM meta WHERE key='seed'").fetchone()
+        if installed and installed["value"] == fingerprint and con.execute(
+                "SELECT 1 FROM sources WHERE described=1 LIMIT 1").fetchone():
+            return 0
         described = {r["key"] for r in con.execute("SELECT key FROM sources WHERE described=1")}
-        for index, part in enumerate(parts):
+    added, batch, broken = 0, [], []
+    for index, part in enumerate(parts):
+        try:
             with gzip.open(part, "rt", encoding="utf-8") as lines:
                 for line in lines:
-                    item = json.loads(line)
-                    row = item["row"]
-                    if row.get("provider") != "bilibili" or not re.fullmatch(r"BV[0-9A-Za-z]{10}", str(row.get("id", ""))):
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
                         continue
-                    if _key(row) in described:
+                    row = item.get("row") if isinstance(item, dict) else None
+                    if not _valid(row) or _key(row) in described:
                         continue
-                    if _add(con, row, item.get("moments") or [], topic=str(item.get("topic", ""))[:30], described=True):
-                        added += 1
-            con.commit()
-            progress(index + 1, len(parts))
-    marker.write_text(fingerprint)
+                    moments = [m for m in item.get("moments") or [] if isinstance(m, dict) and "t" in m]
+                    batch.append((row, moments, str(item.get("topic", ""))[:30], True))
+                    if len(batch) >= BATCH:
+                        added += _write_batch(batch)
+                        batch = []
+                        progress(index + 1, len(parts), added)
+        except (OSError, EOFError, ValueError):
+            broken.append(part.name)        # a damaged part: keep the rest, retry this one next start
+        added += _write_batch(batch)
+        batch = []
+        progress(index + 1, len(parts), added)
+    if broken:
+        raise ValueError(f"素材库种子文件损坏：{'、'.join(broken)}（其余部分已导入 {added} 个视频）")
+    with _lock, _conn(write=True) as con:
+        con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('seed', ?)", (fingerprint,))
     return added
 
 
 def mark_used(keys) -> None:
-    with _lock, _db() as con:
+    keys = list(keys)
+    if not keys:
+        return
+    with _lock, _conn(write=True, timeout=3) as con:
         con.executemany("UPDATE sources SET used=used+1 WHERE key=?", [(k,) for k in keys])
 
 
+def _note_failed(items) -> None:
+    """Videos whose sheets could not be described: keep them (bare) and count the try."""
+    with _lock, _conn(write=True) as con:
+        for topic, row, frames in items:
+            _add(con, row, [{"t": f["t"], "hash": format(f["hash"], "x")} for f in frames], topic=topic)
+            con.execute("UPDATE sources SET tries=tries+1 WHERE key=? AND described=0", (_key(row),))
+
+
 def stats() -> dict:
-    with _lock, _db() as con:
+    with _conn() as con:
         sources = con.execute("SELECT COUNT(*), COALESCE(SUM(described),0) FROM sources").fetchone()
         moments = con.execute("SELECT COUNT(*), COALESCE(SUM(text!=''),0) FROM moments").fetchone()
         topics = [dict(r) for r in con.execute(
             "SELECT topic, COUNT(*) AS sources FROM sources WHERE topic!='' GROUP BY topic ORDER BY sources DESC")]
     return {"sources": sources[0], "described": sources[1], "moments": moments[0], "described_moments": moments[1],
             "topics": topics, "packs": {name: len(queries) for name, queries in PACKS.items()},
-            "file_mb": round((paths.DATA / "footage-index.sqlite").stat().st_size / 1048576, 1)
-            if (paths.DATA / "footage-index.sqlite").exists() else 0}
+            "file_mb": round(_file().stat().st_size / 1048576, 1) if _file().exists() else 0}
 
 
 # ------------------------------------------------------------------ building
 def _frames(bili, row, count=MOMENTS):
-    """Evenly spread preview frames of one video (not dark, not repeats): [{t, image, hash}]."""
+    """Evenly spread preview frames of one video (not dark, not repeats): [{t, image, hash}]. The sprite
+    sheets are deleted once cropped (production fetches the ones it needs again), so long builds do not
+    fill the disk."""
+    from pathlib import Path
     from . import express_match as em, express_sources as es
     previews = bili.previews(row["id"], row["duration"])
     if not previews:
         return []
-    duration = row["duration"] or previews[-1]["t"]
-    inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
-    step = max(1, len(inner) / count)
-    picked = [inner[min(len(inner) - 1, int(i * step + step / 2))] for i in range(min(count, len(inner)))]
-    frames, hashes = [], []
-    for p in picked:
-        image = es.bilibili_tile(bili, p)
-        if em._dark(image):
-            continue
-        h = em._dhash(image)
-        if any(bin(h ^ other).count("1") <= 5 for other in hashes):
-            continue
-        hashes.append(h)
-        frames.append({"t": p["t"], "image": image, "hash": h})
-    return frames
+    try:
+        duration = row["duration"] or previews[-1]["t"]
+        inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
+        step = max(1, len(inner) / count)
+        picked = [inner[min(len(inner) - 1, int(i * step + step / 2))] for i in range(min(count, len(inner)))]
+        frames, hashes = [], []
+        for p in picked:
+            image = es.bilibili_tile(bili, p)
+            if em._dark(image):
+                continue
+            h = em._dhash(image)
+            if any(bin(h ^ other).count("1") <= 5 for other in hashes):
+                continue
+            hashes.append(h)
+            frames.append({"t": p["t"], "image": image, "hash": h})
+        return frames
+    finally:
+        for sprite in Path(previews[0]["root"]).glob("sprite-*.jpg"):
+            sprite.unlink(missing_ok=True)
+
+
+def _sleep(seconds, check):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        check()
+        time.sleep(min(2.0, max(0.0, end - time.monotonic())))
 
 
 def _describe(frames, check):
-    """One vision request for a sheet of frames: {index: (text, kind)}."""
+    """One vision request for a sheet of frames: {index: (text, kind)}. Rate limits are waited out
+    (about three minutes at most); a refused key, permission or balance stops at once."""
     from . import express_match as em, planner
     sheet = _sheet(frames, SHEET[0])
     content = [{"type": "text", "text": f"共 {len(frames)} 格。"},
                {"type": "image_url", "image_url": {"url": em._jpeg(sheet)}}]
-    for attempt in range(4):
+    result = None
+    for attempt in range(6):
         check()
         try:
             result, _ = planner.chat(DESCRIBE_SYSTEM, content, vision=True, max_tokens=80 + 48 * len(frames),
                                      timeout=60, task="footage_index")
             break
         except planner.ModelUnavailable as exc:
-            if "429" not in str(exc) or attempt == 3:
-                raise          # key, permission or balance: stop the whole build (see _build_chunk)
-            time.sleep(5 * (attempt + 1))     # rate limited: wait, then the same sheet again
+            if "429" not in str(exc):
+                raise          # key, permission or balance: stop the whole build
+            if attempt == 5:
+                raise RuntimeError("看图接口持续限流") from None
+            _sleep(min(60, 5 * 2 ** attempt), check)
         except ValueError as exc:
-            if attempt == 3 or not any(k in str(exc) for k in ("超时", "HTTP 5", "JSON")):
+            if attempt >= 3 or not any(k in str(exc) for k in ("超时", "HTTP 5", "JSON")):
                 raise
-            time.sleep(2 * (attempt + 1))
+            _sleep(2 * (attempt + 1), check)
     out = {}
     for key, value in (result or {}).items() if isinstance(result, dict) else []:
         if not str(key).isdigit() or not value:
@@ -347,7 +481,7 @@ def _describe(frames, check):
         if not kind and re.search(r"[”\"]\s*[，,]\s*[“\"]", text):    # '描述”，“类型”]' inside one string
             text, kind = re.split(r"[”\"]\s*[，,]\s*[“\"]", text, maxsplit=1)
         text = re.sub(r"[“”\"\[\]]", "", text).strip(" ，,。")[:40]
-        if text:
+        if text and 1 <= int(key) <= len(frames):
             out[int(key) - 1] = (text, _kind(kind))
     return out
 
@@ -383,7 +517,8 @@ GENERIC_TAGS = {"生活记录", "日常", "vlog", "搞笑", "知识", "科普", 
                 "打卡挑战", "生活", "自制", "原创", "剪辑", "混剪", "合集", "教程", "高清", "4k", "中国", "bilibili", "哔哩哔哩",
                 "全能打卡挑战", "热点", "新闻", "社会", "美食", "旅行", "旅游", "风景", "科技", "军事", "财经", "人文", "趣味",
                 "涨知识", "干货", "热门", "推荐", "震撼", "经典", "解说", "影视", "电影", "电视剧", "音乐", "动画"}
-CHUNK = 160             # videos framed, described and saved together (a stopped build keeps finished chunks)
+CHUNK = 160             # videos framed and described together; each sheet's videos are saved as it returns
+BLOCKED_PAUSE = 300     # seconds to wait when Bilibili's risk control blocks previews, before trying again
 
 
 def frame_count(duration: float) -> int:
@@ -392,12 +527,13 @@ def frame_count(duration: float) -> int:
 
 
 def expand(found: dict, used: set, per_topic: int = 8) -> list[tuple[str, str]]:
-    """New searches from the tags a topic's results share (Bilibili's own words for the subject)."""
+    """New searches from the tags a topic's videos share (Bilibili's own words for the subject).
+    found: topic -> distinct videos."""
     from collections import Counter
     out = []
     for topic, rows in found.items():
         counts = Counter()
-        for row in rows:
+        for row in {_key(r): r for r in rows}.values():
             for tag in {t.strip() for t in str(row.get("tags", "")).split(",")}:
                 if 2 <= len(tag) <= 10 and tag.lower() not in GENERIC_TAGS and not SKIP_TITLE.search(tag):
                     counts[tag] += 1
@@ -409,8 +545,9 @@ def expand(found: dict, used: set, per_topic: int = 8) -> list[tuple[str, str]]:
 
 def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, describe: bool = True,
           limit: int = 100000, widen: int = 8) -> dict:
-    """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions. Saved chunk
-    by chunk; videos already described are skipped, so a stopped or failed build continues where it was."""
+    """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions. Each sheet's
+    videos are saved as soon as it is described; videos already described (or failed twice) are skipped,
+    so a stopped or failed build continues where it was."""
     from . import express_sources as es
     bili = es.Bilibili()
     report = {"queries": len(queries), "found": 0, "new": 0, "indexed": 0, "described_frames": 0, "failed": 0,
@@ -431,49 +568,57 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
                 for row in found:
                     if 20 <= row.get("duration", 0) <= 3 * 3600 and not SKIP_TITLE.search(row.get("title", "")):
                         rows.setdefault(_key(row), (topic, row))
-                        by_topic.setdefault(topic, []).append(row)
+                        by_topic.setdefault(topic, {})[_key(row)] = row
         def search_all(items, lo, hi, label):
             with execution.ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
                 for n, _ in enumerate(pool.map(find, items), 1):
                     progress(lo + (hi - lo) * n / max(1, len(items)), f"{label} {n}/{len(items)} · 已找到 {len(rows)} 个视频")
         search_all(queries, 1, 12, "检索关键词")
         if widen:
-            more = expand(by_topic, {q for _, q in queries}, per_topic=widen)
+            more = expand({topic: list(found.values()) for topic, found in by_topic.items()},
+                          {q for _, q in queries}, per_topic=widen)
             report["expanded"] = len(more)
             search_all(more, 12, 18, "按标签扩展检索")
         report["found"] = len(rows)
         done = known(rows)
-        with _lock, _db() as con:
-            described = {r["key"] for r in con.execute("SELECT key FROM sources WHERE described=1")}
-        todo = [rows[k] for k in rows if k not in described][:limit]
+        with _conn() as con:
+            skip = {r["key"] for r in con.execute(f"SELECT key FROM sources WHERE described=1 OR tries>={MAX_TRIES}")}
+        todo = [rows[k] for k in rows if k not in skip][:limit]
         report["new"] = len([k for k in rows if k not in done])
         chunks = [todo[i:i + CHUNK] for i in range(0, len(todo), CHUNK)]
+        pauses = 0
         for index, chunk in enumerate(chunks):
             lo = 18 + 81 * index / max(1, len(chunks))
             hi = 18 + 81 * (index + 1) / max(1, len(chunks))
             label = f"第 {index + 1}/{len(chunks)} 批（共 {len(todo)} 个视频）"
             _build_chunk(bili, chunk, check, lambda share, message: progress(lo + (hi - lo) * share, f"{label} · {message}"),
                          report, describe)
-            report["blocked"] = report["blocked"] or bili.blocked >= 3
+            if bili.blocked >= 3:
+                # Bilibili risk control: everything finished is saved; wait, then go on (three times at most).
+                report["blocked"] = True
+                pauses += 1
+                if pauses > 3:
+                    raise RuntimeError("B站接口持续风控，已停止扩库；已完成的视频已保存，稍后重新扩充会接着做")
+                progress(hi, f"{label} · B站接口风控，暂停 {BLOCKED_PAUSE // 60} 分钟后继续")
+                _sleep(BLOCKED_PAUSE, check)
+                bili.blocked = 0
         return report
     finally:
         bili.close()
 
 
 def _build_chunk(bili, chunk, check, progress, report, describe):
+    from . import media
+    from .planner import ModelUnavailable
     def frames(item):
         topic, row = item
         check()
-        for attempt in range(3):
-            try:
-                return topic, row, _frames(bili, row, frame_count(float(row.get("duration") or 0)))
-            except (costs.BudgetExceeded, KeyboardInterrupt):
-                raise
-            except Exception as exc:
-                if "风控" not in str(exc):
-                    return topic, row, None
-                time.sleep(10 * (attempt + 1))   # Bilibili risk control: back off, then try again
-        return topic, row, None
+        try:
+            return topic, row, _frames(bili, row, frame_count(float(row.get("duration") or 0)))
+        except (media.Cancelled, costs.BudgetExceeded):
+            raise
+        except Exception:
+            return topic, row, None      # this video only (risk control is counted on the client)
     framed = []
     with execution.ThreadPoolExecutor(max_workers=SHOT_WORKERS) as pool:
         for n, (topic, row, got) in enumerate(pool.map(frames, chunk), 1):
@@ -484,54 +629,79 @@ def _build_chunk(bili, chunk, check, progress, report, describe):
             if n % 20 == 0 or n == len(chunk):
                 progress(0.4 * n / max(1, len(chunk)), f"预览帧 {n}/{len(chunk)}")
     if not describe:
-        for topic, row, got in framed:
-            add(row, [{"t": f["t"], "hash": format(f["hash"], "x")} for f in got], topic=topic)
-            report["indexed"] += 1
+        _write_batch([(row, [{"t": f["t"], "hash": format(f["hash"], "x")} for f in got], topic, False)
+                      for topic, row, got in framed])
+        report["indexed"] += len(framed)
         return
+    # Whole videos to a sheet, so each answer completes its videos and they can be saved at once.
     per = SHEET[0] * SHEET[1]
-    items = [(topic, row, frame) for topic, row, got in framed for frame in got]
-    batches = [items[i:i + per] for i in range(0, len(items), per)]
-    results = {}
-    failures = {"row": 0}
-    def run(batch):
-        from .planner import ModelUnavailable
+    sheets, current, count = [], [], 0
+    for item in framed:
+        if current and count + len(item[2]) > per:
+            sheets.append(current)
+            current, count = [], 0
+        current.append(item)
+        count += len(item[2])
+    if current:
+        sheets.append(current)
+    streak = {"failed": 0}
+    def run(sheet):
         check()
+        flat = [frame for _, _, got in sheet for frame in got]
         try:
-            answer = _describe([f for _, _, f in batch], check)
-        except (costs.BudgetExceeded, ModelUnavailable):
-            raise                  # budget, key, permission or balance: no later sheet would fare better
+            answer = _describe(flat, check)
+            missing = [i for i in range(len(flat)) if i not in answer]
+            if missing:      # cut-off or partial answer: ask once more for the frames it skipped
+                again = _describe([flat[i] for i in missing], check)
+                for j, i in enumerate(missing):
+                    if j in again:
+                        answer[i] = again[j]
+        except (media.Cancelled, costs.BudgetExceeded, costs.PricingUnavailable, ModelUnavailable):
+            raise            # stop, budget, unpriced model, or key/permission/balance: no later sheet fares better
         except Exception as exc:
+            check()
             with _lock:
-                failures["row"] += 1
-                stop = failures["row"] >= 8
+                streak["failed"] += 1
+                stop = streak["failed"] >= 8
             if stop:
-                raise RuntimeError(f"连续 8 张联系表描述失败（{str(exc)[:80]}），已停止扩库；已完成的批次已保存，"
-                                   "检查阿里云账户余额和服务状态后重新扩充会接着做") from None
-            return batch, {}
+                raise RuntimeError(f"连续 8 张联系表描述失败（{str(exc)[:80]}），已停止扩库；已完成的视频已保存，"
+                                   "稍后重新扩充会接着做") from None
+            return sheet, None
         with _lock:
-            failures["row"] = 0
-        return batch, answer
-    missed = []
+            streak["failed"] = 0
+        return sheet, answer
+    def save(sheet, answer):
+        if answer is None:
+            _note_failed(sheet)
+            return
+        items, position = [], 0
+        for topic, row, got in sheet:
+            moments = []
+            for frame in got:
+                text, kind = answer.get(position, ("", ""))
+                position += 1
+                moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind})
+                report["described_frames"] += bool(text)
+            items.append((row, moments, topic, any(m["text"] for m in moments)))
+        _write_batch(items)
+        report["indexed"] += len(items)
+    from concurrent.futures import as_completed
     with execution.ThreadPoolExecutor(max_workers=DESCRIBE_WORKERS) as pool:
-        for n, (batch, answer) in enumerate(pool.map(run, batches), 1):
-            for i, item in enumerate(batch):
-                if i in answer:
-                    results[id(item[2])] = answer[i]
-                else:
-                    missed.append(item)
-            progress(0.4 + 0.5 * n / max(1, len(batches)), f"描述画面 {n}/{len(batches)} 张联系表")
-        # Frames an answer skipped (cut-off output, refused sheet): one more try in new sheets.
-        again = [missed[i:i + per] for i in range(0, len(missed), per)]
-        for batch, answer in pool.map(run, again):
-            for i, item in enumerate(batch):
-                if i in answer:
-                    results[id(item[2])] = answer[i]
-    for topic, row, got in framed:
-        moments = []
-        for frame in got:
-            text, kind = results.get(id(frame), ("", ""))
-            moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind})
-            report["described_frames"] += bool(text)
-        add(row, moments, topic=topic, described=any(m["text"] for m in moments))
-        report["indexed"] += 1
+        futures = [pool.submit(run, sheet) for sheet in sheets]
+        saved = set()
+        try:
+            for n, future in enumerate(as_completed(futures), 1):
+                save(*future.result())
+                saved.add(future)
+                progress(0.4 + 0.59 * n / max(1, len(sheets)), f"描述画面 {n}/{len(sheets)} 张联系表")
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            for future in futures:      # answers that came back before the stop are paid for: keep them
+                if future not in saved and future.done() and not future.cancelled() and future.exception() is None:
+                    try:
+                        save(*future.result())
+                    except Exception:
+                        pass
+            raise
     progress(1.0, "已保存")

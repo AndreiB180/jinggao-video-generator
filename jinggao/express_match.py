@@ -65,7 +65,7 @@ BROKEN_REJECTION = re.compile(r"黑屏|黑场|纯色|模糊|动画|游戏|AI|PPT
                               r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告")
 FUNERAL = re.compile(r"葬礼|遗体|遗容|遗像|灵堂|灵柩|追悼|悼念|花圈|讣告|火化|送别|逝世后|告别仪式")
 DEATH_LINE = re.compile(r"逝世|去世|病逝|离世|悼念|追悼|葬礼|长眠|告别")
-BROADCAST = re.compile(r"CCTV|cctv|央视|中央电视台|卫视|电视台|CGTN|凤凰")   # a TV channel logo sits top-left
+BROADCAST = re.compile(r"CCTV|cctv|央视|中央电视台|卫视|电视台|CGTN|凤凰卫视|凤凰资讯|凤凰网|凤凰视频")   # a channel logo sits top-left
 ARCHIVE_TITLE = re.compile(r"珍贵|影像|纪录片|央视|新闻|原声|档案|讲课|讲话|采访|实录")
 
 PICK_SYSTEM = """你在为营销号视频挑选实拍素材。图片是若干视频的缩略图联系表，每格左上角有黄色编号。
@@ -428,11 +428,12 @@ class Matcher:
         return tiles
 
     # ------------------------------------------------------------ presenters
-    def screen_presenters(self, chosen) -> set:
+    def screen_presenters(self, chosen, tiles=None) -> set:
         """Commentary videos where a presenter talks to camera much of the time: their windows keep failing
         QA (each failure costs a download round). One cheap look at 8 preview frames per video, 8 videos a
         request, cached per video (the produce warm-up fills the cache while the narration is made)."""
-        rows = {(r["provider"], r["id"]): r for rs in chosen.values() for r in rs if r["provider"] == "bilibili"}
+        rows = {(r["provider"], r["id"]): r for rs in chosen.values() for r in rs if r["provider"] == "bilibili"
+                and (tiles is None or tiles.get((r["provider"], r["id"])))}   # previews that failed are not retried
         found, todo = set(), []
         for key, row in rows.items():
             cache = es._cache("presenter") / f"{row['id']}.json"
@@ -443,11 +444,13 @@ class Matcher:
             except (OSError, ValueError, KeyError, TypeError):
                 todo.append((key, row, cache))
         def frames(row):
+            self.check()
             previews = self.bili.previews(row["id"], row["duration"]) or []
             duration = row["duration"] or (previews[-1]["t"] if previews else 0)
             inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
             step = max(1, len(inner) / 8)
-            return [inner[min(len(inner) - 1, int(i * step + step / 2))]["image"] for i in range(min(8, len(inner)))]
+            return [es.bilibili_tile(self.bili, inner[min(len(inner) - 1, int(i * step + step / 2))])
+                    for i in range(min(8, len(inner)))]
         def ask(batch):
             self.check()
             sheet = Image.new("RGB", (60 + 8 * 160, len(batch) * 90), (0, 0, 0))
@@ -1179,7 +1182,7 @@ class Matcher:
         began = time.monotonic()
         self.progress(15, f"读取 {sum(len(v) for v in chosen.values())} 个候选的预览")
         tiles = self.all_tiles(chosen, {g["id"] for g in groups if g.get("person")})
-        self.presenter_sources = self.screen_presenters(chosen)
+        self.presenter_sources = self.screen_presenters(chosen, tiles)
         try:   # the library grows with every video made (title text and frame times; described in bulk later)
             from . import footage_index
             footage_index.add_seen([row for rows in chosen.values() for row in rows],
@@ -1200,6 +1203,12 @@ class Matcher:
             if len(filmed) >= 2:
                 rows = filmed       # presenter-led commentary videos only when little else exists
             per_source = [tiles.get((r["provider"], r["id"]), []) for r in rows]
+            # pick() looks at 60 tiles at most: give every source a share spread over its whole length
+            # (an indexed video's matching frames come first in its list and are kept).
+            share = max(2, (3 * SHEET_COLS * SHEET_ROWS) // max(1, len(per_source)))
+            per_source = [x if len(x) <= share else x[:share // 2] + [
+                x[share // 2 + round(i * (len(x) - share // 2 - 1) / max(1, share - share // 2 - 1))]
+                for i in range(share - share // 2)] for x in per_source]
             # Interleave sources so a sheet never shows only one video.
             for i in range(max([len(x) for x in per_source] or [0])):
                 group_tiles += [x[i] for x in per_source if i < len(x)]

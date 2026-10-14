@@ -201,7 +201,9 @@ class Bilibili:
                 except (httpx.HTTPError, ValueError):
                     time.sleep(1.0 * (attempt + 1))
         if rows is None:
+            self.blocked += 1       # three refused searches in a row count as risk control (see previews)
             return []
+        self.blocked = 0
         results = []
         for row in rows:
             if row.get("type") != "video" or not row.get("bvid") or str(row.get("is_pay")) == "1":
@@ -227,15 +229,20 @@ class Bilibili:
         meta_path = root / "meta.json"
         meta = _read_json(meta_path, 30 * 24 * 3600)
         if meta is None:
+            if self.blocked >= 3:
+                raise ValueError("B站接口持续风控，暂停读取预览")
             self._warm()
             body = {}
             for attempt in range(3):
                 r = self.client.get("https://api.bilibili.com/x/player/videoshot", params={"bvid": bvid, "index": 1})
                 body = r.json() if r.status_code == 200 else {}
                 if r.status_code != 412 and body.get("code") not in (-352, -412, -509, -799):
+                    self.blocked = 0
                     break
-                time.sleep(2.0 * (attempt + 1))
+                if attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))
             else:
+                self.blocked += 1
                 raise ValueError("B站预览接口暂时限制访问（风控）")
             data = body.get("data") or {}
             images = [("https:" + u if u.startswith("//") else u) for u in data.get("image") or []]

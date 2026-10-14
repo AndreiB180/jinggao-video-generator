@@ -1,19 +1,23 @@
 """Grow the footage index round after round (unattended), then ship it.
 
 Each round queues one footage_index build over every topic pack with more result pages and wider tag
-widening than the last, waits for it, exports the described index to assets/footage-index (the seed
-the app installs on first start), commits only that folder and pushes the current branch. It stops
-when the spending cap for this run is reached or a build fails for account/budget reasons.
+widening than the last, waits for it, and exports the described index to assets/footage-index (the seed
+the app installs on first start), committing only that folder and pushing the branch it started on. It
+also ships once an hour while a round runs. It stops at its spending cap, on budget/account failures
+(key, permission, balance), when the disk runs low, or when the server stops answering; transient
+failures (risk control, rate limits, a run of failed sheets) wait ten minutes and go on.
 
-    .venv/bin/python scripts/footage_overnight.py --budget 15 --log /path/to/log.txt
+    .venv/bin/python scripts/footage_overnight.py --budget 15
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -21,12 +25,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 ROUNDS = [(2, 8), (3, 20), (4, 35), (5, 50), (6, 60)]     # (result pages per search, tags added per topic)
+STOP_WORDS = ("预算 ¥", "模型预算", "素材库预算", "HTTP 401", "HTTP 402", "HTTP 403", "API Key 无效", "额度不足",
+              "拒绝当前账号", "费用保护")
+MIN_FREE_GB = 5
+STALL_SECONDS = 45 * 60       # a running build that reports nothing new for this long is treated as stuck
+SHIP_EVERY = 3600
 
 
-def api(base, path, body=None):
+def api(base, path, body=None, method=None):
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"},
-                                     method="GET" if body is None else "POST")
+                                     method=method or ("GET" if body is None else "POST"))
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.load(response)
 
@@ -39,22 +48,43 @@ def spent_since(started: float) -> float:
     return value / costs.MICROS
 
 
-def ship(log) -> None:
-    from jinggao import footage_index
-    stats = footage_index.stats()
-    parts = footage_index.export_seed()
-    size = sum(p.stat().st_size for p in parts) / 1048576
-    log(f"exported {len(parts)} seed parts, {size:.1f} MB, {stats['described']} videos, {stats['described_moments']} frames")
-    git = ["git", "-C", str(ROOT)]
-    subprocess.run(git + ["add", "-A", "assets/footage-index"], check=True)
-    if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode == 0:
-        log("seed unchanged; nothing to commit")
-        return
-    message = (f"Footage index seed: {stats['described']:,} videos, {stats['described_moments']:,} described frames\n\n"
-               "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
-    subprocess.run(git + ["commit", "-q", "-m", message], check=True)
-    pushed = subprocess.run(git + ["push", "-q", "origin", "HEAD"], capture_output=True, text=True)
-    log("pushed" if pushed.returncode == 0 else f"push failed: {pushed.stderr.strip()[:300]}")
+def free_gb() -> float:
+    return shutil.disk_usage(ROOT).free / 1024 ** 3
+
+
+class Shipper:
+    def __init__(self, log):
+        self.log = log
+        self.branch = self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        self.last = 0.0
+
+    def git(self, *args, check=False):
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=check)
+
+    def __call__(self, reason=""):
+        from jinggao import footage_index
+        self.last = time.time()
+        try:
+            branch = self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            if branch != self.branch:
+                self.log(f"ship skipped: branch is {branch}, started on {self.branch}")
+                return
+            stats = footage_index.stats()
+            parts = footage_index.export_seed()
+            size = sum(p.stat().st_size for p in parts) / 1048576
+            self.log(f"export ({reason}): {len(parts)} parts, {size:.1f} MB, {stats['described']} described videos, "
+                     f"{stats['described_moments']} frames")
+            self.git("add", "-A", "--", "assets/footage-index", check=True)
+            if self.git("diff", "--cached", "--quiet", "--", "assets/footage-index").returncode == 0:
+                self.log("seed unchanged; nothing to commit")
+                return
+            message = (f"Footage index seed: {stats['described']:,} videos, {stats['described_moments']:,} described frames\n\n"
+                       "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
+            self.git("commit", "-q", "-m", message, "--", "assets/footage-index", check=True)
+            pushed = self.git("push", "-q", "origin", self.branch)
+            self.log("pushed" if pushed.returncode == 0 else f"push failed: {pushed.stderr.strip()[:300]}")
+        except Exception as exc:
+            self.log(f"ship failed: {str(exc)[:300]}")
 
 
 def main():
@@ -70,49 +100,106 @@ def main():
         with open(args.log, "a", encoding="utf-8") as out:
             out.write(line + "\n")
     from jinggao.footage_topics import PACKS
+    ship = Shipper(log)
     started = time.time()
-    for number, (pages, widen) in enumerate(ROUNDS[args.first_round:], args.first_round + 1):
+    try:   # the per-day cap must not stop the run before its own budget does
+        cap = float(api(args.base, "/settings").get("index_daily_budget_cny") or 0)
+        if cap < args.budget:
+            api(args.base, "/settings", {"index_daily_budget_cny": f"{args.budget:.2f}"}, method="PATCH")
+            log(f"raised index_daily_budget_cny from {cap:.2f} to {args.budget:.2f}")
+    except Exception as exc:
+        log(f"could not check the daily cap: {str(exc)[:200]}")
+    round_index, retried = args.first_round, False
+    while round_index < len(ROUNDS):
+        pages, widen = ROUNDS[round_index]
+        number = round_index + 1
         spent = spent_since(started)
         if spent >= args.budget * 0.95:
             log(f"stop: spent {spent:.2f} of {args.budget:.2f} CNY")
+            break
+        if free_gb() < MIN_FREE_GB:
+            log(f"stop: only {free_gb():.1f} GB free")
             break
         job = None
         for attempt in range(30):
             try:
                 job = api(args.base, "/footage-index/build", {"packs": list(PACKS), "pages": pages, "widen": widen})
                 break
-            except Exception as exc:          # a build still running, or the server restarting
+            except Exception as exc:
+                try:      # a build already running (e.g. started by hand): follow that one
+                    current = api(args.base, "/footage-index").get("job") or {}
+                    if current.get("kind") == "footage_index" and current.get("status") in ("queued", "running"):
+                        job = current
+                        log(f"round {number}: following the build already running ({current['id']})")
+                        break
+                except Exception:
+                    pass
                 log(f"round {number}: cannot queue yet ({str(exc)[:120]})")
                 time.sleep(60)
         if not job:
             log("stop: could not queue a build")
             break
-        log(f"round {number}: queued pages={pages} widen={widen} job={job['id']}")
+        log(f"round {number}: pages={pages} widen={widen} job={job['id']}")
+        failures, last_change, last_seen, current, status = 0, time.time(), None, {}, {}
         while True:
             time.sleep(30)
             try:
                 status = api(args.base, "/footage-index")
-            except Exception:
+                failures = 0
+            except Exception as exc:
+                failures += 1
+                log(f"poll failed ({failures}): {str(exc)[:120]}")
+                if failures >= 20:
+                    break
                 continue
             current = status.get("job") or {}
-            if current.get("id") == job["id"] and current.get("status") not in ("queued", "running"):
+            if current.get("id") != job["id"]:
+                continue
+            seen = (current.get("progress"), current.get("message"))
+            if seen != last_seen:
+                last_seen, last_change = seen, time.time()
+            if current.get("status") not in ("queued", "running"):
                 break
+            if current.get("status") == "running" and time.time() - last_change > STALL_SECONDS:
+                log(f"round {number}: no progress for {STALL_SECONDS // 60} min; cancelling")
+                try:
+                    api(args.base, f"/jobs/{job['id']}/cancel", {})
+                except Exception:
+                    pass
+                last_change = time.time()
+            if time.time() - ship.last > SHIP_EVERY:
+                ship("hourly")
+            if free_gb() < MIN_FREE_GB:
+                log(f"only {free_gb():.1f} GB free; cancelling the build")
+                try:
+                    api(args.base, f"/jobs/{job['id']}/cancel", {})
+                except Exception:
+                    pass
+        if failures >= 20:
+            ship("server stopped answering")
+            log("stop: the server stopped answering")
+            break
         log(f"round {number}: {current.get('status')} · {current.get('message')} {current.get('error') or ''}".strip())
-        log(f"round {number}: index {status['sources']} videos, {status['described']} described, "
-            f"{status['described_moments']} frames; spent {spent_since(started):.2f} CNY this run")
-        try:
-            ship(log)
-        except Exception as exc:
-            log(f"ship failed: {exc}")
-        error = str(current.get("error") or "") + str(current.get("message") or "")
-        if current.get("status") != "completed":
-            if any(k in error for k in ("预算", "额度", "Key", "密钥", "权限", "欠费", "余额")):
-                log("stop: budget or account problem")
-                break
-            if current.get("status") == "cancelled":
-                log("stop: cancelled by the user")
-                break
-            time.sleep(600)    # risk control or a service hiccup: give it ten minutes, then the next round
+        log(f"round {number}: index {status.get('sources')} videos, {status.get('described')} described, "
+            f"{status.get('described_moments')} frames; spent {spent_since(started):.2f} CNY this run")
+        ship(f"round {number} {current.get('status')}")
+        text = str(current.get("error") or "") + str(current.get("message") or "")
+        if current.get("status") == "completed":
+            round_index, retried = round_index + 1, False
+            continue
+        if any(word in text for word in STOP_WORDS):
+            log("stop: budget or account problem")
+            break
+        if current.get("status") == "cancelled" and free_gb() < MIN_FREE_GB:
+            log("stop: disk")
+            break
+        # Risk control, rate limits, a run of failed sheets, a restart: wait, then this round once more
+        # (finished videos are skipped), else the next one.
+        time.sleep(600)
+        if retried:
+            round_index, retried = round_index + 1, False
+        else:
+            retried = True
     log("done")
 
 

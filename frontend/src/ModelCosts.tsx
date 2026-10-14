@@ -2,7 +2,7 @@ import {useEffect, useState} from 'react';
 
 type Totals = {requests:number; estimated_cny:number; reserved_cny:number; total_cny:number; limit_cny:number; unresolved_requests:number;cost_complete?:boolean;unpriced_requests?:number};
 type Split = {daily_cny:number;daily_limit_cny:number;project_cny:number|null;project_limit_cny?:number};
-export type ModelCostReport = {day:string; daily:Totals; project:Totals|null; model?:Split; speech?:Split; provider?:Omit<Totals,'limit_cny'>&{host:string;limit_cny:number|null}; first_recorded_at:number|null; note:string; pricing_url:string; pricing_date:string; categories:{stage:string;category:string;model:string;requests:number;total_cny:number}[];tasks?:{stage:string;category:string;task:string;model:string;requests:number;total_cny:number|null;pricing_status:string}[]};
+export type ModelCostReport = {day:string; daily:Totals; project:Totals|null; model?:Split; speech?:Split; index?:{daily_cny:number;daily_limit_cny:number}; provider?:Omit<Totals,'limit_cny'>&{host:string;limit_cny:number|null}; first_recorded_at:number|null; note:string; pricing_url:string; pricing_date:string; categories:{stage:string;category:string;model:string;requests:number;total_cny:number}[];tasks?:{stage:string;category:string;task:string;model:string;requests:number;total_cny:number|null;pricing_status:string}[]};
 const money = (value:number) => `¥${value.toFixed(4)}`;
 
 export function ModelCostBar({report, settings}:{report?:ModelCostReport;settings:()=>void}) {
@@ -49,7 +49,7 @@ export function CostSettings({values, change}:{values:Record<string,any>;change:
   }
   return <section>
     <h3>生成费用与预算</h3>
-    <div className="field-grid">{field('model_job_budget_cny','单次任务上限（元）')}{field('model_project_budget_cny','每项目累计上限（元）')}{field('model_daily_budget_cny','每日累计上限（元）')}{field('model_provider_budget_cny','当前服务累计上限（元，可留空）')}</div>
+    <div className="field-grid">{field('model_job_budget_cny','单次任务上限（元）')}{field('model_project_budget_cny','每项目累计上限（元）')}{field('model_daily_budget_cny','每日累计上限（元）')}{field('model_provider_budget_cny','当前服务累计上限（元，可留空）')}{field('index_daily_budget_cny','素材库扩充每日上限（元，单独计算）')}</div>
     <p>发请求前预留费用，超限自动停止并保存进度。项目费用包含历次重试，更换密钥也不清零；0 表示暂停付费模型调用。每日按本机日期计算。</p>
     <p>服务累计按接口域名统计，跨项目、跨日和更换密钥均不清零。留空仅关闭服务累计上限，项目与每日上限仍生效。</p>
     {report&&<>

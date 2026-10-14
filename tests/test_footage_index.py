@@ -53,20 +53,20 @@ def test_production_finds_grow_the_index_without_replacing_descriptions(data):
     seen = row("BV1new", "清明上河图 动态")
     tiles = [{"source": seen, "t": 12.0, "hash": 0xABC}, {"source": described, "t": 7.0, "hash": 1},
              {"source": seen | {"indexed": True}, "t": 3.0, "hash": 2}]
-    assert fi.add_seen([seen, described], tiles, topic="历史") == 2
+    assert fi.add_seen([seen, described], tiles, topic="历史") == 1           # only the video not yet indexed
     assert fi.search("清明上河图")[0]["id"] == "BV1new"
     assert fi.search("城门 车马")[0]["moments"] == [5.0]          # the described video kept its moments
 
 
 def test_merge_takes_missing_or_better_described_videos(data, tmp_path, monkeypatch):
-    fi.add(row("BV1a", "航母 编队"), [{"t": 1}])
+    fi.add(row("BV1aaaaaaaaa", "航母 编队"), [{"t": 1}])
     other = tmp_path / "other"
     monkeypatch.setattr(paths, "DATA", other)
-    fi.add(row("BV1a", "航母 编队"), [{"t": 1, "text": "航母在海上航行", "kind": "实拍"}], described=True)
-    fi.add(row("BV1b", "战斗机 起飞"), [{"t": 2, "text": "战斗机从甲板起飞", "kind": "实拍"}], described=True)
+    fi.add(row("BV1aaaaaaaaa", "航母 编队"), [{"t": 1, "text": "航母在海上航行", "kind": "实拍"}], described=True)
+    fi.add(row("BV1bbbbbbbbb", "战斗机 起飞"), [{"t": 2, "text": "战斗机从甲板起飞", "kind": "实拍"}], described=True)
     monkeypatch.setattr(paths, "DATA", data / "data")
     assert fi.merge(other / "footage-index.sqlite") == 2
-    assert fi.search("海上 航行")[0]["id"] == "BV1a" and fi.search("甲板 起飞")[0]["id"] == "BV1b"
+    assert fi.search("海上 航行")[0]["id"] == "BV1aaaaaaaaa" and fi.search("甲板 起飞")[0]["id"] == "BV1bbbbbbbbb"
     bad = tmp_path / "bad.sqlite"
     bad.write_bytes(b"not a database")
     with pytest.raises(ValueError):
@@ -178,7 +178,7 @@ def test_account_errors_stop_the_build_and_rate_limits_wait(data, monkeypatch):
             raise planner.ModelUnavailable("模型服务限流或额度受限，请稍后再试（HTTP 429）")
         return {str(i + 1): ["画面", "实拍"] for i in range(24)}, {}
     monkeypatch.setattr(planner, "chat", limited)
-    monkeypatch.setattr(fi.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fi, "_sleep", lambda seconds, check: None)
     report = {"indexed": 0, "described_frames": 0, "failed": 0}
     fi._build_chunk(None, [], lambda: None, lambda *a: None, report, True)
     assert fi._describe(frames[:24], lambda: None)[0] == ("画面", "实拍") and len(calls) == 2
@@ -217,3 +217,88 @@ def test_seed_ships_the_described_index_and_installs_once(data, tmp_path, monkey
         json.dumps({"row": {"provider": "bilibili", "id": "../../etc", "title": "x"}, "moments": []}).encode() + b"\n"))
     assert fi.install_seed(seed) == 0                                            # a malformed id is skipped
     assert fi.install_seed(tmp_path / "none") == 0
+
+
+def test_reseeding_after_a_reset_and_damaged_parts(data, tmp_path, monkeypatch):
+    for n in range(6):
+        fi.add(row(f"BV1part{n:05d}", f"航母 {n}"), [{"t": 1.0, "text": f"航母甲板 {n}", "kind": "实拍"}], described=True)
+    seed = tmp_path / "seed"
+    fi.export_seed(seed, part_bytes=150)
+    assert len(list(seed.glob("part-*.jsonl.gz"))) >= 2 and not list(seed.glob("*.tmp"))
+    monkeypatch.setattr(paths, "DATA", tmp_path / "client")
+    assert fi.install_seed(seed) == 6
+    (tmp_path / "client" / "footage-index.sqlite").unlink()          # a reset index is seeded again
+    for extra in (tmp_path / "client").glob("footage-index.sqlite-*"):
+        extra.unlink()
+    fi._ready.clear()
+    assert fi.install_seed(seed) == 6
+    first = sorted(seed.glob("part-*.jsonl.gz"))[0]
+    first.write_bytes(first.read_bytes()[:20])                          # cut short: that part only
+    monkeypatch.setattr(paths, "DATA", tmp_path / "other")
+    with pytest.raises(ValueError, match="损坏"):
+        fi.install_seed(seed)
+    assert 0 < fi.stats()["described"] < 6
+
+
+def test_readding_a_video_replaces_its_terms_and_installs_stay_fast(data, tmp_path, monkeypatch):
+    import time as clock
+    fi.add(row("BV1again0000", "片子"), [{"t": 3.0, "text": "码头吊车", "kind": "实拍"}], described=True)
+    fi.add(row("BV1again0000", "片子"), [{"t": 3.0, "text": "森林瀑布", "kind": "实拍"}], described=True)
+    assert fi.search("码头吊车") == [] and fi.search("森林瀑布")[0]["id"] == "BV1again0000"
+    with fi._conn() as con:
+        assert con.execute("SELECT COUNT(*) FROM terms").fetchone()[0] == con.execute(
+            "SELECT COUNT(*) FROM term_rows").fetchone()[0] == 2
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    lines = [json.dumps({"row": row(f"BV1{n:09d}", f"视频 {n}"), "topic": "城市",
+                         "moments": [{"t": float(t), "hash": "", "text": f"城市 街道 车流 {n} {t}", "kind": "实拍"}
+                                     for t in range(10)]}, ensure_ascii=False) for n in range(3000)]
+    (seed / "part-01.jsonl.gz").write_bytes(__import__("gzip").compress("\n".join(lines).encode()))
+    monkeypatch.setattr(paths, "DATA", tmp_path / "client")
+    began = clock.monotonic()
+    assert fi.install_seed(seed) == 3000
+    assert clock.monotonic() - began < 30
+    assert fi.search("城市 街道")[0]["indexed"]
+
+
+def test_described_sheets_are_kept_when_a_later_sheet_stops_the_build(data, monkeypatch):
+    from jinggao import planner
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in range(12)]
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    monkeypatch.setattr(fi, "DESCRIBE_WORKERS", 1)
+    calls = []
+    def chat(system, content, **kw):
+        calls.append(1)
+        if len(calls) == 2:
+            raise planner.ModelUnavailable("模型账户额度不足，请充值（HTTP 402）")
+        return {str(i + 1): ["街道", "实拍"] for i in range(24)}, {}
+    monkeypatch.setattr(planner, "chat", chat)
+    videos = [("城市", row(f"BV1keep{n:05d}", "街道")) for n in range(4)]      # two videos to a sheet
+    report = {"indexed": 0, "described_frames": 0, "failed": 0}
+    with pytest.raises(planner.ModelUnavailable):
+        fi._build_chunk(None, videos, lambda: None, lambda *a: None, report, True)
+    assert fi.stats()["described"] == 2 and report["described_frames"] == 24
+
+
+def test_videos_whose_sheets_keep_failing_are_left_out(data, monkeypatch):
+    from jinggao import planner, express_sources as es
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in range(4)]
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    def refused(system, content, **kw):
+        raise ValueError("模型服务返回 HTTP 400；请检查地址、模型名、额度和密钥")
+    monkeypatch.setattr(planner, "chat", refused)
+    class Bili:
+        blocked = 0
+        def search(self, q, page=1):
+            return [row("BV1stubborn0", "码头")]
+        def close(self):
+            pass
+    monkeypatch.setattr(es, "Bilibili", Bili)
+    monkeypatch.setattr(fi.time, "sleep", lambda s: None)
+    for _ in range(2):
+        assert fi.build([("城市", "码头")], lambda: None, lambda *a: None, widen=0)["indexed"] == 0
+    assert fi.stats()["sources"] == 1 and fi.stats()["described"] == 0
+    calls = []
+    monkeypatch.setattr(planner, "chat", lambda *a, **k: calls.append(1) or ({}, {}))
+    fi.build([("城市", "码头")], lambda: None, lambda *a: None, widen=0)
+    assert calls == []                                                   # two failed tries: not asked again
