@@ -450,7 +450,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         queries += [("自定义", q) for q in options.get("keywords", [])]
         if not queries:
             raise ValueError("请选择题材包或填写关键词")
-        report = footage_index.build(list(dict.fromkeys(queries)), check, progress, pages=int(options.get("pages", 1)))
+        report = footage_index.build(list(dict.fromkeys(queries)), check, progress, pages=int(options.get("pages", 1)),
+                                     widen=int(options.get("widen", 8)))
         store.mutate(pid, lambda p: p.update(footage_index_report=report), internal=True)
         if finalize:
             store.job_update(jid, status="completed", progress=100,

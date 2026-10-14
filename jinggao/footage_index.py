@@ -84,29 +84,35 @@ def known(keys) -> set:
 
 def add(row: dict, moments: list[dict], *, topic: str = "", described: bool = False) -> None:
     """Save (or refresh) one video: its search row and moments [{t, hash, text, kind}]."""
+    with _lock, _db() as con:
+        _add(con, row, moments, topic=topic, described=described)
+
+
+def _add(con, row, moments, *, topic="", described=False) -> bool:
+    """One video into the open connection; False when a described copy is already there."""
     key = _key(row)
+    old = con.execute("SELECT described, used, topic FROM sources WHERE key=?", (key,)).fetchone()
+    if old and old["described"] and not described:
+        return False      # never replace described moments with bare ones
     keep = {k: row.get(k) for k in ("provider", "id", "url", "title", "tags", "description", "duration", "author",
                                     "typename", "play", "pubdate", "query")}
     usable = [m for m in moments if m.get("kind") not in BAD_KINDS]
     hosted = sum(1 for m in moments if m.get("kind") == "主持人出镜")
     flags = "host" if moments and hosted * 2 >= len(moments) else ""
-    with _lock, _db() as con:
-        old = con.execute("SELECT described, used, topic FROM sources WHERE key=?", (key,)).fetchone()
-        if old and old["described"] and not described:
-            return      # never replace described moments with bare ones
-        con.execute("INSERT OR REPLACE INTO sources (key,provider,id,row,topic,added,described,used,flags) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
-                    (key, row["provider"], row["id"], json.dumps(keep, ensure_ascii=False),
-                     topic or (old["topic"] if old else ""), time.time(), int(described), old["used"] if old else 0, flags))
-        con.execute("DELETE FROM moments WHERE source=?", (key,))
-        con.execute("DELETE FROM terms WHERE source=?", (key,))
-        con.executemany("INSERT OR REPLACE INTO moments (source,t,hash,text,kind) VALUES (?,?,?,?,?)",
-                        [(key, round(float(m["t"]), 2), str(m.get("hash", "")), m.get("text", ""), m.get("kind", ""))
-                         for m in moments])
-        head = " ".join(grams(" ".join(str(row.get(k) or "") for k in ("title", "tags", "query", "typename"))))
-        con.execute("INSERT INTO terms (source,t,words) VALUES (?,?,?)", (key, -1, head))
-        con.executemany("INSERT INTO terms (source,t,words) VALUES (?,?,?)",
-                        [(key, round(float(m["t"]), 2), " ".join(grams(m["text"]))) for m in usable if m.get("text")])
+    con.execute("INSERT OR REPLACE INTO sources (key,provider,id,row,topic,added,described,used,flags) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (key, row["provider"], row["id"], json.dumps(keep, ensure_ascii=False),
+                 topic or (old["topic"] if old else ""), time.time(), int(described), old["used"] if old else 0, flags))
+    con.execute("DELETE FROM moments WHERE source=?", (key,))
+    con.execute("DELETE FROM terms WHERE source=?", (key,))
+    con.executemany("INSERT OR REPLACE INTO moments (source,t,hash,text,kind) VALUES (?,?,?,?,?)",
+                    [(key, round(float(m["t"]), 2), str(m.get("hash", "")), m.get("text", ""), m.get("kind", ""))
+                     for m in moments])
+    head = " ".join(grams(" ".join(str(row.get(k) or "") for k in ("title", "tags", "query", "typename"))))
+    con.execute("INSERT INTO terms (source,t,words) VALUES (?,?,?)", (key, -1, head))
+    con.executemany("INSERT INTO terms (source,t,words) VALUES (?,?,?)",
+                    [(key, round(float(m["t"]), 2), " ".join(grams(m["text"]))) for m in usable if m.get("text")])
+    return True
 
 
 def add_seen(rows: list[dict], tiles: list[dict], topic: str = "") -> int:
@@ -194,6 +200,81 @@ def merge(other_file) -> int:
         raise ValueError("素材库文件无法读取") from None
     finally:
         other.close()
+
+
+SEED = paths.ROOT / "assets" / "footage-index"
+SEED_PART_BYTES = 40 * 1024 * 1024     # GitHub refuses files over 100 MB and warns over 50 MB
+
+
+def export_seed(folder=SEED, part_bytes: int = SEED_PART_BYTES) -> list:
+    """The described part of the index as gzip JSON lines in numbered parts (shipped with the app)."""
+    import gzip
+    import io
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("part-*.jsonl.gz"):
+        old.unlink()
+    with _lock, _db() as con:
+        sources = con.execute("SELECT key, row, topic FROM sources WHERE described=1 ORDER BY added").fetchall()
+        moments = {}
+        for m in con.execute("SELECT source, t, hash, text, kind FROM moments WHERE source IN "
+                             "(SELECT key FROM sources WHERE described=1) ORDER BY source, t"):
+            moments.setdefault(m["source"], []).append(
+                {"t": m["t"], "hash": m["hash"], "text": m["text"], "kind": m["kind"]})
+    # gzip holds output back while writing, so parts are cut by raw size: this JSON shrinks 3-4 times.
+    parts, lines, raw = [], [], 0
+    def close():
+        path = folder / f"part-{len(parts) + 1:02d}.jsonl.gz"
+        buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=buffer, mode="wb", compresslevel=9, mtime=0) as writer:
+            writer.write(b"".join(lines))
+        path.write_bytes(buffer.getvalue())
+        parts.append(path)
+        lines.clear()
+    for src in sources:
+        line = json.dumps({"row": json.loads(src["row"]), "topic": src["topic"],
+                           "moments": moments.get(src["key"], [])}, ensure_ascii=False, separators=(",", ":"))
+        lines.append((line + "\n").encode("utf-8"))
+        raw += len(lines[-1])
+        if raw >= part_bytes * 3:
+            close()
+            raw = 0
+    if lines or not parts:
+        close()
+    return parts
+
+
+def install_seed(folder=SEED, progress=lambda *_: None) -> int:
+    """Take in the index shipped with the app once per seed version (videos this machine lacks)."""
+    import gzip
+    import hashlib
+    parts = sorted(folder.glob("part-*.jsonl.gz")) if folder.is_dir() else []
+    if not parts:
+        return 0
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(part.read_bytes())
+    fingerprint = digest.hexdigest()
+    marker = paths.DATA / "footage-seed.sha256"
+    if marker.exists() and marker.read_text().strip() == fingerprint:
+        return 0
+    added = 0
+    with _lock, _db() as con:
+        described = {r["key"] for r in con.execute("SELECT key FROM sources WHERE described=1")}
+        for index, part in enumerate(parts):
+            with gzip.open(part, "rt", encoding="utf-8") as lines:
+                for line in lines:
+                    item = json.loads(line)
+                    row = item["row"]
+                    if row.get("provider") != "bilibili" or not re.fullmatch(r"BV[0-9A-Za-z]{10}", str(row.get("id", ""))):
+                        continue
+                    if _key(row) in described:
+                        continue
+                    if _add(con, row, item.get("moments") or [], topic=str(item.get("topic", ""))[:30], described=True):
+                        added += 1
+            con.commit()
+            progress(index + 1, len(parts))
+    marker.write_text(fingerprint)
+    return added
 
 
 def mark_used(keys) -> None:
@@ -327,7 +408,7 @@ def expand(found: dict, used: set, per_topic: int = 8) -> list[tuple[str, str]]:
 
 
 def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, describe: bool = True,
-          limit: int = 100000, widen: bool = True) -> dict:
+          limit: int = 100000, widen: int = 8) -> dict:
     """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions. Saved chunk
     by chunk; videos already described are skipped, so a stopped or failed build continues where it was."""
     from . import express_sources as es
@@ -357,7 +438,7 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
                     progress(lo + (hi - lo) * n / max(1, len(items)), f"{label} {n}/{len(items)} · 已找到 {len(rows)} 个视频")
         search_all(queries, 1, 12, "检索关键词")
         if widen:
-            more = expand(by_topic, {q for _, q in queries})
+            more = expand(by_topic, {q for _, q in queries}, per_topic=widen)
             report["expanded"] = len(more)
             search_all(more, 12, 18, "按标签扩展检索")
         report["found"] = len(rows)

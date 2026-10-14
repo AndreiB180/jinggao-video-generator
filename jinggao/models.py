@@ -136,7 +136,8 @@ class RemoteImport(Strict):
 class FootageBuild(Strict):
     packs: list[Annotated[str, Field(min_length=1, max_length=30)]] = Field(default_factory=list, max_length=60)
     keywords: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=200)
-    pages: int = Field(default=1, ge=1, le=3)
+    pages: int = Field(default=1, ge=1, le=6)
+    widen: int = Field(default=8, ge=0, le=60)
 
 
 class LibraryBuild(Strict):

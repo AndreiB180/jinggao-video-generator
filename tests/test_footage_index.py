@@ -195,3 +195,25 @@ def test_account_errors_stop_the_build_and_rate_limits_wait(data, monkeypatch):
     many = [("动物", row(f"BV{n}", "狮子")) for n in range(12)]
     with pytest.raises(RuntimeError, match="连续 8 张"):
         fi._build_chunk(None, many, lambda: None, lambda *a: None, report, True)
+
+
+def test_seed_ships_the_described_index_and_installs_once(data, tmp_path, monkeypatch):
+    for n in range(30):
+        fi.add(row(f"BV1seed{n:05d}", f"码头 视频 {n}"),
+               [{"t": float(t), "hash": "a", "text": f"码头工人装卸 {n}-{t}", "kind": "实拍"} for t in range(5)],
+               topic="城市", described=True)
+    fi.add(row("BV1bare000000", "只有标题"), [{"t": 1.0}])                    # not described: not shipped
+    seed = tmp_path / "seed"
+    parts = fi.export_seed(seed, part_bytes=600)
+    assert len(parts) > 1 and all(p.name.startswith("part-") for p in parts)
+    client = tmp_path / "client"
+    monkeypatch.setattr(paths, "DATA", client)
+    fi.add(row("BV1seed00003", "本机已有"), [{"t": 9.0, "text": "本机的描述", "kind": "实拍"}], described=True)
+    assert fi.install_seed(seed) == 29                                           # its own described copy stays
+    assert fi.search("本机的描述")[0]["id"] == "BV1seed00003"
+    assert fi.search("码头工人装卸")[0]["indexed"] and fi.stats()["sources"] == 30
+    assert fi.install_seed(seed) == 0                                            # once per seed version
+    (seed / "part-99.jsonl.gz").write_bytes(__import__("gzip").compress(
+        json.dumps({"row": {"provider": "bilibili", "id": "../../etc", "title": "x"}, "moments": []}).encode() + b"\n"))
+    assert fi.install_seed(seed) == 0                                            # a malformed id is skipped
+    assert fi.install_seed(tmp_path / "none") == 0

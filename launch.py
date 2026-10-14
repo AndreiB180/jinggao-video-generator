@@ -74,6 +74,16 @@ def main():
                 continue
     else:
         raise RuntimeError("本地端口均被占用，请指定 --port")
+    def footage_seed():
+        # The footage index shipped with the app (assets/footage-index) goes in once, in the background.
+        try:
+            from jinggao import footage_index
+            added = footage_index.install_seed()
+            if added:
+                print(f"已载入素材库 {added:,} 个视频", flush=True)
+        except Exception as exc:
+            print(f"素材库种子未能载入：{exc}", flush=True)
+    threading.Thread(target=footage_seed, name="footage-seed", daemon=True).start()
     seeded = source_index.install_seed()
     source_index.prepare_entities()
     if seeded:
