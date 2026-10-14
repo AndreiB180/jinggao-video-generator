@@ -166,3 +166,32 @@ def test_index_building_runs_in_its_own_worker_lane(data):
     assert store.claim("main")["kind"] == "produce"
     assert store.claim("main") is None
     assert store.claim("background")["kind"] == "footage_index"
+
+
+def test_account_errors_stop_the_build_and_rate_limits_wait(data, monkeypatch):
+    from jinggao import planner
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in range(30)]
+    calls = []
+    def limited(system, content, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise planner.ModelUnavailable("模型服务限流或额度受限，请稍后再试（HTTP 429）")
+        return {str(i + 1): ["画面", "实拍"] for i in range(24)}, {}
+    monkeypatch.setattr(planner, "chat", limited)
+    monkeypatch.setattr(fi.time, "sleep", lambda s: None)
+    report = {"indexed": 0, "described_frames": 0, "failed": 0}
+    fi._build_chunk(None, [], lambda: None, lambda *a: None, report, True)
+    assert fi._describe(frames[:24], lambda: None)[0] == ("画面", "实拍") and len(calls) == 2
+    def broke(system, content, **kw):
+        raise planner.ModelUnavailable("模型账户额度不足，请充值（HTTP 402）")
+    monkeypatch.setattr(planner, "chat", broke)
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    with pytest.raises(planner.ModelUnavailable):
+        fi._build_chunk(None, [("动物", row("BV1z", "狮子"))], lambda: None, lambda *a: None, report, True)
+    assert fi.stats()["sources"] == 0                         # nothing half-described was saved
+    def flaky(system, content, **kw):
+        raise ValueError("模型服务返回 HTTP 400；请检查地址、模型名、额度和密钥")
+    monkeypatch.setattr(planner, "chat", flaky)
+    many = [("动物", row(f"BV{n}", "狮子")) for n in range(12)]
+    with pytest.raises(RuntimeError, match="连续 8 张"):
+        fi._build_chunk(None, many, lambda: None, lambda *a: None, report, True)

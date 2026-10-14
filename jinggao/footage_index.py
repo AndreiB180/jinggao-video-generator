@@ -243,14 +243,18 @@ def _describe(frames, check):
     sheet = _sheet(frames, SHEET[0])
     content = [{"type": "text", "text": f"共 {len(frames)} 格。"},
                {"type": "image_url", "image_url": {"url": em._jpeg(sheet)}}]
-    for attempt in range(3):
+    for attempt in range(4):
         check()
         try:
             result, _ = planner.chat(DESCRIBE_SYSTEM, content, vision=True, max_tokens=80 + 48 * len(frames),
                                      timeout=60, task="footage_index")
             break
+        except planner.ModelUnavailable as exc:
+            if "429" not in str(exc) or attempt == 3:
+                raise          # key, permission or balance: stop the whole build (see _build_chunk)
+            time.sleep(5 * (attempt + 1))     # rate limited: wait, then the same sheet again
         except ValueError as exc:
-            if attempt == 2 or not any(k in str(exc) for k in ("超时", "HTTP 5", "JSON", "HTTP 429")):
+            if attempt == 3 or not any(k in str(exc) for k in ("超时", "HTTP 5", "JSON")):
                 raise
             time.sleep(2 * (attempt + 1))
     out = {}
@@ -407,14 +411,25 @@ def _build_chunk(bili, chunk, check, progress, report, describe):
     items = [(topic, row, frame) for topic, row, got in framed for frame in got]
     batches = [items[i:i + per] for i in range(0, len(items), per)]
     results = {}
+    failures = {"row": 0}
     def run(batch):
+        from .planner import ModelUnavailable
         check()
         try:
-            return batch, _describe([f for _, _, f in batch], check)
-        except costs.BudgetExceeded:
-            raise
-        except Exception:
+            answer = _describe([f for _, _, f in batch], check)
+        except (costs.BudgetExceeded, ModelUnavailable):
+            raise                  # budget, key, permission or balance: no later sheet would fare better
+        except Exception as exc:
+            with _lock:
+                failures["row"] += 1
+                stop = failures["row"] >= 8
+            if stop:
+                raise RuntimeError(f"连续 8 张联系表描述失败（{str(exc)[:80]}），已停止扩库；已完成的批次已保存，"
+                                   "检查阿里云账户余额和服务状态后重新扩充会接着做") from None
             return batch, {}
+        with _lock:
+            failures["row"] = 0
+        return batch, answer
     missed = []
     with execution.ThreadPoolExecutor(max_workers=DESCRIBE_WORKERS) as pool:
         for n, (batch, answer) in enumerate(pool.map(run, batches), 1):
