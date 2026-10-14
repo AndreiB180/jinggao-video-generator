@@ -1,5 +1,6 @@
 """The local footage index: offline, temporary data, fake Bilibili and a fake vision model."""
 import json
+import re
 
 import pytest
 from PIL import Image
@@ -77,7 +78,8 @@ def test_build_searches_describes_and_skips_known_videos(data, monkeypatch):
     from jinggao import express_sources as es, planner
     found = {"码头 实拍": [row("BV1x", "码头 装卸 实拍"), row("BV1game", "原神 码头"), row("BV1short", "码头", duration=8)]}
     class Bili:
-        blocked = 0
+        blocked = search_refused = shots_blocked = 0
+        counts = __import__("threading").Lock()
         def search(self, q, page=1):
             return found.get(q, [])
         def close(self):
@@ -288,7 +290,8 @@ def test_videos_whose_sheets_keep_failing_are_left_out(data, monkeypatch):
         raise ValueError("模型服务返回 HTTP 400；请检查地址、模型名、额度和密钥")
     monkeypatch.setattr(planner, "chat", refused)
     class Bili:
-        blocked = 0
+        blocked = search_refused = shots_blocked = 0
+        counts = __import__("threading").Lock()
         def search(self, q, page=1):
             return [row("BV1stubborn0", "码头")]
         def close(self):
@@ -302,3 +305,65 @@ def test_videos_whose_sheets_keep_failing_are_left_out(data, monkeypatch):
     monkeypatch.setattr(planner, "chat", lambda *a, **k: calls.append(1) or ({}, {}))
     fi.build([("城市", "码头")], lambda: None, lambda *a: None, widen=0)
     assert calls == []                                                   # two failed tries: not asked again
+
+
+def test_refused_searches_do_not_block_previews_or_streams(data, monkeypatch):
+    import httpx
+    from jinggao import express_sources as es
+    def handler(request):
+        if "search/type" in request.url.path:
+            return httpx.Response(200, json={"code": -412, "message": "risk"})
+        if "videoshot" in request.url.path:
+            return httpx.Response(200, json={"code": 0, "data": {"image": ["//i0.hdslb.com/x.jpg"], "img_x_len": 10,
+                                                                  "img_y_len": 10, "img_x_size": 160, "img_y_size": 90}})
+        return httpx.Response(200, text="ok")
+    original = httpx.Client
+    monkeypatch.setattr(es.httpx, "Client", lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr(es.time, "sleep", lambda s: None)
+    monkeypatch.setattr(es, "saved_cookies", lambda: {})
+    bili = es.Bilibili()
+    for n in range(4):
+        assert bili.search(f"码头 {n}") == []
+    assert bili.search_refused == 4 and bili.blocked == 0
+    assert bili.previews("BV1abcdefghi", 100.0)                        # previews still work
+    bili.close()
+
+
+def test_answers_survive_a_failed_follow_up_and_cut_off_answers_are_split(data, monkeypatch):
+    from jinggao import planner
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in range(8)]
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    calls = []
+    def partial(system, content, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return {str(i + 1): ["码头", "实拍"] for i in range(7)}, {}        # frame 8 skipped
+        raise ValueError("模型服务返回 HTTP 400；请检查地址、模型名、额度和密钥")
+    monkeypatch.setattr(planner, "chat", partial)
+    report = {"indexed": 0, "described_frames": 0, "failed": 0}
+    fi._build_chunk(None, [("城市", row("BV1partial00", "码头"))], lambda: None, lambda *a: None, report, True)
+    assert fi.stats()["described"] == 1 and report["described_frames"] == 7
+    sizes = []
+    def cut(system, content, **kw):
+        n = int(re.search(r"共 (\d+) 格", content[0]["text"]).group(1))
+        sizes.append(n)
+        if n > 4:
+            raise planner.ModelResponseError("模型响应达到输出长度上限，返回内容不完整，任务已停止")
+        return {str(i + 1): ["街道", "实拍"] for i in range(n)}, {}
+    monkeypatch.setattr(planner, "chat", cut)
+    assert len(fi._describe(frames, lambda: None)) == 8 and sizes == [8, 4, 4]
+
+
+def test_service_wide_failures_do_not_count_against_videos(data, monkeypatch):
+    from jinggao import planner
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in range(4)]
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    monkeypatch.setattr(fi, "_sleep", lambda seconds, check: None)
+    def limited(system, content, **kw):
+        raise planner.ModelUnavailable("模型服务限流或额度受限，请稍后再试（HTTP 429）")
+    monkeypatch.setattr(planner, "chat", limited)
+    report = {"indexed": 0, "described_frames": 0, "failed": 0}
+    fi._build_chunk(None, [("城市", row(f"BV1limit{n:04d}", "码头")) for n in range(3)], lambda: None,
+                    lambda *a: None, report, True)
+    with fi._conn() as con:
+        assert con.execute("SELECT COUNT(*) FROM sources WHERE tries>0").fetchone()[0] == 0

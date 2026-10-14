@@ -105,7 +105,11 @@ class Bilibili:
         self.ready = False
         self.search_gate = threading.Semaphore(3)
         self.api_gate = threading.Semaphore(3)
-        self.blocked = 0
+        self.blocked = 0              # signed API calls (_api): stream() etc.
+        self.search_refused = 0       # searches refused in a row (risk control or network)
+        self.shots_blocked = 0        # videoshot (preview) calls refused in a row
+        self.shots_blocked_at = 0.0
+        self.counts = threading.Lock()
         self.mixin = None
         self.cookies = saved_cookies()
         self.logged_in = False
@@ -200,10 +204,10 @@ class Bilibili:
                     break
                 except (httpx.HTTPError, ValueError):
                     time.sleep(1.0 * (attempt + 1))
+        with self.counts:
+            self.search_refused = self.search_refused + 1 if rows is None else 0
         if rows is None:
-            self.blocked += 1       # three refused searches in a row count as risk control (see previews)
             return []
-        self.blocked = 0
         results = []
         for row in rows:
             if row.get("type") != "video" or not row.get("bvid") or str(row.get("is_pay")) == "1":
@@ -229,20 +233,25 @@ class Bilibili:
         meta_path = root / "meta.json"
         meta = _read_json(meta_path, 30 * 24 * 3600)
         if meta is None:
-            if self.blocked >= 3:
-                raise ValueError("B站接口持续风控，暂停读取预览")
+            with self.counts:
+                # Three refusals in a row trip the breaker; after two minutes one call may probe again.
+                if self.shots_blocked >= 3 and time.monotonic() - self.shots_blocked_at < 120:
+                    raise ValueError("B站预览接口持续风控，暂停读取预览")
             self._warm()
             body = {}
             for attempt in range(3):
                 r = self.client.get("https://api.bilibili.com/x/player/videoshot", params={"bvid": bvid, "index": 1})
                 body = r.json() if r.status_code == 200 else {}
                 if r.status_code != 412 and body.get("code") not in (-352, -412, -509, -799):
-                    self.blocked = 0
+                    with self.counts:
+                        self.shots_blocked = 0
                     break
                 if attempt < 2:
                     time.sleep(2.0 * (attempt + 1))
             else:
-                self.blocked += 1
+                with self.counts:
+                    self.shots_blocked += 1
+                    self.shots_blocked_at = time.monotonic()
                 raise ValueError("B站预览接口暂时限制访问（风控）")
             data = body.get("data") or {}
             images = [("https:" + u if u.startswith("//") else u) for u in data.get("image") or []]

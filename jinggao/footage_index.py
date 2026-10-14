@@ -22,6 +22,7 @@ import re
 import sqlite3
 import threading
 import time
+import zlib
 from contextlib import contextmanager
 
 from . import costs, execution, paths
@@ -371,7 +372,7 @@ def install_seed(folder=SEED, progress=lambda *_: None) -> int:
                         added += _write_batch(batch)
                         batch = []
                         progress(index + 1, len(parts), added)
-        except (OSError, EOFError, ValueError):
+        except (OSError, EOFError, ValueError, zlib.error):
             broken.append(part.name)        # a damaged part: keep the rest, retry this one next start
         added += _write_batch(batch)
         batch = []
@@ -438,7 +439,10 @@ def _frames(bili, row, count=MOMENTS):
         return frames
     finally:
         for sprite in Path(previews[0]["root"]).glob("sprite-*.jpg"):
-            sprite.unlink(missing_ok=True)
+            try:
+                sprite.unlink(missing_ok=True)
+            except OSError:
+                pass        # open elsewhere (Windows): production may still be cropping it
 
 
 def _sleep(seconds, check):
@@ -469,6 +473,11 @@ def _describe(frames, check):
                 raise RuntimeError("看图接口持续限流") from None
             _sleep(min(60, 5 * 2 ** attempt), check)
         except ValueError as exc:
+            if "输出长度上限" in str(exc) and len(frames) > 1:
+                # The answer was cut off: half the sheet at a time.
+                half = len(frames) // 2
+                first, second = _describe(frames[:half], check), _describe(frames[half:], check)
+                return first | {half + i: value for i, value in second.items()}
             if attempt >= 3 or not any(k in str(exc) for k in ("超时", "HTTP 5", "JSON")):
                 raise
             _sleep(2 * (attempt + 1), check)
@@ -543,15 +552,31 @@ def expand(found: dict, used: set, per_topic: int = 8) -> list[tuple[str, str]]:
     return out
 
 
+def _risk_paused(bili, check, progress, report, pauses, message):
+    """When Bilibili's risk control refuses previews or searches: wait, reset the breakers, go on.
+    Returns the new pause count; three pauses in one build stop it (finished videos stay saved)."""
+    if bili.shots_blocked < 3 and bili.search_refused < 3:
+        return pauses
+    report["blocked"] = True
+    if pauses >= 3:
+        raise RuntimeError("B站接口持续风控，已停止扩库；已完成的视频已保存，稍后重新扩充会接着做")
+    progress(message + f" · B站接口风控，暂停 {BLOCKED_PAUSE // 60} 分钟后继续")
+    _sleep(BLOCKED_PAUSE, check)
+    with bili.counts:
+        bili.shots_blocked = bili.search_refused = 0
+    return pauses + 1
+
+
 def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, describe: bool = True,
           limit: int = 100000, widen: int = 8) -> dict:
     """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions. Each sheet's
-    videos are saved as soon as it is described; videos already described (or failed twice) are skipped,
-    so a stopped or failed build continues where it was."""
+    videos are saved as soon as it is described; videos already described (or failed twice on their own)
+    are skipped, so a stopped or failed build continues where it was."""
     from . import express_sources as es
     bili = es.Bilibili()
     report = {"queries": len(queries), "found": 0, "new": 0, "indexed": 0, "described_frames": 0, "failed": 0,
               "blocked": False, "expanded": 0}
+    pauses = 0
     try:
         rows, lock, by_topic = {}, threading.Lock(), {}
         def find(item):
@@ -559,9 +584,14 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
             found = []
             for page in range(1, pages + 1):
                 check()
+                if bili.search_refused >= 3:
+                    break                  # risk control: stop paging (the build pauses after this phase)
                 try:
-                    found += bili.search(query, page)
+                    got = bili.search(query, page)
                 except Exception:
+                    break
+                found += got
+                if not got:
                     break
                 time.sleep(0.4)        # stay under the search API's burst limit
             with lock:
@@ -570,9 +600,15 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
                         rows.setdefault(_key(row), (topic, row))
                         by_topic.setdefault(topic, {})[_key(row)] = row
         def search_all(items, lo, hi, label):
-            with execution.ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
-                for n, _ in enumerate(pool.map(find, items), 1):
-                    progress(lo + (hi - lo) * n / max(1, len(items)), f"{label} {n}/{len(items)} · 已找到 {len(rows)} 个视频")
+            nonlocal pauses
+            done = 0
+            for start in range(0, len(items), 30):
+                with execution.ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as pool:
+                    for _ in pool.map(find, items[start:start + 30]):
+                        done += 1
+                        progress(lo + (hi - lo) * done / max(1, len(items)), f"{label} {done}/{len(items)} · 已找到 {len(rows)} 个视频")
+                pauses = _risk_paused(bili, check, lambda m: progress(lo + (hi - lo) * done / max(1, len(items)), m),
+                                      report, pauses, label)
         search_all(queries, 1, 12, "检索关键词")
         if widen:
             more = expand({topic: list(found.values()) for topic, found in by_topic.items()},
@@ -586,44 +622,52 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
         todo = [rows[k] for k in rows if k not in skip][:limit]
         report["new"] = len([k for k in rows if k not in done])
         chunks = [todo[i:i + CHUNK] for i in range(0, len(todo), CHUNK)]
-        pauses = 0
-        for index, chunk in enumerate(chunks):
+        index = 0
+        while index < len(chunks):
             lo = 18 + 81 * index / max(1, len(chunks))
             hi = 18 + 81 * (index + 1) / max(1, len(chunks))
             label = f"第 {index + 1}/{len(chunks)} 批（共 {len(todo)} 个视频）"
-            _build_chunk(bili, chunk, check, lambda share, message: progress(lo + (hi - lo) * share, f"{label} · {message}"),
-                         report, describe)
-            if bili.blocked >= 3:
-                # Bilibili risk control: everything finished is saved; wait, then go on (three times at most).
-                report["blocked"] = True
-                pauses += 1
-                if pauses > 3:
-                    raise RuntimeError("B站接口持续风控，已停止扩库；已完成的视频已保存，稍后重新扩充会接着做")
-                progress(hi, f"{label} · B站接口风控，暂停 {BLOCKED_PAUSE // 60} 分钟后继续")
-                _sleep(BLOCKED_PAUSE, check)
-                bili.blocked = 0
+            refused = _build_chunk(bili, chunks[index], check,
+                                   lambda share, message: progress(lo + (hi - lo) * share, f"{label} · {message}"),
+                                   report, describe)
+            if bili.shots_blocked >= 3:
+                # Videos whose previews were refused go round again after the pause.
+                pauses = _risk_paused(bili, check, lambda m: progress(hi, m), report, pauses, label)
+                if refused:
+                    chunks.insert(index + 1, refused)
+            index += 1
         return report
     finally:
         bili.close()
 
 
-def _build_chunk(bili, chunk, check, progress, report, describe):
+class _Halted(Exception):
+    """Another sheet stopped the build: do not start more model requests."""
+
+
+def _build_chunk(bili, chunk, check, progress, report, describe) -> list:
+    """Frames and descriptions for up to CHUNK videos. Returns the videos whose previews were refused by
+    risk control (to retry after a pause)."""
+    from concurrent.futures import as_completed, wait
     from . import media
     from .planner import ModelUnavailable
+    stops = (media.Cancelled, costs.BudgetExceeded, costs.PricingUnavailable, ModelUnavailable)
     def frames(item):
         topic, row = item
         check()
         try:
-            return topic, row, _frames(bili, row, frame_count(float(row.get("duration") or 0)))
-        except (media.Cancelled, costs.BudgetExceeded):
+            return topic, row, _frames(bili, row, frame_count(float(row.get("duration") or 0))), False
+        except stops:
             raise
-        except Exception:
-            return topic, row, None      # this video only (risk control is counted on the client)
-    framed = []
+        except Exception as exc:
+            return topic, row, None, "风控" in str(exc)      # this video only
+    framed, refused = [], []
     with execution.ThreadPoolExecutor(max_workers=SHOT_WORKERS) as pool:
-        for n, (topic, row, got) in enumerate(pool.map(frames, chunk), 1):
+        for n, (topic, row, got, blocked) in enumerate(pool.map(frames, chunk), 1):
             if got:
                 framed.append((topic, row, got))
+            elif blocked:
+                refused.append((topic, row))
             else:
                 report["failed"] += 1
             if n % 20 == 0 or n == len(chunk):
@@ -632,7 +676,7 @@ def _build_chunk(bili, chunk, check, progress, report, describe):
         _write_batch([(row, [{"t": f["t"], "hash": format(f["hash"], "x")} for f in got], topic, False)
                       for topic, row, got in framed])
         report["indexed"] += len(framed)
-        return
+        return refused
     # Whole videos to a sheet, so each answer completes its videos and they can be saved at once.
     per = SHEET[0] * SHEET[1]
     sheets, current, count = [], [], 0
@@ -644,48 +688,88 @@ def _build_chunk(bili, chunk, check, progress, report, describe):
         count += len(item[2])
     if current:
         sheets.append(current)
+    halt = threading.Event()
     streak = {"failed": 0}
-    def run(sheet):
+    def guarded():
         check()
+        if halt.is_set():
+            raise _Halted()
+    def describe_sheet(sheet):
+        """{frame index: (text, kind)} for one sheet; a sheet that fails as a whole raises."""
         flat = [frame for _, _, got in sheet for frame in got]
+        answer = _describe(flat, guarded)
+        missing = [i for i in range(len(flat)) if i not in answer]
+        if missing:          # cut-off or partial answer: ask once more for the skipped frames, keep what came
+            try:
+                again = _describe([flat[i] for i in missing], guarded)
+            except stops + (_Halted,):
+                raise
+            except Exception:
+                again = {}
+            for j, i in enumerate(missing):
+                if j in again:
+                    answer[i] = again[j]
+        return answer
+    def run(sheet):
+        """(sheet, kind, payload): "sheet" with one answer for the whole sheet, "videos" with an answer
+        (or None when refused) per video, or "skip" when the service, not these videos, failed."""
+        guarded()
         try:
-            answer = _describe(flat, check)
-            missing = [i for i in range(len(flat)) if i not in answer]
-            if missing:      # cut-off or partial answer: ask once more for the frames it skipped
-                again = _describe([flat[i] for i in missing], check)
-                for j, i in enumerate(missing):
-                    if j in again:
-                        answer[i] = again[j]
-        except (media.Cancelled, costs.BudgetExceeded, costs.PricingUnavailable, ModelUnavailable):
-            raise            # stop, budget, unpriced model, or key/permission/balance: no later sheet fares better
+            answer = describe_sheet(sheet)
+        except stops + (_Halted,):
+            raise
         except Exception as exc:
             check()
             with _lock:
                 streak["failed"] += 1
                 stop = streak["failed"] >= 8
+                alone = streak["failed"] <= 1
             if stop:
                 raise RuntimeError(f"连续 8 张联系表描述失败（{str(exc)[:80]}），已停止扩库；已完成的视频已保存，"
                                    "稍后重新扩充会接着做") from None
-            return sheet, None
+            # A refusal that may belong to these videos (HTTP 400 content check, unusable answer) is worked
+            # out video by video; service-wide trouble (limits, timeouts, 5xx, several failures) counts nothing.
+            if not (alone and isinstance(exc, ValueError) and "HTTP 400" in str(exc)):
+                return sheet, "skip", None
+            answers = []
+            for item in sheet:
+                try:
+                    answers.append(describe_sheet([item]) if len(sheet) > 1 else None)
+                except stops + (_Halted,):
+                    raise
+                except Exception:
+                    answers.append(None)
+            return sheet, "videos", answers
         with _lock:
             streak["failed"] = 0
-        return sheet, answer
-    def save(sheet, answer):
-        if answer is None:
-            _note_failed(sheet)
+        return sheet, "sheet", answer
+    def save(sheet, kind, payload):
+        if kind == "skip":
             return
-        items, position = [], 0
-        for topic, row, got in sheet:
+        items, failed, position = [], [], 0
+        for n, item in enumerate(sheet):
+            topic, row, got = item
+            if kind == "sheet":
+                own, offset = payload, position
+            else:
+                own, offset = payload[n], 0
+            position += len(got)
+            if own is None:
+                failed.append(item)
+                continue
             moments = []
-            for frame in got:
-                text, kind = answer.get(position, ("", ""))
-                position += 1
-                moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind})
-                report["described_frames"] += bool(text)
-            items.append((row, moments, topic, any(m["text"] for m in moments)))
+            for k, frame in enumerate(got):
+                text, kind_ = own.get(offset + k, ("", ""))
+                moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind_})
+            if any(m["text"] for m in moments):
+                items.append((row, moments, topic, True))
+                report["described_frames"] += sum(1 for m in moments if m["text"])
+            else:
+                failed.append(item)         # answered, but nothing usable for this video
         _write_batch(items)
         report["indexed"] += len(items)
-    from concurrent.futures import as_completed
+        if failed:
+            _note_failed(failed)
     with execution.ThreadPoolExecutor(max_workers=DESCRIBE_WORKERS) as pool:
         futures = [pool.submit(run, sheet) for sheet in sheets]
         saved = set()
@@ -695,13 +779,16 @@ def _build_chunk(bili, chunk, check, progress, report, describe):
                 saved.add(future)
                 progress(0.4 + 0.59 * n / max(1, len(sheets)), f"描述画面 {n}/{len(sheets)} 张联系表")
         except BaseException:
+            halt.set()                   # running sheets finish their current request and stop
             for future in futures:
                 future.cancel()
-            for future in futures:      # answers that came back before the stop are paid for: keep them
-                if future not in saved and future.done() and not future.cancelled() and future.exception() is None:
+            wait(futures)
+            for future in futures:       # answers that came back are paid for: keep them
+                if future not in saved and not future.cancelled() and future.exception() is None:
                     try:
                         save(*future.result())
                     except Exception:
                         pass
             raise
     progress(1.0, "已保存")
+    return refused
