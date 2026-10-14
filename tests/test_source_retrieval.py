@@ -34,7 +34,7 @@ def test_source_grouping_uses_original_activity_without_repeating_untested_queri
     captured = []
     def chat(system, user, **options):
         captured.append((system, json.loads(user), options))
-        return {"groups": [{"indices": [0], "queries": ["工人 车间工作记录", "生产流程 实拍"]}]}, {}
+        return {"groups": [{"label": "车间工作", "indices": [0], "queries": ["工人 车间工作记录", "生产流程 实拍"]}]}, {}
     monkeypatch.setattr(planner, "chat", chat)
     pooled_match.retrieval_groups(project, shots)
     system, payload, options = captured[0]
@@ -105,8 +105,9 @@ def test_source_rescue_retains_broad_alternative_then_actual_uncovered_activity(
     project, shots, group = scenario()
     before = deepcopy(shots)
     rescue = pooled_match.online_rescue_queries([group], shots, shots, {group['queries'][0]: []})
-    assert list(rescue) == [group['queries'][1], '车间生产']
-    assert '工人加工' not in rescue  # Only "工人" is grounded in this source sentence.
+    # Source-pool groups no longer re-add per-shot contract hints (see online_rescue_queries).
+    assert list(rescue) == [group['queries'][1]]
+    assert not {'车间生产', '工人加工'} & rescue.keys()
     assert shots == before
     assert pooled_match.online_rescue_queries([group], shots, [], {group['queries'][0]: []}) == {}
 
@@ -135,15 +136,22 @@ def test_generic_metadata_path_skips_cover_model_but_never_downloads_blindly(tmp
     monkeypatch.setattr(pooled_match, "retrieval_groups", lambda *a: ([group], {}))
     monkeypatch.setattr(video_sources, "search_videos", lambda *a, **kw: (rows, []))
     monkeypatch.setattr(video_sources, "inspect_video_candidate", lambda c, *a: c)
-    monkeypatch.setattr(pooled_match, "discover_windows", lambda *a: ({}, {}, {
+    monkeypatch.setattr(pooled_match, "discover_windows", lambda *a, **kw: ({}, {}, {
         "model_requests": 0, "sampled_bytes": 0, "failures": []}))
     def unexpected(*a, **kw):
         pytest.fail("Metadata must not authorize a cover model or blind window download")
     monkeypatch.setattr(planner, "rank_candidates", unexpected)
-    monkeypatch.setattr(planner, "chat", unexpected)
+    from jinggao import source_metadata
+    def chat(system, content, **options):
+        # The only permitted model call is the text-only source_ranking shortlist.
+        if system != source_metadata.PROTOCOL or options.get("vision"):
+            unexpected()
+        return ({"groups": [{"group_ref": "g0", "candidate_refs": ["g0:c0", "g0:c1", "g0:c2"]}]},
+                {"request_count": 1})
+    monkeypatch.setattr(planner, "chat", chat)
     monkeypatch.setattr(video_sources, "download_video_candidate", unexpected)
     stats = pooled_match.match(project, project["shots"], lambda: None, lambda *a: None)
-    assert stats["model_requests"] == 1  # The one existing grouping stage only.
+    assert stats["model_requests"] == 2  # Grouping plus one text-only source_ranking batch.
     assert stats["downloads"] == stats["selected"] == 0
     audit = stats["candidate_screening"][0]
     assert audit["cover_limit"] == 0 and audit["method"] == "source_metadata_to_actual_frames"

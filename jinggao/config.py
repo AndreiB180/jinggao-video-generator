@@ -11,13 +11,16 @@ from . import paths
 DEFAULTS = {
     "model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model_api_key": "", "model_name": "qwen3.7-flash",
     "vision_model": "qwen3.7-flash", "tavily_api_key": "", "pixabay_api_key": "", "pexels_api_key": "", "coverr_api_key": "",
-    "planning_model": "", "requirements_model": "", "review_model": "",
-    "tts_provider": "baidu_http", "tts_base_url": "https://api.openai.com/v1",
+    "planning_model": "", "requirements_model": "", "review_model": "", "rewrite_model": "",
+    "tts_provider": "qwen_tts", "qwen_tts_voice": "Ethan", "tts_speed": "1.1", "tts_daily_budget_cny": "5.00",
+    "tts_migrated": "",
+    "export_dir": "", "auto_save_exports": "1",
+    "tts_base_url": "https://api.openai.com/v1",
     "tts_api_key": "", "tts_model": "", "tts_voice": "alloy",
     "tts_pricing_json": "",
     "encoder": "auto", "search_provider": "mixed",
     "baidu_voice_name": "磁性专业很灵动",
-    "plan_workers": "3", "match_workers": "3", "render_workers": "2",
+    "plan_workers": "3", "match_workers": "3", "render_workers": "3",
     "plan_retries": "1",
     "source_plan_mode": "unified", "pixel_observer_mode": "joint",
     "model_project_budget_cny": "0.10", "model_daily_budget_cny": "3.00",
@@ -26,6 +29,9 @@ DEFAULTS = {
     "cost_input_per_million": "", "cost_cached_per_million": "", "cost_output_per_million": "",
     "cost_image_tokens": "0",
     "pipeline": "express", "express_final_check": "1",
+    "subtitle_font": "black", "subtitle_size": "84", "subtitle_color": "white",
+    "news_crawler_dir": "", "news_crawler_command": "", "news_crawler_output": "",
+    "news_crawler_limit": "5", "news_crawler_platforms": "",
 }
 SECRETS = {k for k in DEFAULTS if k.endswith("api_key")}
 _lock = threading.Lock()
@@ -37,6 +43,24 @@ def read() -> dict:
     if data["search_provider"] not in ("mixed", "video", "local"):
         data["search_provider"] = "mixed"
     return data
+
+
+def migrate() -> None:
+    """Baidu 一镜 voices were retired: a saved Baidu choice moves to 千问配音 once."""
+    p = paths.DATA / "settings.json"
+    if not p.exists():
+        return
+    with _lock:
+        data = json.loads(p.read_text("utf-8"))
+        if data.get("tts_migrated"):
+            return
+        if data.get("tts_provider") in ("baidu_web", "baidu_http"):
+            data["tts_provider"] = "qwen_tts"
+        data["tts_migrated"] = "1"
+        temporary = p.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+        os.chmod(temporary, 0o600)
+        temporary.replace(p)
 
 
 def public() -> dict:
@@ -59,8 +83,13 @@ def update(values: dict) -> dict:
                 raise ValueError("服务地址必须是 HTTP(S) 地址，不能包含用户名密码")
     if values.get("encoder", "auto") not in ("auto", "cpu", "nvenc"):
         raise ValueError("编码方式无效")
-    if values.get("tts_provider", "system") not in ("system", "compatible", "import", "baidu_web", "baidu_http"):
+    if values.get("tts_provider", "system") not in ("system", "qwen_tts", "compatible", "import", "baidu_web", "baidu_http"):
         raise ValueError("配音方式无效")
+    from . import qwen_tts
+    if values.get("qwen_tts_voice", qwen_tts.DEFAULT_VOICE) not in qwen_tts.NAMES:
+        raise ValueError("千问音色无效")
+    if values.get("tts_speed", "1.0") not in qwen_tts.SPEEDS:
+        raise ValueError("语速须为 1.0、1.1、1.2 或 1.3")
     if values.get("search_provider", "mixed") not in ("mixed", "video", "local"):
         raise ValueError("素材检索仅支持多源检索、视频检索或本地素材")
     for key in ("plan_workers", "match_workers", "render_workers"):
@@ -68,8 +97,19 @@ def update(values: dict) -> dict:
             raise ValueError("并发数须为 1 到 4")
     if values.get("pipeline", "express") not in ("express", "classic"):
         raise ValueError("制作流程须为 express 或 classic")
+    if values.get("auto_save_exports", "1") not in ("0", "1"):
+        raise ValueError("自动保存开关须为 0 或 1")
+    if values.get("export_dir", "") and not os.path.isabs(os.path.expanduser(values["export_dir"])):
+        raise ValueError("成片保存位置须是完整的文件夹路径")
     if values.get("express_final_check", "1") not in ("0", "1"):
         raise ValueError("成片抽检开关须为 0 或 1")
+    from . import subtitle_style
+    if values.get("subtitle_font", "black") not in subtitle_style.FONTS:
+        raise ValueError("字幕字体无效")
+    if values.get("subtitle_size", "84") not in subtitle_style.SIZES:
+        raise ValueError("字幕字号无效")
+    if values.get("subtitle_color", "white") not in subtitle_style.COLOURS:
+        raise ValueError("字幕颜色无效")
     if values.get("plan_retries", "1") not in ("0", "1"):
         raise ValueError("分镜格式重试次数须为 0 或 1")
     if values.get("source_plan_mode", "legacy") not in ("legacy", "unified"):
@@ -81,7 +121,8 @@ def update(values: dict) -> dict:
         data = read() | values
         from .tts_costs import validate_pricing
         validate_pricing(data["tts_pricing_json"])
-        for key in ("model_project_budget_cny", "model_daily_budget_cny", "model_provider_budget_cny", "model_job_budget_cny"):
+        for key in ("model_project_budget_cny", "model_daily_budget_cny", "model_provider_budget_cny", "model_job_budget_cny",
+                    "tts_daily_budget_cny"):
             if key == "model_provider_budget_cny" and data[key] == "":
                 continue
             try:

@@ -324,7 +324,7 @@ def test_worker_stops_before_paid_review_when_local_alignment_fails(project, mon
 def test_single_verify_uses_aligned_duration_and_preserves_other_shots(project, monkeypatch):
     save_track(project)
     calls = []
-    monkeypatch.setattr(planner, "verify", lambda pid, shot, asset:
+    monkeypatch.setattr(planner, "verify", lambda pid, shot, asset, check=None:
                         calls.append(shot["duration"]) or {"verdict": "match"})
     worker.process(store.enqueue(project["id"], "verify", {"shot_id": project["shots"][0]["id"]}))
     result = store.get_project(project["id"])

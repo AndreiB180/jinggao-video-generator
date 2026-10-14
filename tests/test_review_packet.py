@@ -156,7 +156,7 @@ def test_chat_reuses_raw_judgment_without_a_second_paid_request(tmp_path, monkey
         time.sleep(.02)  # Other callers reach the same in-flight cache fill.
         assert json.loads(sent[-1]["messages"][1]["content"])["schema"] == "review_records_v1"
         return httpx.Response(200, request=httpx.Request("POST", url), json={
-            "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(strict_answer(answer(), typed=True))}}],
+            "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(strict_answer(answer()))}}],
             "usage": {"prompt_tokens": 200, "completion_tokens": 100}})
     monkeypatch.setattr(network, "post", respond)
     content = [{"type": "text", "text": json.dumps(r, ensure_ascii=False)} for r in records()]

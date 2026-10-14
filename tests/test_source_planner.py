@@ -31,11 +31,76 @@ def row(ref, *, facts=(), must=(), refs=(), use="illustration", queries=("相关
 
 
 def reply(request):
-    units = {u["ref"]: u["text"] for u in request["script_units"]}
+    # source_planner_v3_ids: cite immutable source-part IDs, never quoted text.
+    units = {u["ref"]: u["parts"] for u in request["script_units"]}
     return {"contracts": [row(ref) for ref in request["targets"]],
             "presentation": [{"ref": ref, "persons": [], "event_persons": [], "event": [],
-                              "sources": [[ref, units[ref].strip()[:160]]]}
+                              "sources": [units[ref][0]["id"]]}
                              for ref in request["targets"]]}
+
+
+def source_text(parts_or_units):
+    """Concatenate v3 request text: script_units[].parts[].text or requirements[].text."""
+    return "".join(part["text"] for item in parts_or_units for part in item.get("parts", [item]))
+
+
+from jinggao import source_units
+
+
+def _legacy_quote_to_id(lookup, ref, quote, kind=None):
+    """Map a legacy [kind, ref, quote] fixture onto the v3 part/clause ID containing it.
+
+    Unmappable quotes are left unchanged so the strict v3 compiler rejects them.
+    """
+    rows = [(k, v) for k, v in lookup.items() if v["source_ref"] == ref and quote.strip() and quote.strip() in v["text"]]
+    if not rows:
+        return None
+    if kind in ("event", "event_date"):
+        exact = [k for k, v in rows if v["text"].strip().rstrip("；;。") == quote.strip()]
+        if exact:
+            return exact[0]
+    parents = [k for k, v in rows if "parent_id" not in v]
+    return (parents or [rows[0][0]])[0]
+
+
+def legacy_quotes_to_ids(project, shots, responses):
+    _, lookup = source_units.build(project, shots)
+    out = deepcopy(responses)
+    for response in out if isinstance(out, list) else []:
+        if not isinstance(response, dict):
+            continue
+        for contract in response.get("contracts") or []:
+            for field in ("facts", "must"):
+                values = contract.get(field)
+                if not isinstance(values, list):
+                    continue
+                converted = []
+                for value in values:
+                    key = (_legacy_quote_to_id(lookup, value[1], value[2], value[0])
+                           if isinstance(value, list) and len(value) == 3 and all(isinstance(x, str) for x in value)
+                           else None)
+                    if key is None:
+                        converted.append(value)
+                    elif value[0] == "person" and field == "facts":
+                        converted.append(["person", key, value[2]])
+                    else:
+                        converted.append([value[0], key])
+                contract[field] = converted
+        for row in response.get("presentation") or []:
+            if isinstance(row, dict) and isinstance(row.get("sources"), list):
+                row["sources"] = [(_legacy_quote_to_id(lookup, *v) or v)
+                                  if isinstance(v, list) and len(v) == 2 and all(isinstance(x, str) for x in v) else v
+                                  for v in row["sources"]]
+    return out
+
+
+_compile_v3 = source_planner.compile_responses
+
+
+@pytest.fixture(autouse=True)
+def legacy_quote_fixtures(monkeypatch):
+    monkeypatch.setattr(source_planner, "compile_responses", lambda project, shots, responses, **kw:
+                        _compile_v3(project, shots, legacy_quotes_to_ids(project, shots, responses), **kw))
 
 
 def response_for(p):
@@ -62,12 +127,12 @@ def test_build_retains_entire_source_and_requirements_without_primary_or_repeate
     requests = source_planner.build_requests(p, shots)
     assert len(shots) == 34 and len(requests) == 1
     assert "".join(s["narration"] for s in shots) == p["script"]
-    assert "".join(u["text"] for u in requests[0]["script_units"]) == p["script"]
-    assert requests[0]["requirements"] == p["requirements"]
+    assert source_text(requests[0]["script_units"]) == p["script"]
+    assert source_text(requests[0]["requirements"]) == p["requirements"]
     assert requests[0]["source_unit_ids"] == [
         {"ref": f"s{i}", "source_unit_id": f"u{i:04d}"} for i in range(1, 35)]
     assert "primary" not in json.dumps(requests, ensure_ascii=False)
-    assert "只返回JSON {\"contracts\"" in source_planner.SYSTEM
+    assert "只返回JSON对象，顶层恰好contracts和presentation" in source_planner.SYSTEM
     assert "姓名、型号" not in json.dumps(requests, ensure_ascii=False)
 
 
@@ -313,7 +378,7 @@ def test_mock_cold_request_then_whole_cache_recompile_counts_zero_paid_requests_
         request = json.loads(content)
         calls.append(request)
         assert system == source_planner.SYSTEM and options == source_planner.OPTIONS
-        assert "".join(u["text"] for u in request["script_units"]) == p["script"]
+        assert source_text(request["script_units"]) == p["script"]
         return reply(request), {"model": "mock-contract", "request_count": 1,
                                 "usage": {"prompt_tokens": 123, "completion_tokens": 45}}
 
@@ -896,7 +961,7 @@ def test_paid_raw_response_is_saved_before_compile_rejects_it_with_safe_metadata
     assert recorded["status"] == "failed" and recorded["request_count"] == 1
     assert recorded["system"] == source_planner.SYSTEM
     assert recorded["batches"][0]["response"] == response
-    assert "".join(u["text"] for u in recorded["batches"][0]["request"]["script_units"]) == p["script"]
+    assert source_text(recorded["batches"][0]["request"]["script_units"]) == p["script"]
     assert error.value.diagnostic_path == str(path)
     assert not list((paths.DATA / "cache" / "source-planning").glob("*.json"))
 

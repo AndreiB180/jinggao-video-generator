@@ -11,7 +11,7 @@ import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from . import local_asr, paths
+from . import local_asr, paths, subtitle_style
 
 VERSION = 1
 ALIGNMENT_VERSION = 3
@@ -25,6 +25,10 @@ class CharacterTimingRequired(ValueError):
 
 class AcousticBoundaryRequired(ValueError):
     """A cut lacks observed token edges; interpolation cannot prove it."""
+
+
+def width(text):
+    return subtitle_style.width(text)
 
 
 def clean(text):
@@ -42,39 +46,42 @@ def _words(text):
 
 
 def parts(text, max_chars=36):
-    """Keep whole sentences, then clauses; word breaks are the last resort."""
+    """Keep whole sentences, then clauses; word breaks are the last resort.
+
+    max_chars is a display width: Latin letters and digits count about half a character."""
     text = clean(text)
     sentences = re.findall(r"[^。！？!?；;]+[。！？!?；;]*|[。！？!?；;]+", text)
     result = []
     for sentence in sentences:
-        if len(sentence) <= max_chars:
+        if width(sentence) <= max_chars:
             result.append(sentence)
             continue
-        clauses = re.findall(r"[^，,：:]+[，,：:]*|[，,：:]+", sentence)
+        clauses = re.findall(r"[^，,：:、]+[，,：:、]*|[，,：:、]+", sentence)
         units = []
         for clause in clauses:
-            if len(clause) <= max_chars:
+            if width(clause) <= max_chars:
                 units.append(clause)
                 continue
-            current = ""
+            # Word units; punctuation stays with the word before it so no line starts or ends as a lone mark.
             for word in _words(clause):
-                if current and len(current + word) > max_chars:
-                    units.append(current)
-                    current = ""
-                current += word
-            if current:
-                units.append(current)
+                if units and (re.fullmatch(r"[^\w]+", word) or not units[-1]):
+                    units[-1] += word
+                else:
+                    units.append(word)
+        if len(units) > 1 and re.fullmatch(r"[^\w]+", units[0]):
+            units[1] = units[0] + units[1]
+            units = units[1:]
         # Balance groups of clauses instead of greedily filling a fixed width.
         # This keeps e.g. “收货的时候，箱子……” together.
         best = [(0, [])] + [(float("inf"), []) for _ in units]
-        target = len(sentence) / math.ceil(len(sentence) / max_chars)
+        target = width(sentence) / math.ceil(width(sentence) / max_chars)
         for end in range(1, len(units) + 1):
             for start in range(end):
                 phrase = "".join(units[start:end])
-                if len(phrase) > max_chars and end-start > 1:
+                if width(phrase) > max_chars and end-start > 1:
                     continue
                 dangling = bool(re.search(r"(?:时候|之后|之前|以后|来说|而言|的话)[，,：:]$", phrase))
-                cost = best[start][0] + (len(phrase)-target)**2 + 80 + (500 if dangling else 0)
+                cost = best[start][0] + (width(phrase)-target)**2 + 80 + (500 if dangling else 0)
                 if cost < best[end][0]:
                     best[end] = cost, best[start][1] + [phrase]
         result.extend(best[-1][1])
@@ -82,7 +89,7 @@ def parts(text, max_chars=36):
 
 
 def wrap(text, line_chars=20):
-    if len(text) <= line_chars:
+    if width(text) <= line_chars:
         return text
     boundaries, offset = [], 0
     for word in _words(text):
@@ -237,8 +244,17 @@ def align(text, words, duration):
     positions = [[] for _ in source]
     for index, origin in enumerate(owner):
         positions[origin].append(index)
+    # A character folded into its neighbour when spoken ("10" is read as one syllable) gets a zero-length
+    # time at the end of the character before it (or the start of the next one).
+    folded = [i for i, js in enumerate(positions) if not js]
+    for i in folded:
+        positions[i] = [positions[i-1][-1]] if i and positions[i-1] else \
+            next(([later[0]] for later in positions[i+1:] if later), [0])
     mapping = [(mapping[js[0]][0], mapping[js[-1]][1]) for js in positions]
     anchors = [(anchors[js[0]][0], anchors[js[-1]][1]) for js in positions]
+    for i in folded:
+        edge = mapping[i-1][1] if i else mapping[i][0]
+        mapping[i], anchors[i] = (edge, edge), (anchors[i-1][1], anchors[i-1][1]) if i else anchors[i]
     for row in substitutions:
         row["character_offset"] = owner[row["character_offset"]]
     original = source
@@ -410,9 +426,17 @@ def shot_timing(project, track):
     boundaries.append(math.ceil(duration*25-1e-7))
     lengths = [end-begin for begin, end in zip(boundaries, boundaries[1:], strict=False)]
     if any(not 25 <= frames <= 3000 for frames in lengths):
-        raise ValueError("真实语音对应的镜头不足 1 秒或超过 120 秒，请调整分镜；已保留音频")
+        raise ShotLengthOutOfRange([i for i, frames in enumerate(lengths) if frames < 25],
+                                   [i for i, frames in enumerate(lengths) if frames > 3000])
     return {"version": 1, "fps": 25, "binding": track.get("binding"), "frames": boundaries,
             "durations": [frames/25 for frames in lengths], "boundaries": evidence}
+
+
+class ShotLengthOutOfRange(ValueError):
+    """Real speech gives some shots under 1 s (short) or over 120 s (long); indices are shot positions."""
+    def __init__(self, short, long):
+        super().__init__("真实语音对应的镜头不足 1 秒或超过 120 秒，请调整分镜；已保留音频")
+        self.short, self.long = short, long
 
 
 def ensure_shot_timing(project, check=lambda: None, progress=lambda *_: None):
@@ -432,10 +456,56 @@ def ensure_shot_timing(project, check=lambda: None, progress=lambda *_: None):
         return shot_timing(project, track)
 
 
-def segments(track, offset, duration, w, h):
-    return [(round(max(0, c["start"] - offset), 3), round(min(duration, c["end"] - offset), 3),
-             wrap(c["text"], 24 if w > h else 20)) for c in track["cues"]
-            if c["end"] > offset and c["start"] < offset + duration]
+def segments(track, offset, duration, w, h, narration=None, char_offset=0, line_chars=None):
+    """On-screen lines of one shot: one line at a time, each timed to its own spoken characters.
+
+    narration/char_offset locate the shot in the track's text; without character timing
+    (old caches) whole cues are split into lines in proportion to their characters."""
+    line_chars = line_chars or subtitle_style.line_chars(w, h)
+    spans = (track.get("character_timing") or {}).get("spans")
+    if narration and isinstance(spans, list):
+        pieces = [p for p in parts(narration, line_chars) if _normal(p)]
+        total = sum(len(_normal(p)) for p in pieces)
+        if pieces and char_offset + total <= len(spans):
+            rows, k = [], char_offset
+            for piece in pieces:
+                n = len(_normal(piece))
+                rows.append([float(spans[k][0]) - offset, float(spans[k+n-1][1]) - offset, piece])
+                k += n
+            # On screen from the cut until the next line starts, so no line flickers off between words.
+            rows[0][0] = 0.0
+            for before, after in zip(rows, rows[1:], strict=False):
+                cut = min(max(after[0], before[0]), duration)
+                before[1], after[0] = cut, cut
+            rows[-1][1] = duration
+            return [(round(max(0.0, a), 3), round(min(duration, b), 3), wrap(text, line_chars))
+                    for a, b, text in rows if b > a]
+    # Old cue-only caches: split each cue into lines by character share; a line belongs to the shot that
+    # holds its middle, and stays up until the next line (no flicker at the cut).
+    rows = []
+    for cue in track["cues"]:
+        if not (cue["end"] > offset and cue["start"] < offset + duration):
+            continue
+        pieces = parts(cue["text"], line_chars)
+        weights = [max(1, len(_normal(p))) for p in pieces]
+        start, span, done = float(cue["start"]), float(cue["end"]) - float(cue["start"]), 0
+        for piece, weight in zip(pieces, weights, strict=True):
+            a = start + span * done / sum(weights)
+            done += weight
+            b = start + span * done / sum(weights)
+            if offset <= (a + b) / 2 < offset + duration:
+                rows.append([max(0.0, a - offset), min(duration, b - offset), piece])
+    if not rows:
+        return []
+    for before, after in zip(rows, rows[1:], strict=False):
+        before[1] = after[0]
+    rows[-1][1] = duration if rows[-1][1] >= duration - .5 else rows[-1][1]
+    return [(round(a, 3), round(b, 3), wrap(text, line_chars)) for a, b, text in rows if b > a]
+
+
+def char_offset(shots, index):
+    """Position of shot index within the full narration's normalised characters."""
+    return sum(len(_normal(s["narration"])) for s in shots[:index])
 
 
 def frame_duration(value):

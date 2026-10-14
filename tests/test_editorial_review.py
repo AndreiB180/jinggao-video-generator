@@ -108,12 +108,9 @@ def test_screen_command_reaches_real_audit_without_becoming_pixel_or_identity_ev
         assert payload["frame_observations"][0]["text"] == []
         local = payload["source_context"]["postproduction_text_checks"][0]
         assert local["key"] == "must_1" and local["evidence"][0]["source_text"] == "1750.8亿件"
-        if offline_review_config == "strict":
-            assert "onscreen_text服从postproduction_text_checks" in system
-            assert "原片无需带后期文字，叠字不证明身份/动作/数字" in system
-        else:
-            assert "不得因原片没有后期文字而误拒" in system
-            assert "后期文字也不能证明原片身份、数字或动作" in system
+        # v60 wording (editorial_review.PROTOCOL) is shared by the strict and legacy transports.
+        assert "postproduction_text_checks对照实际overlay_label逐字检查" in system
+        assert "不要求原素材自带，不作为原片身份/动作/统计证据" in system
         checks = [{"key": key, "status": "supported", "reason": "实际搬运", "evidence": evidence}
                   for key in payload["selected_visual_requirements"] if change != "missing-action" or key != "must_2"]
         return {"reviews": [{"shot_id": shot["id"], "status": "supported", "reason": "内容与用途相符",

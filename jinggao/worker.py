@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import contextvars
 from copy import deepcopy
 import time
 import multiprocessing
 import os
+import re
 import threading
 
-from . import config, costs, curation, execution, identity, instance, media, paths, planner, power, sources, store, video_sources
+from . import (captions, config, costs, curation, execution, express_plan, identity, instance, media, paths, planner, power,
+               sources, store, video_sources)
 
 
 def shot_by_id(project: dict, shot_id: str) -> dict:
@@ -21,7 +24,18 @@ def ensure_narration_alignment(pid, check=lambda: None, progress=lambda *_: None
     if not project.get("full_audio"):
         return project
     progress(0, "正在用本地语音时间戳对齐镜头，复用已有字幕缓存")
-    proposal = media.prepare_narration_alignment(project, check, progress)
+    for _ in range(4):
+        try:
+            proposal = media.prepare_narration_alignment(project, check, progress)
+            break
+        except captions.ShotLengthOutOfRange as exc:
+            # Fast voices (Baidu reads ~5 characters a second) can make a short line last under 1 s.
+            # In express projects such a shot joins its neighbour; the narration audio is unchanged.
+            if exc.long or not exc.short or not curation.express_project(project):
+                raise
+            project = store.mutate(pid, lambda p: express_plan.merge_short(p, exc.short), internal=True)
+    else:
+        raise ValueError("真实语音对应的镜头不足 1 秒，自动合并后仍未对齐，请调整分镜；已保留音频")
     check()
     return store.mutate(pid, lambda p: media.apply_narration_alignment(p, proposal), internal=True)
 
@@ -247,9 +261,85 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
                 timings[name] = round(time.monotonic()-began, 3)
                 wall_timings[name] = round(time.time()-wall_began, 3)
                 save_workflow(current_stage=name)
+        if not project["shots"] and not project.get("script", "").strip() and project.get("source_audio"):
+            stage("transcribe", "0/4 识别音频文字", 0, 5)
+            project = store.get_project(pid)
+        if not project["shots"] and not project.get("script", "").strip() and (project.get("news") or {}).get("text"):
+            stage("rewrite", "0/4 AI 洗稿", 0, 5)
+            project = store.get_project(pid)
+        early = None
+        if (not project["shots"] and project.get("script", "").strip() and not project.get("full_audio")
+                and not project.get("source_audio") and config.read().get("pipeline", "express") == "express"
+                and config.read().get("tts_provider") == "qwen_tts"):
+            # 千问配音 needs only the standard text, not the shots: put the script in its standard form, then
+            # voice it while the shots are planned (the account allows three speech requests at a time).
+            from . import script_norm
+            progress(1, "1/4 规划分镜 · 整理文稿标点")
+            standard, _ = script_norm.normalize(project["script"], check)
+            def keep_standard(p):
+                if standard and standard != p["script"]:
+                    p["script_original"] = p.get("script_original") or p["script"]
+                    p["script"] = standard
+            project = store.mutate(pid, keep_standard, internal=True)
+            early = {"target": paths.project_dir(pid) / "audio" / f"{store.uid()}.wav", "error": None,
+                     "began": time.monotonic(), "wall": time.time()}
+            def voice_early():
+                try:
+                    media.synthesize(standard, early["target"], check)
+                except BaseException as exc:   # reported (or retried by the voice stage) after planning
+                    early["error"] = exc
+                finally:
+                    early["seconds"] = round(time.monotonic() - early["began"], 3)
+            early["thread"] = threading.Thread(target=contextvars.copy_context().run, args=(voice_early,),
+                                               name="early-voice", daemon=True)
+            early["thread"].start()
         if not project["shots"]:
-            stage("plan", "1/4 规划分镜", 0, 12, mode="model", replace=False)
+            stage("plan", "1/4 规划分镜" + ("（同时生成配音）" if early else ""), 0 if not project.get("news") else 5, 12,
+                  mode="model", replace=False)
+        if early:
+            progress(12, "2/4 生成完整配音 · 等待配音完成")
+            early["thread"].join()
+            timings["voice_full"], wall_timings["voice_full"] = early.get("seconds", 0), round(time.time() - early["wall"], 3)
+            save_workflow(current_stage="voice_full")
+            if isinstance(early["error"], (media.Cancelled, costs.BudgetExceeded)):
+                raise early["error"]
+            if early["error"] is None:
+                duration = float(media.probe(early["target"])["format"]["duration"])
+                def attach_voice(p):
+                    if p.get("full_audio") or any(s.get("audio") for s in p["shots"]):
+                        return
+                    media.align_narration(p, {"path": early["target"].relative_to(paths.project_dir(pid)).as_posix(),
+                                              "duration": duration, "text": p["script"], "title": "整段自动配音",
+                                              "provider": "qwen_tts"})
+                store.mutate(pid, attach_voice, internal=True)
+            # Any other failure: the voice stage below tries again and reports it.
         project = store.get_project(pid)
+        if project.get("source_audio") and not project.get("full_audio") and not any(s.get("audio") for s in project["shots"]):
+            # 音频成片: the uploaded narration is the soundtrack; shots are aligned to it and nothing is voiced.
+            def attach(p):
+                source = p["source_audio"]
+                media.align_narration(p, {"path": source["path"], "duration": source["duration"],
+                                          "title": source.get("title") or "上传的音频", "text": p["script"]})
+            project = store.mutate(pid, attach, internal=True)
+        warmup = None
+        pending_voice = not project.get("full_audio") and not all(s.get("audio") for s in project["shots"])
+        to_match = [s for s in project["shots"] if not s.get("locked") and (not s.get("selected_asset") or not s.get("approved"))
+                    and not (s.get("selected_asset") and curation.manual_choice(s))]
+        if (config.read().get("pipeline", "express") == "express" and (project.get("plan_info") or {}).get("mode") == "express"
+                and pending_voice and to_match and config.read().get("model_api_key")):
+            # Footage search and preview sheets need no narration: fetch them while the voice is made and aligned.
+            snapshot = deepcopy(project)
+            def warm():
+                try:
+                    from . import express_match
+                    wanted = {s["id"] for s in to_match}
+                    express_match.warm(snapshot, [s for s in snapshot["shots"] if s["id"] in wanted], check)
+                except Exception:
+                    pass      # only a head start; the matching stage does the real work
+            # Same cost scope (project/job budget) and cancel check as the job itself.
+            warmup = threading.Thread(target=contextvars.copy_context().run, args=(warm,), name="express-warmup",
+                                      daemon=True)
+            warmup.start()
         if not project.get("full_audio") and not all(s.get("audio") for s in project["shots"]):
             if any(s.get("locked") and not s.get("audio") for s in project["shots"]):
                 raise ValueError("锁定镜头缺少配音，请先解锁或导入该镜配音")
@@ -265,6 +355,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             timings["align"] = round(time.monotonic()-began, 3)
             wall_timings["align"] = round(time.time()-wall_began, 3)
             save_workflow(current_stage="align")
+        if warmup is not None:
+            warmup.join(timeout=240)
         # Generating a new full audio track can change durations and invalidate
         # old reviews. Recheck retained assets before deciding the job needs help.
         current_assets = {a["id"]: a for a in project["assets"]}
@@ -321,7 +413,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             wall_timings["verify"] = round(time.time()-wall_began, 3)
         project = store.mutate(pid, curation.approve_verified, internal=True)
         retry_shots = [s["id"] for s in project["shots"] if not s.get("locked")
-                       and (not s.get("selected_asset") or not s.get("approved"))]
+                       and (not s.get("selected_asset") or not s.get("approved"))
+                       and not (s.get("selected_asset") and curation.manual_choice(s))]
         if retry_shots:
             stage("match", "3/4 匹配实际画面", 30 if retained else 22, 75,
                   shot_ids=retry_shots, replace=True, shared_pool=True)
@@ -351,6 +444,56 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             store.job_update(jid, status="completed", progress=100,
                              message=message)
         return
+    elif kind == "transcribe":
+        from . import local_asr, script_norm
+        import tempfile
+        from pathlib import Path
+        source = project.get("source_audio")
+        if not source:
+            raise ValueError("项目没有上传的音频")
+        progress(5, "本地识别音频里的文字 · 不调用付费模型")
+        with tempfile.TemporaryDirectory(prefix="transcribe-", dir=paths.project_dir(pid)) as directory:
+            wav = Path(directory) / "speech.wav"
+            media.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-i", str(paths.file_path(pid, source["path"])),
+                       "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)], check=check)
+            words = local_asr.transcribe(wav, check, lambda share, message: progress(5 + 55 * share, message))
+        raw = "".join(str(w.get("text", "")) for w in words).strip()
+        if len(raw) < 4:
+            raise ValueError("没有从音频里识别出中文口播，请检查音频是否有人声")
+        progress(65, "按语义补全标点，整理成文稿")
+        script, _ = script_norm.normalize(raw, check)
+        def save_transcript(p):
+            if p["shots"] or p.get("script", "").strip():
+                raise ValueError("文稿已存在，未覆盖")
+            p["script"], p["script_original"] = script, raw
+            if p.get("title", "").strip() in ("", "未命名项目", "音频成片"):
+                first = next((part for part in re.split(r"[，,。！？!?；;\n]", script) if part.strip()), "音频成片")
+                p["title"] = first.strip()[:24]
+        store.mutate(pid, save_transcript, internal=True)
+    elif kind == "rewrite":
+        from . import rewrite
+        news = project.get("news") or {}
+        if not news.get("text"):
+            raise ValueError("项目没有可改写的新闻原文")
+        too_long = bool(news.get("minutes")) and len(news.get("koubo") or "") > news["minutes"] * rewrite.CHARS_PER_MINUTE * 1.15
+        if news.get("koubo") and not too_long:
+            # The news crawler already rewrote it (its own 口播 prompt, on Qwen): lay it out and fact-check it.
+            progress(10, "使用爬虫生成的口播稿，对照原文核对事实")
+            result = rewrite.from_crawler(news["koubo"], news["text"], title=news.get("koubo_title") or news.get("title", ""),
+                                          project_id=pid, check=check)
+        else:
+            progress(10, "正在改写新闻并对照原文核对事实")
+            result = rewrite.rewrite(news["text"], title=news.get("title", ""), minutes=news.get("minutes"),
+                                     aspect=project.get("aspect", "16:9"), project_id=pid, check=check)
+        def save(p):
+            if p["shots"] or p.get("script", "").strip():
+                raise ValueError("文稿已存在，未覆盖")
+            p["script"] = result["script"]
+            if result["title"] and p.get("title") in ("", news.get("title", ""), "新闻选题"):
+                p["title"] = result["title"]
+            p["news"] = news | {"rewrite": {k: result.get(k) for k in ("chars", "fixes", "check_numbers", "unmatched_fixes",
+                                                                         "checked", "model")}}
+        store.mutate(pid, save, internal=True)
     elif kind == "plan":
         if project["shots"] and not options.get("replace"):
             raise ValueError("已存在分镜，重新规划需要确认替换")
@@ -372,7 +515,12 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             shots, info = planner.plan(project, options.get("mode", "auto"), options.get("rewrite", False), check=check,
                                       progress=plan_progress)
         check()
+        standard = info.pop("script", None)
         def update(p):
+            if standard and standard != p.get("script"):
+                # Narration and subtitles use the standard text; the original stays restorable.
+                p["script_original"] = p.get("script_original") or p.get("script", "")
+                p["script"] = standard
             p["shots"] = shots
             p["plan_info"] = info
             p["full_audio"] = None
@@ -651,6 +799,7 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             s = shot_by_id(p, shot["id"])
             s.update(selected_asset=asset_id, approved=False, verification=None,
                      clip_start=asset.get("selected_clip_start", 0), source_review_note="", source_review_url="")
+            curation.manual_pick(p, s, asset)
         store.mutate(pid, select, internal=True)
     elif kind == "voice_full":
         if not project["shots"] or project.get("script_changed"):
@@ -694,9 +843,10 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
                      "text": shot["narration"]}
             def save_voice(p, sid=shot["id"], audio=audio, duration=duration):
                 current = shot_by_id(p, sid)
-                if abs(current["duration"] - duration) > .01:
-                    curation.invalidate(current)
+                retimed = abs(current["duration"] - duration) > .01
                 current.update(audio=audio, duration=duration)
+                if retimed and not curation.keep_express(p, current):
+                    curation.invalidate(current)
             store.mutate(pid, save_voice, internal=True)
     elif kind == "verify":
         shot = shot_by_id(project, options["shot_id"])
@@ -725,12 +875,21 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
                 # Privacy processing may have created a different, re-reviewed
                 # file. Install exactly that file, never the unmasked original.
                 current.update(selected_asset=reviewed_asset["id"], clip_start=start, match_preview=preview)
+            express = curation.express_result(current) if curation.express_project(p) else {}
+            manual = current.get("manual_asset")
             curation.invalidate(current)
-            current.update(verification=result)
+            # Express projects: the AI check is advice on top of the pick; the pick (and a manual choice) stays.
+            current.update(verification=result | ({"express": express} if express else {}))
+            if manual and manual == current.get("selected_asset"):
+                current["manual_asset"] = manual
             current.update(curation.reviewed_label_fields(result))
         store.mutate(pid, save_verification, internal=True)
     elif kind == "render":
         result = media.render(project, jid, options, progress, check)
+        try:
+            result["saved_to"] = media.deliver(project, result)
+        except OSError:
+            result["saved_to"] = ""      # the export stays in the project; only the copy failed
         store.mutate(pid, lambda p: p["exports"].insert(0, result), internal=True)
     else:
         raise ValueError("不支持的任务类型")

@@ -61,10 +61,8 @@ def test_animation_needs_explicit_label_and_then_the_same_content_judge(setup, o
     audit = planner.audit_selected_frames(records, lambda: None)["s"]
     assert audit["status"] == "supported" and len(calls) == 1
     assert audit["visual_quality"]["representation"] == "animation"
-    if offline_review_config == "strict":
-        assert "animation/mixed须实际标明示意，仍不能替代要求的实拍操作、人物或事件" in calls[0][0]
-    else:
-        assert "动画/建模即使标明示意，也不能替代原稿要求的实际操作、实录人物或事件" in calls[0][0]
+    # v60 uses one wording for both transports (planner evidence-review protocol).
+    assert "动画/建模即使标明示意，也不能替代原稿要求的实际操作、实录人物或事件" in calls[0][0]
 
 
 def test_quality_timeout_is_counted_and_does_not_become_a_pass(setup, monkeypatch):

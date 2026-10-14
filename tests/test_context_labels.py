@@ -54,9 +54,9 @@ def proposal(context, frames, *, historical=False):
 
 
 def ordinary_caption_checks(frames):
-    return [{"key": f"caption_{caption['caption_id']}", "status": "supported", "reason": "逐条核验原片文字",
-             "evidence": [{"frame_index": caption["frame_indices"][0], "field": "text", "quote": caption["text"]}]}
-            for caption in context_labels.frame_captions(frames)]
+    # v60 has no per-caption caption_cN obligations (context_labels.frame_captions does not exist);
+    # these legacy shots carry no editorial contract or visual plan, so no primary checks are required.
+    return []
 
 
 @pytest.mark.parametrize("historical", [False, True])
@@ -166,7 +166,7 @@ def test_relative_statistics_date_comes_only_from_same_verified_source(tmp_path)
     assert not context_labels.relative_statistics([frames[0] | {"text": ["目前正在处理快件"]}])
 
 
-@pytest.mark.usefixtures("isolated_pixel_quality")
+@pytest.mark.usefixtures("isolated_pixel_quality", "separate_pixel_observer")
 @pytest.mark.parametrize("judgment", ["supported", "conflict"])
 @pytest.mark.parametrize("manual", [False, True])
 def test_replacing_source_clears_only_automatic_date_after_fresh_review(tmp_path, monkeypatch, judgment, manual):
@@ -197,7 +197,7 @@ def test_replacing_source_clears_only_automatic_date_after_fresh_review(tmp_path
         assert not context_labels.selection_error(shot | fields | {"verification": verdict}, asset)
 
 
-@pytest.mark.usefixtures("isolated_pixel_quality")
+@pytest.mark.usefixtures("isolated_pixel_quality", "separate_pixel_observer")
 @pytest.mark.parametrize("judgment", ["supported", "conflict"])
 def test_dated_label_is_audited_before_commit_and_does_not_override_conflict(tmp_path, monkeypatch, judgment):
     from jinggao import curation, neutral_observer, planner

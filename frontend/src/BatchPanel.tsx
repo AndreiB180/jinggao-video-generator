@@ -18,7 +18,7 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
   for(const f of Array.from(files).slice(0,20)){const bytes=await f.arrayBuffer();let script;try{script=new TextDecoder('utf-8',{fatal:true}).decode(bytes)}catch{script=new TextDecoder('gb18030').decode(bytes)};if(script.trim())next.push({title:f.name.replace(/\.(txt|md)$/i,'').slice(0,100),script:script.trim()})}append(next);
  });
  const submit=()=>act(async()=>{await request('/batch',{projects:items.map(i=>({...i,aspect,media_policy:policy})),resolution});setItems([]);onCreated();await refresh()});
- return <div className="modal-backdrop"><section className="modal batch-modal" role="dialog" aria-modal="true" aria-label="批量制作"><div className="modal-heading"><div><span className="eyebrow">PRODUCTION QUEUE</span><h2>批量制作</h2></div><button className="icon-button" aria-label="关闭批量制作" onClick={close}><X/></button></div><div className="modal-content">
+ return <div className="modal-backdrop"><section className="modal batch-modal" role="dialog" aria-modal="true" aria-label="批量制作"><div className="modal-heading"><div><h2>批量制作</h2></div><button className="icon-button" aria-label="关闭批量制作" onClick={close}><X/></button></div><div className="modal-content">
   <p>多篇文稿依次完成分镜、配音、配素材和带字幕的视频。需要核对的项目单独保留，后面的文稿继续制作。</p>
   <label className="secondary small"><Upload size={16}/>导入多篇 TXT / MD<input hidden type="file" multiple accept=".txt,.md,text/plain" disabled={busy} onChange={e=>{importFiles(e.target.files);e.target.value=''}}/></label>
   <label>粘贴文稿 · 多篇之间用单独一行 --- 分隔<textarea rows={5} value={text} onChange={e=>setText(e.target.value)} placeholder="每篇文稿生成一个独立项目"/></label>

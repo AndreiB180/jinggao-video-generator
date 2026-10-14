@@ -246,6 +246,9 @@ def profile(images: list, size: tuple[int, int]) -> dict:
     for b in list(boxes):
         x0, y0, x1, y1 = b["box"]
         b["central"] = _edge_distance(b["box"]) > 0.12
+        if not b["central"] and not _overlay_position(b["box"], size, len(frames)):
+            b["pattern"] = None   # not an overlay position: likely fixed scenery
+            continue
         if b["central"] and not texty(b["box"]):
             b["pattern"] = None
             continue
@@ -282,6 +285,23 @@ def _inside(mask, content, band: int = 4):
     left, right = int(x0 * w) + (band if x0 > 0 else 0), int(round(x1 * w)) - (band if x1 < 1 else 0)
     keep[max(0, top):max(0, bottom), max(0, left):max(0, right)] = True
     return mask & keep
+
+
+def _tight_corner(box) -> bool:
+    """Hugging a side and the top or bottom: where stations and stock sites put their marks."""
+    x0, y0, x1, y1 = box
+    return (x0 <= .06 or x1 >= .94) and (y0 <= .2 or y1 >= .8) and (x1 - x0) * (y1 - y0) <= .05
+
+
+def _overlay_position(box, size, frames: int) -> bool:
+    """Where overlays sit: a tight corner, a top or bottom band, a vertical strip or panel on a side, or a
+    wide line of text. Small marks part-way down a side are usually scenery that never moved (a gym)."""
+    x0, y0, x1, y1 = box
+    w, h = (x1 - x0) * size[0], (y1 - y0) * size[1]
+    return (_tight_corner(box) or y1 <= .22 or y0 >= .78
+            or ((x0 <= .06 or x1 >= .94) and x1 - x0 <= .1 and h >= 1.8 * w)
+            or ((x0 <= .02 or x1 >= .98) and y1 - y0 >= .3)
+            or (frames >= 20 and x1 - x0 >= .12 and w >= 2.5 * h))
 
 
 def _logo_shaped(box, size) -> bool:
@@ -520,17 +540,36 @@ def safe_crop(boxes, content, src_aspect: float, out_aspect: float, max_zoom: fl
     return [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)], round(1 / scale, 3), residual
 
 
+def spread(frames) -> float:
+    """Mean grey-level distance of the window's frames from their median (coarse): a fixed camera on one
+    scene stays low, cuts and camera moves are high."""
+    small = [np.asarray(Image.fromarray(f.astype(np.uint8)).resize((48, 27), Image.BILINEAR), dtype=np.float32)
+             for f in frames]
+    median = np.median(np.stack(small), axis=0)
+    return float(np.mean([np.abs(f - median).mean() for f in small]))
+
+
 def motion(frames) -> dict:
-    """Share of one-second steps where (almost) no pixel changes: slideshow stills, frozen frames."""
+    """Share of one-second steps where (almost) no pixel changes: slideshow stills, frozen frames.
+    dark: a quarter or more of the sampled frames are uniformly black (black screens, fades at an intro)."""
     steps = [float((np.abs(b - a) > 20).mean()) for a, b in zip(frames, frames[1:], strict=False)]
     frozen = sum(1 for f in steps if f < 0.004)
-    return {"frozen": frozen, "steps": len(steps), "still": bool(steps) and frozen >= 0.55 * len(steps)}
+    black = sum(1 for f in frames if float(f.mean()) < 14 and float(f.std()) < 10)
+    return {"frozen": frozen, "steps": len(steps), "still": bool(steps) and frozen >= 0.55 * len(steps),
+            "dark": bool(frames) and black >= max(1, 0.25 * len(frames))}
+
+
+# Where a TV station's channel logo sits (CCTV and the provincial 卫视 put it top-left), as a share of the
+# picture. These logos are semi-transparent and often missed by the edge checks, so a broadcast source
+# gets this box even when nothing was detected there.
+CHANNEL_LOGO = (0.0, 0.0, 0.16, 0.13)
 
 
 def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float, source: dict | None = None,
-            sprites: list | None = None, window_start: float = 0.0) -> dict:
+            sprites: list | None = None, window_start: float = 0.0, channel_logo: bool = False) -> dict:
     """clip_size: (w, h) of the local clip; source: profile() of the preview frames of the same video;
-    sprites: [(source_time, PIL image)] preview frames, used for static pictures."""
+    sprites: [(source_time, PIL image)] preview frames, used for static pictures; channel_logo: the
+    source is a TV broadcast, so the top-left channel logo area is treated as a logo."""
     if np is None:
         return {}
     cw, chh = clip_size
@@ -542,14 +581,26 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
     content = content_rect(frames)
     still = motion(frames)
     source_boxes = (source or {}).get("boxes", []) if tuple((source or {}).get("size") or ()) == size else []
+    # A fixed camera on one scene (a gym, a studio) keeps its background as steady as any overlay: steady
+    # edges in the clip then prove little, so only tight corner marks are taken from them. Marks from the
+    # preview median (the whole video) are already limited to overlay positions in profile().
+    fixed = not still["still"] and spread(frames) < 15
     found = [b for b in source_boxes if _present(b["box"], b.get("pattern"), frames, size)]
     edge = [{"kind": b["kind"], "box": b["box"]} for b in found if not b["central"]]
     central = [{"kind": "center", "box": b["box"]} for b in found if b["central"]]
     corners = platform_watermark(clip, duration, clip_size)
     if not still["still"]:
-        corners += corner_overlays(frames, content)
+        corners += [b for b in corner_overlays(frames, content) if not fixed or _tight_corner(b["box"])]
     elif sprites:   # a frozen picture is steady everywhere: compare with the preview frame instead
         corners += sprite_corners(frames, content, sprites, window_start, duration)
+    if channel_logo:
+        x0, y0, x1, y1 = content
+        lx0, ly0, lx1, ly1 = CHANNEL_LOGO
+        logo = [round(x0 + lx0 * (x1 - x0), 4), round(y0 + ly0 * (y1 - y0), 4),
+                round(x0 + lx1 * (x1 - x0), 4), round(y0 + ly1 * (y1 - y0), 4)]
+        if not any(b["box"][0] <= logo[0] + .02 and b["box"][1] <= logo[1] + .02 and b["box"][2] >= logo[2] - .02
+                   and b["box"][3] >= logo[3] - .02 for b in edge + corners):
+            corners.append({"kind": "logo", "box": logo})
     edge = _merge(edge + corners)
     subs = subtitles(frames, content, source_boxes)
     if edge or subs:
@@ -558,7 +609,7 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
         x0, y0, x1, y1 = content
         rect, zoom, residual = [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)], 1.0, []
     return {"content": [round(v, 4) for v in content], "overlays": edge + subs, "central": central,
-            "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still,
+            "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still | {"fixed_camera": fixed},
             "src_aspect": round(src_aspect, 4)}
 
 

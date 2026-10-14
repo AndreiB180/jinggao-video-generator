@@ -6,7 +6,7 @@ from PIL import Image
 
 from jinggao import frame_contract, neutral_observer, planner
 
-pytestmark = pytest.mark.usefixtures("isolated_pixel_quality")
+pytestmark = pytest.mark.usefixtures("isolated_pixel_quality", "separate_pixel_observer")
 
 
 @pytest.fixture
@@ -33,9 +33,9 @@ def citation(field="action", quote="手指点击查快递"):
 
 
 def checks():
+    # v60 has no per-caption caption_cN keys for legacy visual plans.
     return [{"key": key, "status": "supported", "reason": "已核验", "evidence": [citation()]}
-            for key in ("subject", "action", "scene")] + [
-        {"key": "caption_c1", "status": "supported", "reason": "查询页面文字", "evidence": [citation("text", "查快递")]}]
+            for key in ("subject", "action", "scene")]
 
 
 def test_short_meeting_cut_requires_its_own_evidence_not_a_later_work_frame(monkeypatch):
@@ -46,17 +46,17 @@ def test_short_meeting_cut_requires_its_own_evidence_not_a_later_work_frame(monk
               {"frame_index": 1, "objects": "仓库内工人搬运纸箱", "action": "工人拿起包裹", "text": []}]
     work = {"frame_index": 1, "field": "action", "quote": frames[1]["action"]}
     ordinary = {"key": "source_alignment", "status": "supported", "reason": "后面有实际劳动", "evidence": [work]}
-    assert set(frame_contract.requirements(shot, frames)) == {"source_alignment", "frame_scope_0", "frame_scope_1"}
+    # v60: only the meeting/studio-like frame gets its own check (not every frame).
+    assert set(frame_contract.requirements(shot, frames)) == {"source_alignment", "frame_scope_0"}
     assert frame_contract.validate(shot, [ordinary], frames)[0] == "unknown"
     borrowed = {"key": "frame_scope_0", "status": "supported", "reason": "借用后面劳动帧", "evidence": [work]}
-    actual_work = {"key": "frame_scope_1", "status": "supported", "reason": "实际劳动", "evidence": [work]}
-    assert frame_contract.validate(shot, [ordinary, borrowed, actual_work], frames)[0] == "unknown"
+    assert frame_contract.validate(shot, [ordinary, borrowed], frames)[0] == "unknown"
     actual = borrowed | {"status": "conflict", "reason": "会议不是物流作业", "evidence": [
         {"frame_index": 0, "field": "objects", "quote": frames[0]["objects"]}]}
-    assert frame_contract.validate(shot, [ordinary, actual, actual_work], frames)[0] == "conflict"
+    assert frame_contract.validate(shot, [ordinary, actual], frames)[0] == "conflict"
     shot["editorial_contract"]["full_script"] = "介绍本次行业会议与物流作业。"
-    # Mentioning the broad topic elsewhere does not waive this frame's check.
-    assert set(frame_contract.requirements(shot, frames)) == {"source_alignment", "frame_scope_0", "frame_scope_1"}
+    # v60 policy: when the script itself covers meetings, a meeting cut needs no separate check.
+    assert set(frame_contract.requirements(shot, frames)) == {"source_alignment"}
 
 
 def test_broad_summary_cannot_overrule_failed_primary_action(record, observation, monkeypatch):

@@ -112,7 +112,8 @@ def test_one_request_per_pair_is_blind_and_joint_cache_survives_new_batchmates(e
     calls = []
     monkeypatch.setattr(observer, "_request", fake_request(calls))
     facts, quality, stats = observer.observe(records, lambda: None)
-    assert stats["model_requests"] == stats["request_count"] == len(calls) == 2
+    # v60: DashScope qwen-flash sends up to four groups in one request (pixel_observer._supports_four).
+    assert stats["model_requests"] == stats["request_count"] == len(calls) == 1
     assert stats["unique_groups"] == 4 and not stats["all_cache_hit"]
     assert all(r["observation_status"] == "complete" and not r["content_approved"] for r in facts.values())
     assert all(r["quality_status"] == "not_detected" and not r["content_approved"] for r in quality.values())
@@ -120,7 +121,7 @@ def test_one_request_per_pair_is_blind_and_joint_cache_survives_new_batchmates(e
         text = json.dumps(payload, ensure_ascii=False)
         assert "不要发送" not in text and "private-" not in text and cfg["model_api_key"] not in text
         manifest = json.loads(payload["messages"][1]["content"][0]["text"])
-        assert set(manifest) == {"observation_groups"} and len(manifest["observation_groups"]) == 2
+        assert set(manifest) == {"observation_groups"} and len(manifest["observation_groups"]) == 4
     same = [records[3] | {"shot": {"id": "new", "narration": "new script"}}, records[1]]
     replay, replay_quality, hit = observer.observe(same, lambda: None)
     assert hit["model_requests"] == 0 and hit["cache_hits"] == 2 and hit["all_cache_hit"]
@@ -182,9 +183,17 @@ def test_failed_joint_response_is_unknown_uncached_and_not_retried(environment, 
     monkeypatch.setattr(observer, "_request", request)
     facts, quality, stats = observer.observe(records[:2], lambda: None)
     assert len(calls) == stats["model_requests"] == 1 and not stats["all_cache_hit"]
-    assert all(row["observation_status"] == "unknown" and not row["frames"] for row in facts.values())
+    failed = list(facts.values())
+    if kind == "missing_group":
+        # v60 retains a strictly parsed, complete group from a partial reply (no retry, no fill-in);
+        # only the omitted group stays unknown and uncached.
+        assert [row["observation_status"] for row in failed] == ["complete", "unknown"]
+        assert len(list((tmp_path / "cache" / "pixel-observer").glob("*.json"))) == 1
+        failed, quality = failed[1:], {"x": list(quality.values())[1]}
+    else:
+        assert not list((tmp_path / "cache" / "pixel-observer").glob("*.json"))
+    assert all(row["observation_status"] == "unknown" and not row["frames"] for row in failed)
     assert all(row["quality_status"] == "uncertain" and not row["content_approved"] for row in quality.values())
-    assert not list((tmp_path / "cache" / "pixel-observer").glob("*.json"))
     assert len(stats["diagnostic_paths"]) == 1
 
 
@@ -251,7 +260,7 @@ def test_reservation_transport_and_real_ledger_share_one_final_payload(environme
             return self
         async def __aexit__(self, *args):
             pass
-        async def post(self, url, *, json, headers):
+        async def post(self, url, *, json, headers, **kwargs):
             assert json is captured[0]
             assert json["enable_thinking"] is False and json["temperature"] == 0
             assert json["max_tokens"] == 4000
@@ -260,7 +269,8 @@ def test_reservation_transport_and_real_ledger_share_one_final_payload(environme
             return httpx.Response(200, request=httpx.Request("POST", url), json={
                 "model": cfg["vision_model"], "choices": [{"message": {"content": response_for(json)}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1000, "completion_tokens": 200}})
-    monkeypatch.setattr(observer.httpx, "AsyncClient", Client)
+    # v60 sends through network.model_async_client (route probe + trace hooks), not httpx directly.
+    monkeypatch.setattr(observer.network, "model_async_client", lambda url, **options: Client(**options))
     with costs.scope("joint-test", "job", "offline-test"):
         facts, quality, stats = observer.observe(records[:2], lambda: None)
         cached = observer.observe(records[:2], lambda: None)

@@ -217,7 +217,8 @@ def _model_request(request, route):
         raise ValueError("模型连接目标已改变，未沿用原地址绑定")
     # Clone only the network destination. The original request, Host, payload,
     # charge/cache endpoint and TLS identity remain the configured hostname.
-    extensions = dict(request.extensions, sni_hostname=request.url.host)
+    extensions = dict(request.extensions)
+    extensions.setdefault("sni_hostname", request.url.host)    # a pinned-IP request keeps its real name
     return httpx.Request(request.method, request.url.copy_with(host=ip),
                          headers=request.headers, stream=request.stream, extensions=extensions)
 

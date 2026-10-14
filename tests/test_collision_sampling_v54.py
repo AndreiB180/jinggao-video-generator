@@ -119,7 +119,7 @@ def test_normal_match_reads_collision_window_but_never_approves_without_full_rev
     monkeypatch.setattr(planner, 'rank_candidates', lambda p, s, rows, check:
                         [{'candidate_id': c['id']} for c in rows])
     waves, downloads, reviews, reviewed_windows = [], [], [], []
-    def discover(p, groups, *args):
+    def discover(p, groups, *args, **kwargs):
         waves.append(deepcopy(groups))
         suggestions = {}
         for targets, candidates in groups:

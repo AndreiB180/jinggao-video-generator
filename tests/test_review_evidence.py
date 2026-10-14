@@ -71,7 +71,7 @@ def test_invalid_ref_metadata_cannot_fall_back_to_literal_grounding(change):
     assert not neutral_observer.grounded(result["evidence"][0], FRAMES)
 
 
-@pytest.mark.usefixtures("isolated_pixel_quality")
+@pytest.mark.usefixtures("isolated_pixel_quality", "separate_pixel_observer")
 @pytest.mark.parametrize("status", ["supported", "conflict", "unknown"])
 def test_real_audit_resolves_refs_but_preserves_the_semantic_verdict(monkeypatch, status):
     shot = planner.new_shot(narration="处理包裹仍需要人。", query="快递")
@@ -87,9 +87,6 @@ def test_real_audit_resolves_refs_but_preserves_the_semantic_verdict(monkeypatch
         row = {"shot_id": shot["id"], "status": status, "reason": "按原稿判断实际动作", "labels": [],
                "evidence": [{"ref": ref}], "primary_checks": [
                    {"key": "action", "status": status, "reason": "实际动作", "evidence": [{"ref": ref}]}]}
-        row["primary_checks"].extend({"key": f"caption_c{i+1}", "status": status,
-            "reason": "逐条原片文字", "evidence": [{"ref": f"{shot['id']}:f0:text:{i}"}]}
-            for i in range(len(FRAMES[0]["text"])))
         raw.append(deepcopy(row))
         return {"reviews": [row]}, {}
     monkeypatch.setattr(planner, "chat", judge)

@@ -7,7 +7,7 @@ import time
 from PIL import Image
 import pytest
 
-from jinggao import library, library_match, paths, pooled_match, store, window_attempts
+from jinggao import frame_sampling, library, library_match, paths, pooled_match, store, window_attempts
 
 
 @pytest.fixture
@@ -46,7 +46,19 @@ def sample(tmp_path, monkeypatch):
              "visual_quality": {"frame_sha256": [hashlib.sha256(f.read_bytes()).hexdigest() for f in frames]}}
     result = {"verdict": "mismatch", "scene_alignment": "mismatch", "selection_blocked": True,
               "needs_source_check": True, "identity_audit": audit}
-    row = {"shot": shot, "asset": asset, "frame_paths": frames, "verification": result}
+    # v60 binds every cached rejection to its scene-coverage sampling (frame_sampling.VERSION).
+    start, duration, base, count = frame_sampling.window(shot, asset)
+    indices = frame_sampling.indices_for([0], count)
+    preview = {"frames": [{"kind": "video_frame", "at": round(base + start + n / frame_sampling.FPS, 3)}
+                          for n in indices],
+               "sampling": {"version": frame_sampling.VERSION, "policy_sha256": frame_sampling.policy_hash(),
+                            "fps": frame_sampling.FPS, "frame_count": count,
+                            "analysis_width": frame_sampling.ANALYSIS_WIDTH,
+                            "scene_threshold": frame_sampling.SCENE_THRESHOLD, "scene_starts": [0],
+                            "indices": indices, "clip_start": start, "duration": duration,
+                            "asset_sha256": library.digest_file(media),
+                            "frame_sha256": [library.digest_file(f) for f in frames]}}
+    row = {"shot": shot, "asset": asset, "frame_paths": frames, "verification": result, "preview": preview}
     return project, shot, asset, row
 
 
@@ -151,7 +163,7 @@ def setup_matching(sample, monkeypatch):
     clip = {"id": "clip", "start": 0, "offset": 0, "duration": 9, "score": 20, "visible_text": "", "source": {
         "title": asset["title"], "source_url": asset["source_url"]}}
     monkeypatch.setattr(library, "search", lambda *a, **kw: [clip])
-    monkeypatch.setattr(library_match, "quick_candidates", lambda p, ss, opts, stats: (
+    monkeypatch.setattr(library_match, "quick_candidates", lambda p, ss, opts, stats, **kw: (
         stats.update(library_quick_skips=[]) or ss, opts))
     monkeypatch.setattr(library_match, "rank_windows", lambda *a, **kw: True)
     monkeypatch.setattr(library, "materialize", lambda *a: asset)
@@ -159,8 +171,8 @@ def setup_matching(sample, monkeypatch):
     def review(p, rows, check):
         calls.append(len(rows))
         time.sleep(.05)
-        return [r | {"verification": deepcopy(row["verification"]), "frame_paths": row["frame_paths"]}
-                for r in rows], [], {"model_requests": 3}
+        return [r | {"verification": deepcopy(row["verification"]), "frame_paths": row["frame_paths"],
+                     "preview": deepcopy(row["preview"])} for r in rows], [], {"model_requests": 3}
     monkeypatch.setattr(pooled_match, "review_batch", review)
     return calls
 

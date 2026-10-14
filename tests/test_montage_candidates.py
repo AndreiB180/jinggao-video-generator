@@ -44,7 +44,7 @@ def example(tmp_path, monkeypatch, movie):
     target.write_bytes(movie.read_bytes())
     asset = media.inspect_asset(project["id"], target, "Test fixture; not content acceptance")
     asset.update(
-        source_url="https://source.test/a",
+        source_url="https://www.bilibili.com/video/BV1fixture",
         source_clip_start=80,
         candidate_id="fixture-source",
         download_mode="fixture",

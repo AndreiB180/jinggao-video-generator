@@ -13,7 +13,7 @@ import webbrowser
 import httpx
 import uvicorn
 
-from jinggao import instance, paths, source_index
+from jinggao import config, instance, paths, source_index
 from jinggao.api import create_app
 from jinggao.worker import loop
 
@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     paths.prepare()
+    config.migrate()
     ownership = instance.acquire()
     if ownership is None:
         for _ in range(30):

@@ -75,7 +75,7 @@ def test_normal_match_defers_model_failure_but_keeps_real_mismatch_rescue(tmp_pa
         return [deepcopy(candidate)], []
     monkeypatch.setattr(video_sources, "search_videos", search)
     monkeypatch.setattr(planner, "rank_candidates", lambda p, s, rows, check: [{"candidate_id": c["id"]} for c in rows])
-    def discover(p, groups, *args):
+    def discover(p, groups, *args, **kwargs):
         discoveries.append(1)
         return {}, {}, {"model_requests": 0, "sampled_bytes": 0, "failures": []}
     monkeypatch.setattr(pooled_match, "discover_windows", discover)

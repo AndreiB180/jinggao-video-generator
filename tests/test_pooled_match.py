@@ -54,8 +54,11 @@ def test_shared_discovery_samples_source_once_without_approving_any_shot(tmp_pat
     monkeypatch.setattr(pooled_match.segment_discovery, "sample_candidate", sample)
     monkeypatch.setattr(pooled_match.segment_discovery, "observe_samples", lambda *a: ({}, {"model_requests": 0, "failures": []}))
     monkeypatch.setattr(pooled_match.segment_discovery, "rank_windows_batch", rank)
+    monkeypatch.setattr(pooled_match, "shared_observed_samples", lambda samples, packet, check: (samples, []))
+    monkeypatch.setattr(pooled_match.segment_discovery, "shared_rank_input_bound", lambda *a: (lambda shots: 0))
     suggestions, reviewed, stats = pooled_match.discover_windows({}, [([shots[0]], [candidate]), ([shots[1]], [candidate])], lambda: None, lambda *a: None)
-    assert calls == ["source"] and stats["sampled_bytes"] == 17 and stats["model_requests"] == 2
+    # shared_rank_batches regroups pending shots across groups (<= SHARED_RANK_SHOTS) within the old call budget.
+    assert calls == ["source"] and stats["sampled_bytes"] == 17 and stats["model_requests"] == 1
     assert set(suggestions) == {"one", "two"}
     assert reviewed == {"one": {"source"}, "two": {"source"}}
     assert not any(s.get("selected_asset") or s.get("approved") for s in shots)
@@ -69,6 +72,8 @@ def test_discovery_does_not_swallow_account_quota_error(tmp_path, monkeypatch):
     def unavailable(*a, **kw):
         raise planner.ModelUnavailable("HTTP 402")
     monkeypatch.setattr(pooled_match.segment_discovery, "rank_windows_batch", unavailable)
+    monkeypatch.setattr(pooled_match, "shared_observed_samples", lambda samples, packet, check: (samples, []))
+    monkeypatch.setattr(pooled_match.segment_discovery, "shared_rank_input_bound", lambda *a: (lambda shots: 0))
     with pytest.raises(planner.ModelUnavailable, match="402"):
         pooled_match.discover_windows({}, [([{"id": "one"}], [{"id": "source"}])], lambda: None, lambda *a: None)
 
@@ -89,14 +94,17 @@ def test_discovery_batches_eight_shots_without_resampling_shared_source(tmp_path
     monkeypatch.setattr(pooled_match.segment_discovery, "sample_candidate", sample)
     monkeypatch.setattr(pooled_match.segment_discovery, "observe_samples", lambda *a: ({}, {"model_requests": 0, "failures": []}))
     monkeypatch.setattr(pooled_match.segment_discovery, "rank_windows_batch", rank)
+    monkeypatch.setattr(pooled_match, "shared_observed_samples", lambda samples, packet, check: (samples, []))
+    monkeypatch.setattr(pooled_match.segment_discovery, "shared_rank_input_bound", lambda *a: (lambda shots: 0))
     proposed, reviewed, stats = pooled_match.discover_windows({}, [(shots, [candidate])], lambda: None, lambda *a: None)
-    assert sampled == ["shared"] and sorted(map(len, batches)) == [2, 8, 8]
+    # SHARED_RANK_SHOTS (32) shots share one request; never more than the former ceil(18/8)=3 calls.
+    assert sampled == ["shared"] and sorted(map(len, batches)) == [18]
     assert set(proposed) == set(reviewed) == {s["id"] for s in shots}
-    assert stats["model_requests"] == 3 and stats["sampled_bytes"] == 10 and len(stats["summaries"]) == 3
+    assert stats["model_requests"] == 1 and stats["sampled_bytes"] == 10 and len(stats["summaries"]) == 1
 
 
 def test_remote_titles_without_relevant_sampled_frames_never_trigger_clip_download(tmp_path, monkeypatch):
-    from jinggao import config, library_match, montage_match, store
+    from jinggao import config, library_match, montage_candidates, store
     monkeypatch.setattr(paths, "DATA", tmp_path)
     store.init()
     config.update({"search_provider": "video"})
@@ -114,7 +122,7 @@ def test_remote_titles_without_relevant_sampled_frames_never_trigger_clip_downlo
     monkeypatch.setattr(pooled_match.video_sources, "inspect_video_candidate", lambda c, *a: c)
     monkeypatch.setattr(pooled_match, "online_rescue_queries", lambda *a: {})
     sampled, stages = [], []
-    def no_related_frames(project, group_rows, *a):
+    def no_related_frames(project, group_rows, *a, **kw):
         stages.append("online_video")
         sampled.append({c["id"] for _, rows in group_rows for c in rows})
         reviewed = {s["id"]: {c["id"] for c in rows} for shots, rows in group_rows for s in shots}
@@ -123,7 +131,7 @@ def test_remote_titles_without_relevant_sampled_frames_never_trigger_clip_downlo
     def montage(*a, **kw):
         stages.append("montage")
         return set(), {"model_requests": 0, "failures": []}
-    monkeypatch.setattr(montage_match, "match", montage)
+    monkeypatch.setattr(montage_candidates, "match", montage)
     def unexpected_download(*a, **kw):
         pytest.fail("Title-only candidate must not cause blind full-clip download")
     monkeypatch.setattr(pooled_match.video_sources, "download_video_candidate", unexpected_download)
@@ -190,7 +198,7 @@ def test_rescue_keeps_inspected_but_unsampled_group_sources_eligible(tmp_path, m
     monkeypatch.setattr(pooled_match.video_sources, "inspect_video_candidate", lambda c, *a: c)
     monkeypatch.setattr(pooled_match, "online_rescue_queries", lambda *a: {"扫码工作": [group]})
     sampled = []
-    def no_related_frames(project, group_rows, *a):
+    def no_related_frames(project, group_rows, *a, **kw):
         sampled.append({c["id"] for _, rows in group_rows for c in rows})
         return {}, {}, {"model_requests": 1, "sampled_bytes": 0, "failures": []}
     monkeypatch.setattr(pooled_match, "discover_windows", no_related_frames)
@@ -237,7 +245,7 @@ def test_inspected_sources_do_not_occupy_fresh_inspection_queue_slots(tmp_path, 
         inspected.append(candidate["id"])
         return candidate
 
-    def no_related_frames(project, group_rows, *args):
+    def no_related_frames(project, group_rows, *args, **kwargs):
         sampled.append({c["id"] for _, rows in group_rows for c in rows})
         return {}, {}, {"model_requests": 0, "sampled_bytes": 0, "failures": []}
 
@@ -396,7 +404,7 @@ def test_actual_frame_sampling_uses_one_decode_and_correct_offsets(monkeypatch, 
     monkeypatch.setattr(media, "run", counted)
     frames, preview = pooled_match.sample_frames(pid, {"duration": 3, "clip_start": 1},
         {"duration": 5, "path": "moving.mp4", "source_clip_start": 20}, lambda: None)
-    assert len(calls) == 1 and len(frames) == 5 and preview["motion_detected"]
+    assert len(calls) == 2 and len(frames) == 5 and preview["motion_detected"]
     assert all(21 <= f["at"] < 24 for f in preview["frames"])
 
 
@@ -410,24 +418,30 @@ def test_cancel_before_decode_is_propagated(monkeypatch, tmp_path):
                                     {"duration": 5, "path": "sample.mp4"}, cancel)
 
 
-def test_network_does_not_retry_timeout_or_server_errors(monkeypatch):
+def test_network_does_not_retry_timeout_or_server_errors(monkeypatch, tmp_path):
     import httpx
+    monkeypatch.setattr(paths, "DATA", tmp_path)
     calls = []
-    def failed(*a, **kw):
-        calls.append(1)
-        raise httpx.ReadTimeout("timeout after request sent")
-    monkeypatch.setattr(network.httpx, "post", failed)
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def post(self, *a, **kw):
+            calls.append(1)
+            raise httpx.ReadTimeout("timeout after request sent")
+    monkeypatch.setattr(network, "model_client", lambda url, **kw: Client())
     with pytest.raises(httpx.ReadTimeout):
         network.post("https://example.test/charge")
     assert len(calls) == 1
 
 
-def test_network_recovers_only_stale_source_connect_error(monkeypatch):
+def test_network_post_never_resends_after_connect_error(monkeypatch, tmp_path):
+    # errno49 recovery for model POSTs is now route preselection before sending
+    # (network._model_route); a failed POST is never replayed.
     import httpx
-    monkeypatch.setattr(network, "routed_address", lambda host: "10.0.0.5")
-    def failed(*a, **kw):
-        raise httpx.ConnectError("[Errno 49] Can't assign requested address")
-    monkeypatch.setattr(network.httpx, "post", failed)
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    monkeypatch.setattr(network, "_model_route", lambda url, options: None)
     calls = []
     class Client:
         def __init__(self, **kw):
@@ -437,8 +451,9 @@ def test_network_recovers_only_stale_source_connect_error(monkeypatch):
         def __exit__(self, *args):
             return False
         def post(self, url, **kwargs):
-            calls.append((url, kwargs))
-            return "recovered"
+            calls.append((url, sorted(kwargs)))
+            raise httpx.ConnectError("[Errno 49] Can't assign requested address")
     monkeypatch.setattr(network.httpx, "Client", Client)
-    assert network.post("https://e.test/a", json={"ok": True}) == "recovered"
-    assert calls == [("https://e.test/a", {"json": {"ok": True}})]
+    with pytest.raises(httpx.ConnectError):
+        network.post("https://e.test/a", json={"ok": True})
+    assert calls == [("https://e.test/a", ["extensions", "json"])]

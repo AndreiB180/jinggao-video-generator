@@ -67,13 +67,19 @@ def defaults(p: dict) -> dict:
 def list_projects() -> list[dict]:
     with connection() as con:
         rows = con.execute("SELECT body FROM projects ORDER BY updated DESC").fetchall()
+        latest = {row["project_id"]: dict(row) for row in con.execute(
+            "SELECT project_id,kind,status,progress,message FROM jobs ORDER BY created")}
     result = []
     for row in rows:
         p = json.loads(row["body"])
         if p.get("system_library"):
             continue
+        video = (p.get("exports") or [None])[0]
         result.append({key: p.get(key) for key in ("id", "title", "updated", "aspect", "revision")}
-                      | {"shot_count": len(p["shots"]), "script_length": len(p["script"])})
+                      | {"shot_count": len(p["shots"]), "script_length": len(p["script"]),
+                         "video": video and {k: video.get(k) for k in ("path", "duration", "created", "saved_to")},
+                         "audio_source": bool(p.get("source_audio")),
+                         "job": latest.get(p["id"]) and {k: latest[p["id"]][k] for k in ("kind", "status", "progress", "message")}})
     return result
 
 

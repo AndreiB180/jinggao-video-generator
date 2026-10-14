@@ -71,7 +71,8 @@ def test_script_preserved_and_queue_recovery(client):
 def test_model_cannot_silently_rewrite(client, monkeypatch):
     p = create(client)
     monkeypatch.setattr(planner, "chat", lambda *a, **kw: ({"shots": [{"narration": "编造的新内容"}]}, {}))
-    with pytest.raises(ValueError, match="原文片段编号"):
+    # Model planning now returns source IDs (source_units); free-text shots are rejected outright.
+    with pytest.raises(ValueError, match="源ID规划须完整返回contracts和presentation"):
         planner.plan(p, "model", False)
 
 
@@ -196,12 +197,13 @@ def test_full_audio_alignment_and_render_guard(client):
 def test_auto_match_rejects_mismatch_and_leaves_review_pending(client, monkeypatch):
     p = client.post("/api/demo").json()
     shot = p["shots"][0]
-    config.update({"model_api_key": "test-only", "search_provider": "local"})
+    # Per-shot ranking/verification is the classic route; express has its own tests.
+    config.update({"model_api_key": "test-only", "search_provider": "local", "pipeline": "classic"})
     candidates = sources.local_candidates(p, shot["query"])
     monkeypatch.setattr(planner, "rank_candidates", lambda *args: [
         {"candidate_id": c["id"], "verdict": "match", "reason": "test"} for c in candidates[:2]])
     calls = []
-    def verify(pid, s, a):
+    def verify(pid, s, a, check=None):
         calls.append(a["id"])
         return {"verdict": "mismatch" if len(calls) == 1 else "uncertain", "reason": "需确认来源"}
     monkeypatch.setattr(planner, "verify", verify)

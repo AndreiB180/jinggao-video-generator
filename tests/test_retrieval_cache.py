@@ -53,14 +53,19 @@ def test_changed_source_identity_or_model_invalidates(example, field):
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("indices", [[0], [0, 0, 1], [True, 1], [0, 1, 2]])
-def test_partial_or_repaired_grouping_never_becomes_a_durable_cache(example, indices):
+@pytest.mark.parametrize(("indices", "requests"), [([0], 1), ([0, 0, 1], 1), ([True, 1], 2), ([0, 1, 2], 2)])
+def test_invalid_grouping_is_never_cached_but_normalized_coverage_is(example, indices, requests):
+    # retrieval_cache.normalize completes a missing/duplicate index deterministically
+    # (search opportunities only) and caches that complete result; malformed indices raise.
     project, shots, calls, _, response = example
     response["groups"][0]["indices"] = indices
     assert not retrieval_cache.valid(response, 2)
+    results = []
     for _ in range(2):
         try:
-            pooled_match.retrieval_groups(project, shots)
+            results.append(pooled_match.retrieval_groups(project, shots)[0])
         except ValueError:
             pass
-    assert len(calls) == 2
+    assert len(calls) == requests
+    for groups in results:
+        assert sorted(i for g in groups for i in g["indices"]) == [0, 1]

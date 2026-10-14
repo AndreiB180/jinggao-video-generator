@@ -16,13 +16,15 @@ MOBILE = re.compile(r"(?<!\d)1[3-9](?:[ \t-]?\d){9}(?!\d)")
 
 
 def exposed_frames(observations):
-    return [f["frame_index"] for f in observations
+    return [f.get("frame_index") for f in observations
             if any(MOBILE.search(text) for text in f.get("text", []) if isinstance(text, str))]
 
 
 def observations(result):
-    return ((result.get("identity_audit") or {}).get("frame_observations")
+    rows = ((result.get("identity_audit") or {}).get("frame_observations")
             or (result.get("observations") or {}).get("frame_observations") or [])
+    # Stored evidence may be damaged; never crash approval/export on it.
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
 def scan_stamp(result):

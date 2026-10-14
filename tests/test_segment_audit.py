@@ -6,9 +6,9 @@ from PIL import Image
 import pytest
 import httpx
 
-from jinggao import config, media, neutral_observer, planner
+from jinggao import config, media, neutral_observer, planner, review_evidence
 
-pytestmark = pytest.mark.usefixtures("isolated_pixel_quality")
+pytestmark = pytest.mark.usefixtures("isolated_pixel_quality", "separate_pixel_observer")
 
 
 @pytest.fixture
@@ -217,7 +217,8 @@ def test_large_audit_uses_two_shot_subbatches_and_totals_actual_calls(
     # Output sizing is provider-specific; do not inherit the developer's saved
     # account configuration or depend on whether a test data directory is empty.
     monkeypatch.setattr(config, "read", lambda: config.DEFAULTS | {
-        "model_base_url": base_url, "model_name": model, "review_model": model})
+        "model_base_url": base_url, "model_name": model, "review_model": model,
+        "pixel_observer_mode": "separate"})
     records = [record | {"shot": record["shot"] | {"id": f"shot-{i}", "visual_plan": {
         "mode": "single", "primary": {"subject": "运动员", "action": "跨越栏架", "scene": "跑道"}}},
         "requirements": "保留当前主体姓名证据", "narrative_context": [{"position": "before", "narration": "本场比赛"}]}
@@ -240,19 +241,22 @@ def test_large_audit_uses_two_shot_subbatches_and_totals_actual_calls(
             if rows[0]["shot_id"] in {"shot-0", "shot-2"}:
                 barrier.wait()
             assert 1 <= len(rows) <= 2
-            assert kwargs == {"vision": False, "max_tokens": limits[len(rows)], "timeout": 60,
+            # v60 sizes the judge's output with review_evidence.output_limit (provider-independent at
+            # this layer; per-provider sub-batch sizing happens later in planner._prepare_chat_payload).
+            assert kwargs == {"vision": False, "max_tokens": review_evidence.output_limit(content), "timeout": 60,
                               "reasoning": True, "reasoning_effort": "low", "task": "evidence_review"}
             for row in rows:
                 assert row["requested_people"] == record["shot"]["persons"]
                 assert row["requirements"] == "保留当前主体姓名证据"
                 assert row["narrative_context"] == records[0]["narrative_context"]
                 assert row["frame_observations"] == observation["frames"]
+                # v60 has no per-caption caption_cN keys; captions go through the shared text review.
                 assert row["selected_visual_requirements"] == {
-                    "subject": "运动员", "action": "跨越栏架", "scene": "跑道", "caption_c1": "刘翔"}
+                    "subject": "运动员", "action": "跨越栏架", "scene": "跑道"}
             return {"reviews": [{"shot_id": row["shot_id"], "status": "supported", "reason": "真实帧依据",
                 "labels": [{"frame_index": 0, "quote": "刘翔", "relation": "on_subject"}], "evidence": evidence(),
                 "primary_checks": [{"key": key, "status": "supported", "reason": "实际观察", "evidence": evidence()}
-                                   for key in ("subject", "action", "scene")] + [caption_check()]} for row in rows]}, {}
+                                   for key in ("subject", "action", "scene")]} for row in rows]}, {}
         finally:
             with lock:
                 active -= 1
@@ -263,7 +267,7 @@ def test_large_audit_uses_two_shot_subbatches_and_totals_actual_calls(
     assert len({system for system, _ in calls}) == 1
     assert list(results) == [r["shot"]["id"] for r in records]
     assert {r["request_count"] for r in results.values()} == {5}  # Three judges, two uncached observers.
-    assert all(r["status"] == "supported" and len(r["primary_checks"]) == 4 for r in results.values())
+    assert all(r["status"] == "supported" and len(r["primary_checks"]) == 3 for r in results.values())
 
 
 @pytest.mark.parametrize("failure", [planner.ModelUnavailable("HTTP 402"), media.Cancelled()])

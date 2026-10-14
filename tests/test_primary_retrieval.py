@@ -159,7 +159,7 @@ def test_diagnostics_use_project_indices_after_library_removes_earlier_shot(tmp_
     monkeypatch.setattr(video_sources, "search_videos", lambda *a, **kw: (rows, []))
     monkeypatch.setattr(planner, "rank_candidates", lambda *a: [])
     monkeypatch.setattr(video_sources, "inspect_video_candidate", lambda c, *a: c | {"download_status": "blocked"})
-    monkeypatch.setattr(pooled_match, "discover_windows", lambda *a: ({}, {}, {
+    monkeypatch.setattr(pooled_match, "discover_windows", lambda *a, **kw: ({}, {}, {
         "model_requests": 0, "sampled_bytes": 0, "failures": []}))
     monkeypatch.setattr(planner, "chat", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("unexpected model call")))
     stats = pooled_match.match(project, project["shots"], lambda: None, lambda *a: None)

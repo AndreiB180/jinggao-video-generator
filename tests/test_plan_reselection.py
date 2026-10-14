@@ -5,7 +5,8 @@ import json
 from PIL import Image
 import pytest
 
-from jinggao import frame_contract, neutral_observer, paths, plan_consistency, plan_reselection, planner, pooled_match, store
+from jinggao import (config, frame_contract, neutral_observer, paths, pending_windows, plan_consistency,
+                     plan_reselection, planner, pooled_match, store)
 
 pytestmark = pytest.mark.usefixtures("isolated_pixel_quality")
 
@@ -23,6 +24,10 @@ FACTS = [("手持手机显示查快递菜单及物流详情页面", "手指点�
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path)
+    # This test mocks the separate neutral/quality observers; joint is the current default.
+    monkeypatch.setitem(config.DEFAULTS, "pixel_observer_mode", "separate")
+    # Synthetic previews carry no frame_sampling metadata for pending-window receipts.
+    monkeypatch.setattr(pending_windows, "capture", lambda *a, **kw: None)
     store.init()
 
     def create(count=2):
@@ -100,7 +105,6 @@ def commit(row, pid):
 def test_real_02_10_directions_use_shadow_and_full_original_audit(workspace, monkeypatch, reject_new_audit, through_match):
     project, rows, windows = workspace()
     if through_match:
-        from jinggao import config
         config.update({"search_provider": "local"})
         def seed(current):
             for shot, row in zip(current["shots"], rows, strict=True):

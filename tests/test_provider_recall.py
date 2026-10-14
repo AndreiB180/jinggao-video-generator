@@ -205,6 +205,9 @@ def test_match_routes_short_queries_only_to_empty_provider_with_project_shot_ind
     monkeypatch.setattr(pooled_match, "online_rescue_queries", lambda *a: {})
     monkeypatch.setattr(scene_recall, "candidates", lambda *a: {})
     monkeypatch.setattr(montage_match, "match", lambda *a, **kw: (set(), {"model_requests": 0, "failures": []}))
+    from jinggao import source_metadata
+    monkeypatch.setattr(source_metadata, "rank", lambda p, s, tasks, check: (
+        [rows for _, rows in tasks], {"model_requests": 0, "failures": [], "completed_groups": list(range(len(tasks)))}))
     monkeypatch.setattr(planner, "chat", lambda *a, **kw: pytest.fail("A query fallback must not buy model output"))
     calls, sampled = [], []
 
@@ -222,7 +225,7 @@ def test_match_routes_short_queries_only_to_empty_provider_with_project_shot_ind
                  "source_url": "https://www.chinanews.com.cn/"+query, "provider": "chinanews",
                  "duration": 50, "width": 1280, "height": 720, "download_status": "available"}], []
 
-    def no_proposals(project, group_rows, *args):
+    def no_proposals(project, group_rows, *args, **kwargs):
         sampled.extend(c["id"] for _, candidates in group_rows for c in candidates)
         reviewed = {s["id"]: {c["id"] for c in candidates} for rows, candidates in group_rows for s in rows}
         return {}, reviewed, {"model_requests": 0, "sampled_bytes": 0, "failures": []}

@@ -11,10 +11,15 @@ from jinggao import config, costs, execution, network, neutral_observer, paths, 
 from jinggao.api import create_app
 
 
+DEEPSEEK = {"model_base_url": "https://api.deepseek.com", "model_name": "deepseek-flash", "vision_model": "deepseek-flash"}
+
+
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path)
-    cfg = config.DEFAULTS | {"model_api_key": "test-only-private-key"}
+    # The default provider is now DashScope qwen3.7-flash (tiers covered in test_aliyun_models).
+    # These ledger mechanics are written against the DeepSeek flash table (2/0.04/8 CNY per M).
+    cfg = config.DEFAULTS | DEEPSEEK | {"model_api_key": "test-only-private-key"}
     monkeypatch.setattr(config, "read", lambda: cfg.copy())
     monkeypatch.setattr(network, "post", lambda *a, **kw: pytest.fail("unexpected model request"))
     return cfg
@@ -301,5 +306,5 @@ def test_valid_settings_persist_and_zero_pauses_requests(tmp_path, monkeypatch):
     saved = config.update({"model_project_budget_cny": "0", "model_daily_budget_cny": "3.00"})
     assert saved["model_project_budget_cny"] == "0"
     with costs.scope("test"), pytest.raises(costs.BudgetExceeded):
-        with costs.request(config.read(), payload(), "text"):
+        with costs.request(config.read() | DEEPSEEK, payload(), "text"):
             pytest.fail("zero budget must pause requests")

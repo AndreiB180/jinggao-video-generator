@@ -12,18 +12,27 @@ def decoded_frames(monkeypatch, tmp_path, last):
 
     def decode(args, **kwargs):
         kwargs["check"]()
+        if any("metadata=print" in str(arg) for arg in args):
+            # v60 scene-coverage pass (frame_sampling.sample): one scene score per 25fps frame.
+            count = round(3 * 25)
+            return "".join(f"frame:{i} pts:{i} pts_time:{i / 25}\nlavfi.scene_score=0.0\n" for i in range(count))
         template = args[-1]
         for index in range(1, 6):
             picture = Image.new("RGB", (320, 180), (30 * index, 50, 90))
             if index == 5:
                 picture = last
             picture.save(Path(template.replace("%02d", f"{index:02d}")))
+        return ""
 
     monkeypatch.setattr(media, "run", decode)
     shot = {"id": "test", "narration": "工作人员处理包裹。", "duration": 3, "clip_start": 0}
     asset = {"id": "asset", "title": "source", "kind": "video", "duration": 3,
              "path": "source.mp4", "width": 1280, "height": 720}
-    return {"id": "a" * 32, "shots": [shot]}, shot, asset
+    project = {"id": "a" * 32, "shots": [shot]}
+    source = paths.project_dir(project["id"]) / asset["path"]
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"stand-in video bytes; decoding is mocked")  # sampling hashes the source file
+    return project, shot, asset
 
 
 @pytest.mark.parametrize("color,kind", [("white", "white"), ("black", "black")])

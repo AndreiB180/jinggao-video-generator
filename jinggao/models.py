@@ -27,6 +27,36 @@ class ProjectPatch(Strict):
     min_video_height: Literal[270, 480, 720, 1080] | None = None
 
 
+class RewriteRequest(Strict):
+    text: str = Field(min_length=1, max_length=30000)
+    title: str = Field(default="", max_length=200)
+    minutes: float | None = Field(default=None, ge=0.5, le=15)
+    aspect: Literal["16:9", "9:16"] = "16:9"
+    project_id: str | None = Field(default=None, max_length=64)
+
+
+class NewsLink(Strict):
+    url: str = Field(min_length=8, max_length=2000)
+
+
+class NewsText(Strict):
+    title: str = Field(default="", max_length=200)
+    text: str = Field(min_length=30, max_length=30000)
+    source: str = Field(default="", max_length=80)
+
+
+class NewsCrawl(Strict):
+    koubo: bool = False
+
+
+class NewsProduce(Strict):
+    ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{16}$")]] = Field(min_length=1, max_length=20)
+    aspect: Literal["16:9", "9:16"] = "16:9"
+    minutes: float | None = Field(default=None, ge=0.5, le=15)
+    resolution: Literal["720p", "1080p"] = "720p"
+    auto: bool = True
+
+
 class PersonTarget(Strict):
     name: str = Field(min_length=2, max_length=100)
     aliases: list[Annotated[str, Field(min_length=2, max_length=100)]] = Field(default_factory=list, max_length=8)

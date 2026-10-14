@@ -102,8 +102,13 @@ def test_audio_or_new_review_cannot_reuse_old_person_approval(tmp_path, monkeypa
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(wav_bytes())
             monkeypatch.setattr(media, "synthesize", synthesize)
-            monkeypatch.setattr(planner, "verify", lambda *args: {
+            monkeypatch.setattr(planner, "verify", lambda *args, **kwargs: {
                 "verdict": "mismatch", "identity_evidence": {"status": "conflict"}, "selection_blocked": True})
+            # The real video verify returns a code-owned reviewed_selection binding;
+            # this fake has no file, so install the reviewed window unchanged.
+            from jinggao import frame_sampling
+            monkeypatch.setattr(frame_sampling, "verified_selection",
+                                lambda p, s, asset, result: (asset, s.get("clip_start", 0), s.get("match_preview")))
             response = client.post(f"/api/projects/{p['id']}/jobs", json={
                 "kind": "voice" if action == "synthesize" else "verify", "shot_id": shot["id"]})
             assert response.status_code == 202

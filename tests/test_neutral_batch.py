@@ -4,7 +4,7 @@ import json
 import pytest
 from PIL import Image
 
-from jinggao import planner, pooled_match
+from jinggao import pending_windows, planner, pooled_match
 
 
 @pytest.fixture
@@ -12,6 +12,8 @@ def rows(tmp_path, monkeypatch):
     frame = tmp_path / "frame.jpg"
     Image.new("RGB", (128, 72), "white").save(frame)
     monkeypatch.setattr(pooled_match, "sample_frames", lambda *args: ([frame] * 5, {"motion_detected": True}))
+    # Synthetic previews carry no frame_sampling metadata; receipts are covered by test_pending_policy_resume.
+    monkeypatch.setattr(pending_windows, "capture", lambda *a, **kw: None)
     return [{"shot": {"id": sid, "persons": [], "duration": 5, "clip_start": 0, "narration": "包裹运输",
                       "visual_plan": {"mode": "single", "primary": {
                           "subject": "包裹", "action": "随输送带移动", "scene": "分拨中心"}}},

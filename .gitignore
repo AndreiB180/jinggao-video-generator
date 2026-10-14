@@ -36,3 +36,4 @@ auth*.json
 *.pem
 *.key
 
+!assets/voices/*.mp3

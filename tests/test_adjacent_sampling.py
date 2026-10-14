@@ -52,7 +52,7 @@ def test_discovery_passes_explicit_points_through_same_time_and_byte_budgets(mon
         lambda: None, lambda *a: None)
     assert not proposed and stats["sampled_frames"] == 0
     assert received == [{"count": 4, "max_seconds": 18, "max_bytes": 16*1024*1024,
-                         "min_height": 720, "sample_points": [17, 41]}]
+                         "min_height": 720, "coarse": True, "sample_points": [17, 41]}]
 
 
 @pytest.mark.parametrize("points", [[float("nan")], [True], [100], [-1], [1, 1], [], list(range(7))])

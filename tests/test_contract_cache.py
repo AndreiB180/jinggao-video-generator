@@ -13,7 +13,8 @@ from jinggao import config, editorial_contract as contract, paths, planner
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path)
-    cfg = config.DEFAULTS | {"requirements_model": "contract-v1", "planning_model": "planner-v1"}
+    cfg = config.DEFAULTS | {"requirements_model": "contract-v1", "planning_model": "planner-v1",
+                             "source_plan_mode": "legacy"}
     monkeypatch.setattr(config, "read", lambda: cfg.copy())
     lines = ["刘翔参加雅典奥运会男子一百一十米栏决赛。", "这个结果来自赛场上的表现。"]
     project = {"id": "a" * 32, "script": "\n\n".join(lines), "requirements": "保留身份和赛事。"}

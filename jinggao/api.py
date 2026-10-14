@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from copy import deepcopy
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -9,8 +10,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, captions, config, costs, curation, demo, library, library_collect, media, paths, source_index, sources, store
-from .models import AssetPatch, BatchRequest, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport, ShotPatch
+from . import (__version__, captions, config, costs, curation, demo, library, library_collect, media, paths, source_index,
+               sources, store, subtitle_style)
+from .models import (AssetPatch, BatchRequest, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
+                     NewsCrawl, NewsLink, NewsProduce, NewsText, RewriteRequest, ShotPatch)
 from .worker import shot_by_id
 
 
@@ -86,6 +89,56 @@ def create_app() -> FastAPI:
     @app.get("/api/costs")
     def model_costs():
         return costs.summary()
+
+    @app.get("/api/output-folder")
+    def output_folder():
+        cfg = config.read()
+        return {"path": str(media.output_folder()), "auto_save": cfg["auto_save_exports"] == "1"}
+
+    @app.post("/api/output-folder/open")
+    def open_output_folder():
+        import os
+        import subprocess
+        import sys
+        folder = media.output_folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            os.startfile(folder)  # noqa: S606 - the app's own output folder on the user's machine
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(folder)])
+        return {"path": str(folder)}
+
+    @app.get("/api/tts/voices")
+    def tts_voices():
+        from . import qwen_tts
+        cfg = config.read()
+        return {"provider": cfg["tts_provider"], "voice": qwen_tts.voice(cfg), "speed": cfg["tts_speed"],
+                "speeds": list(qwen_tts.SPEEDS), "voices": qwen_tts.voices(),
+                "price_per_1000_chars": 0.16, "key_set": bool(cfg["model_api_key"])}
+
+    @app.post("/api/tts/preview")
+    def tts_preview(values: dict):
+        from . import qwen_tts
+        name = values.get("voice")
+        if not isinstance(name, str) or name not in qwen_tts.NAMES:
+            raise ValueError("没有这个音色")
+        qwen_tts.preview(name)
+        return {"url": "/api/tts/sample/" + name}
+
+    @app.get("/api/tts/sample/{name}")
+    def tts_sample(name: str):
+        from . import qwen_tts
+        if name not in qwen_tts.NAMES:
+            raise KeyError("没有这个音色")
+        bundled = paths.ROOT / "assets" / "voices" / f"{name}.mp3"
+        if bundled.exists():
+            return FileResponse(bundled, media_type="audio/mpeg")
+        cached = sorted((paths.DATA / "voice-samples").glob(f"{name}-*.wav"))
+        if not cached:
+            raise KeyError("这个音色还没有试听样音")
+        return FileResponse(cached[-1], media_type="audio/wav")
 
     @app.post("/api/baidu/browser")
     def open_baidu_browser():
@@ -163,15 +216,137 @@ def create_app() -> FastAPI:
         track = captions.cached(p, None if p.get("full_audio") else s)
         if track and p.get("full_audio"):
             offset = sum(captions.frame_duration(shot["duration"]) for shot in p["shots"][:p["shots"].index(s)])
-        timed = captions.segments(track, offset, s["duration"], w, h) if track else None
-        _, segments = media.subtitles(s["narration"], s["duration"], w, h, s.get("overlay_label", ""), timed_segments=timed)
+        st = subtitle_style.style(w, h)
+        index = p["shots"].index(s)
+        timed = captions.segments(track, offset, s["duration"], w, h, narration=s["narration"],
+                                  char_offset=captions.char_offset(p["shots"], index) if p.get("full_audio") else 0,
+                                  line_chars=st["line_chars"]) if track else None
+        _, segments = media.subtitles(s["narration"], s["duration"], w, h, s.get("overlay_label", ""),
+                                      timed_segments=timed, style=st)
         return {"segments": segments, "duration": s["duration"], "audio_offset": offset,
                 "audio_path": audio.get("path") if audio else None, "overlay_label": s.get("overlay_label", ""),
-                "alignment": track["method"] if track else "proportional", "api_cost_cny": 0}
+                "alignment": track["method"] if track else "proportional", "api_cost_cny": 0,
+                # The preview draws the burned-in look: sizes are fractions of the frame height.
+                "style": {"font": st["font"], "font_file": st["file"].name, "colour": st["css_colour"],
+                          "size": st["size"] * subtitle_style.em_ratio(st["file"]) / h, "outline": st["outline"] / h,
+                          "margin": st["margin_v"] / h}}
+
+    @app.get("/api/projects/{pid}/film")
+    def film_timeline(pid: str):
+        """The whole video as the export will cut it: every shot's start, length, subtitle lines and audio,
+        so the workbench can play the shots back to back before rendering."""
+        p = store.get_project(pid)
+        w, h = (1920, 1080) if p["aspect"] == "16:9" else (1080, 1920)
+        st = subtitle_style.style(w, h)
+        full = p.get("full_audio")
+        full_track = captions.cached(p) if full else None
+        aligned, alignment_note = True, ""
+        if full:
+            try:
+                media.require_narration_alignment(p)
+            except ValueError as exc:      # durations are still estimates: cuts would drift from the narration
+                aligned, alignment_note, full_track = False, str(exc), None
+        rows, begin = [], 0.0
+        for index, s in enumerate(p["shots"]):
+            audio = None if full else s.get("audio")
+            duration = captions.frame_duration(float((audio or {}).get("duration") or s["duration"]))
+            track = full_track if full else (captions.cached(p, s) if audio else None)
+            timed = captions.segments(track, begin if full else 0, duration, w, h, narration=s["narration"],
+                                      char_offset=captions.char_offset(p["shots"], index) if full else 0,
+                                      line_chars=st["line_chars"]) if track else None
+            _, segments = media.subtitles(s["narration"], duration, w, h, s.get("overlay_label", ""),
+                                          timed_segments=timed, style=st)
+            rows.append({"id": s["id"], "start": round(begin, 3), "duration": duration, "segments": segments,
+                         "audio_path": audio.get("path") if audio else None,
+                         "overlay_label": s.get("overlay_label", "")})
+            begin += duration
+        return {"total": round(begin, 3), "audio_path": full.get("path") if full else None,
+                "aligned": aligned, "alignment_note": alignment_note,
+                "alignment": full_track["method"] if full_track else ("per_shot" if any(r["audio_path"] for r in rows) else "none"),
+                "shots": rows,
+                "style": {"font": st["font"], "font_file": st["file"].name, "colour": st["css_colour"],
+                          "size": st["size"] * subtitle_style.em_ratio(st["file"]) / h, "outline": st["outline"] / h,
+                          "margin": st["margin_v"] / h}}
+
+    @app.get("/api/fonts/{name}")
+    def font_file(name: str):
+        files = {f[0] for f in subtitle_style.FONTS.values()}
+        path = paths.ROOT / "assets" / "fonts" / name
+        if name not in files or not path.exists():
+            raise HTTPException(404, "字体不存在")
+        return FileResponse(path, headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/api/subtitle-styles")
+    def subtitle_styles():
+        have = subtitle_style.available()
+        return {"fonts": [{"key": k, "label": v[2], "file": v[0], "available": have[k],
+                           "em": subtitle_style.em_ratio(subtitle_style.font_file(k)) if have[k] else 0.69}
+                          for k, v in subtitle_style.FONTS.items()],
+                "sizes": [{"key": k, "label": v} for k, v in subtitle_style.SIZES.items()],
+                "colours": [{"key": k, "label": v[2], "css": v[1]} for k, v in subtitle_style.COLOURS.items()]}
 
     @app.post("/api/demo", status_code=201)
     def new_demo():
         return demo.create()
+
+    @app.post("/api/rewrite")
+    def rewrite_script(body: RewriteRequest):
+        """AI 洗稿: one rewrite and one fact-check request; the caller decides whether to keep it."""
+        from . import rewrite
+        if body.project_id:
+            store.get_project(body.project_id)
+        return rewrite.rewrite(body.text, title=body.title, minutes=body.minutes, aspect=body.aspect,
+                               project_id=body.project_id or "rewrite")
+
+    @app.get("/api/news")
+    def news_list():
+        from . import news, news_crawler
+        return {"items": news.items(), "crawler": news_crawler.status()}
+
+    @app.post("/api/news/link")
+    def news_link(body: NewsLink):
+        from . import news
+        found, _ = news.add([news.fetch(body.url)], "link")
+        if not found:
+            raise ValueError("没有从页面中识别出正文，请直接复制新闻原文粘贴")
+        return found[0]
+
+    @app.post("/api/news/text")
+    def news_text(body: NewsText):
+        from . import news
+        found, _ = news.add([body.model_dump()], "text")
+        if not found:
+            raise ValueError("新闻正文至少需要 30 个字")
+        return found[0]
+
+    @app.post("/api/news/crawl")
+    def news_crawl(body: NewsCrawl | None = None):
+        from . import news, news_crawler
+        rows = news_crawler.crawl(koubo=bool(body and body.koubo))
+        found, new = news.add(rows, "crawler")
+        return {"fetched": len(rows), "new": new, "scripts": sum(1 for r in rows if r.get("koubo")),
+                "notes": list(news_crawler.last_notes), "items": news.items()}
+
+    @app.post("/api/news/import-latest")
+    def news_import_latest():
+        from . import news, news_crawler
+        rows = news_crawler.import_latest()
+        found, new = news.add(rows, "crawler")
+        return {"fetched": len(rows), "new": new, "scripts": sum(1 for r in rows if r.get("koubo")), "items": news.items()}
+
+    @app.delete("/api/news/{item_id}")
+    def news_delete(item_id: str):
+        from . import news
+        news.remove(item_id)
+        return {"ok": True}
+
+    @app.post("/api/news/produce", status_code=202)
+    def news_produce(body: NewsProduce):
+        from . import news
+        if not config.read()["model_api_key"]:
+            raise ValueError("请先在服务与设置中填写模型 API Key")
+        return {"projects": [news.make_project(i, aspect=body.aspect, minutes=body.minutes,
+                                               resolution=body.resolution, auto=body.auto) for i in body.ids]}
 
     @app.get("/api/library")
     def get_library(query: str = "", min_height: int = 720):
@@ -246,7 +421,9 @@ def create_app() -> FastAPI:
                     shot.pop("editorial_contract", None)
             if any(k in values and values[k] != p.get(k) for k in ("requirements", "min_video_height")):
                 for shot in p["shots"]:
-                    shot.update(approved=False, verification=None, source_review_note="", source_review_url="")
+                    # Express picks are re-matched on the next produce (manual picks stay, awaiting a confirm).
+                    if not curation.keep_express(p | values, shot, recheck=True):
+                        shot.update(approved=False, verification=None, source_review_note="", source_review_url="")
             p.update(values)
         return store.mutate(pid, change)
 
@@ -263,6 +440,8 @@ def create_app() -> FastAPI:
                 s["audio"] = None
             if s.get("audio") and "duration" in values and abs(values["duration"]-s["audio"]["duration"]) > .01:
                 raise ValueError("逐镜配音决定实际时长，请更换配音或先修改口播移除旧音频，不能只缩短审核区间")
+            changed = {k for k in values if values[k] != s.get(k)}
+            before = deepcopy(s)
             review_changed = any(k in values and values[k] != s.get(k) for k in
                    ("narration", "visual", "subject", "location", "era", "exclusions", "overlay_label", "clip_start", "duration", "fit",
                     "persons", "event", "evidence_mode", "event_scope", "preferred_media"))
@@ -281,12 +460,15 @@ def create_app() -> FastAPI:
             if "overlay_label" in values and values["overlay_label"] != s.get("overlay_label"):
                 s["overlay_label_origin"] = "manual"
             s.update(values)
-            if review_changed:
+            if review_changed and not curation.express_edit(p, s, before, changed):
                 # The editor sends all fields, including stale manual evidence.
                 # Invalidate after applying them so that old evidence cannot return.
                 curation.invalidate(s)
             if values.get("approved"):
                 media.require_narration_alignment(p)
+            if "approved" in values and curation.express_result(s):
+                # The user looked at it (keep it across re-timing), or took the confirmation back.
+                s["verification"]["needs_source_check"] = not values["approved"]
             if values.get("approved") and not curation.identity_ready(s):
                 raise ValueError("人物或事件依据不足。请核对原始来源，填写来源链接和至少 8 字的核对说明后再确认")
             if values.get("approved") and s.get("event_scope") == "background" and curation.needs_identity(s):
@@ -304,6 +486,7 @@ def create_app() -> FastAPI:
                 raise ValueError("素材不存在或类型不符")
             shot.update(selected_asset=aid, approved=False, verification=None, clip_start=0,
                         source_review_note="", source_review_url="")
+            curation.manual_pick(p, shot, next(a for a in p["assets"] if a["id"] == aid))
         return store.mutate(pid, change)
 
     @app.post("/api/projects/{pid}/shots/{sid}/video-link")
@@ -329,14 +512,15 @@ def create_app() -> FastAPI:
                 raise KeyError("素材不存在")
             a.update(body.model_dump(exclude_none=True))
             for shot in p["shots"]:
-                if shot.get("selected_asset") == aid:
+                # Source/licence notes change no pixels: an express pick stays as it is.
+                if shot.get("selected_asset") == aid and not curation.keep_express(p, shot):
                     shot.update(approved=False, verification=None, source_review_note="", source_review_url="")
         return store.mutate(pid, change)
 
     @app.post("/api/projects/{pid}/upload")
     def upload(pid: str, file: UploadFile = File(...), role: str = Form("asset"), shot_id: str = Form("")):
         store.get_project(pid)
-        if role not in ("asset", "voice", "narration", "music"):
+        if role not in ("asset", "voice", "narration", "music", "source_audio"):
             raise ValueError("文件用途无效")
         # Acquire the project's edit check before doing expensive file work.
         store.mutate(pid, lambda p: None)
@@ -370,13 +554,21 @@ def create_app() -> FastAPI:
                         raise ValueError("请先解锁镜头并移除整段配音")
                     if asset["duration"] > 120:
                         raise ValueError("逐镜音频最多 120 秒，长音频请选择整段配音")
-                    if abs(s["duration"] - asset["duration"]) > .01:
-                        curation.invalidate(s)
+                    retimed = abs(s["duration"] - asset["duration"]) > .01
                     s.update(audio=audio, duration=asset["duration"])
+                    if retimed and not curation.keep_express(p, s):
+                        curation.invalidate(s)
                 elif role == "music":
                     p["music"] = audio
                 elif role == "narration":
                     media.align_narration(p, audio)
+                elif role == "source_audio":
+                    # 音频成片: the produce job transcribes it, plans shots from the text and keeps it as the voice.
+                    if p["shots"]:
+                        raise ValueError("这个项目已经有分镜；音频成片请新建项目")
+                    if not 3 <= asset["duration"] <= 3600:
+                        raise ValueError("音频须在 3 秒到 60 分钟之间")
+                    p.update(source_audio=audio, script="", script_original="", full_audio=None)
             return store.mutate(pid, change)
         except Exception:
             path.unlink(missing_ok=True)

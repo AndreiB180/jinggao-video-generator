@@ -17,7 +17,7 @@ from functools import lru_cache
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from . import captions, config, curation, execution, express_clean, paths, store
+from . import captions, config, curation, execution, express_clean, paths, store, subtitle_style
 
 
 class Cancelled(Exception):
@@ -137,6 +137,11 @@ def synthesize(text: str, target: Path, check=None) -> None:
     import tempfile
 
     cfg = config.read()
+    if cfg["tts_provider"] == "qwen_tts":
+        from . import qwen_tts
+        qwen_tts.synthesize(text, target, check)      # one charge per request part, inside
+        target.with_suffix(".txt").write_text(text, "utf-8")
+        return
     if cfg["tts_provider"] == "import":
         raise ValueError("当前选择导入配音。请上传整段音频或逐镜音频")
     if cfg["tts_provider"] == "compatible" and (not cfg["tts_api_key"] or not cfg["tts_model"]):
@@ -193,8 +198,46 @@ def synthesize(text: str, target: Path, check=None) -> None:
             raise ValueError("此系统暂不支持内置语音，请配置兼容配音接口或导入音频")
 
 
-def _invalidate_narration_window(shot):
-    curation.invalidate(shot)
+SUBTITLE_FOLDER = "外挂字幕（仅上传平台时用，播放时不要加载）"
+
+
+def output_folder() -> Path:
+    """Where finished videos are copied: the chosen folder, else 视频/镜稿成片 in the user's home."""
+    chosen = config.read().get("export_dir", "").strip()
+    if chosen:
+        return Path(chosen).expanduser()
+    videos = Path.home() / ("Movies" if sys.platform == "darwin" else "Videos")
+    return (videos if videos.is_dir() else Path.home()) / "镜稿成片"
+
+
+def deliver(project: dict, result: dict) -> str:
+    """Copy a finished export to the output folder as <title>.mp4; the subtitle file goes one level down so
+    players that auto-load a same-named .srt do not show the subtitles twice."""
+    if config.read().get("auto_save_exports", "1") != "1":
+        return ""
+    folder = output_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    name = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", project.get("title") or "").strip(" .")[:60] or "成片"
+    stem, n = name, 2
+    while (folder / f"{stem}.mp4").exists():
+        stem, n = f"{name}（{n}）", n + 1
+    root = paths.project_dir(project["id"])
+    video = folder / f"{stem}.mp4"
+    shutil.copyfile(root / result["path"], video)
+    srt = (root / result["path"]).with_name("subtitles.srt")
+    if srt.exists():
+        (folder / SUBTITLE_FOLDER).mkdir(exist_ok=True)
+        shutil.copyfile(srt, folder / SUBTITLE_FOLDER / f"{stem}.srt")
+    return str(video)
+
+
+def _invalidate_narration_window(shot, project=None):
+    if project is not None and curation.keep_express(project, shot):
+        # Express picks keep their footage across a re-timed narration; produce re-approves
+        # them (approve_verified) unless the clip no longer covers the new duration.
+        shot["approved"] = False
+    else:
+        curation.invalidate(shot)
     shot.pop("match_preview", None)
     shot.pop("match_result", None)
     for candidate in shot.get("candidates", []):
@@ -210,17 +253,17 @@ def align_narration(project: dict, audio: dict) -> None:
         raise ValueError("整段配音需要重排镜头时长，请先解锁镜头")
     if not math.isfinite(float(audio["duration"])) or float(audio["duration"]) <= 0:
         raise ValueError("音频没有有效时长")
-    for shot in project["shots"]:
-        # Until acoustic alignment completes, even an unchanged old duration
-        # cannot prove that the new audio uses the previously approved window.
-        _invalidate_narration_window(shot)
-        shot["audio"] = None
     if len(project["shots"]) == 1:
         # With no interior cuts the audio's measured total is the whole window;
         # semantic/audio validation still remains pending. Never split by text.
         duration = captions.frame_duration(audio["duration"])
         if 1 <= duration <= 120:
             project["shots"][0]["duration"] = duration
+    for shot in project["shots"]:
+        # Until acoustic alignment completes, even an unchanged old duration
+        # cannot prove that the new audio uses the previously approved window.
+        _invalidate_narration_window(shot, project)
+        shot["audio"] = None
     project["full_audio"] = audio | {"alignment": "pending", "note": "音轨已保存；素材核验前将按实际语音对齐镜头"}
 
 
@@ -259,9 +302,10 @@ def apply_narration_alignment(project, proposal):
             raise ValueError("真实语音对齐会移动锁定镜头的起止位置，请先解锁；已保留音频")
         elapsed = end
     for shot, duration in zip(project["shots"], timing["durations"], strict=True):
-        if abs(float(shot["duration"])-duration) > 1e-6:
-            _invalidate_narration_window(shot)
+        changed = abs(float(shot["duration"])-duration) > 1e-6
         shot["duration"] = duration
+        if changed:
+            _invalidate_narration_window(shot, project)
     legacy = any(edge["method"] == "caption_edges" for edge in timing["boundaries"])
     note = "已按音轨字幕句段边界对齐至 25 帧/秒（复用旧缓存）" if legacy else "镜头已按实测语音边界对齐至 25 帧/秒"
     project["full_audio"].update(alignment="local_paraformer", alignment_info=timing, note=note)
@@ -294,17 +338,18 @@ def stamps(seconds: float, ass=False) -> str:
     return f"{h}:{m:02}:{s:02}.{fraction:02}" if ass else f"{h:02}:{m:02}:{s:02},{fraction:03}"
 
 
-def subtitles(text: str, duration: float, w: int, h: int, label: str = "", *, timed_segments=None) -> tuple[str, list[tuple]]:
-    size = 46 if w > h else 48
-    size = round(size * min(w, h) / 1080)
-    max_chars = 24 if w > h else 20
+def subtitles(text: str, duration: float, w: int, h: int, label: str = "", *, timed_segments=None,
+              style: dict | None = None) -> tuple[str, list[tuple]]:
+    """ASS subtitles: one line at a time in the configured font, size and colour (subtitle_style)."""
+    st = style or subtitle_style.style(w, h)
+    line_chars = st["line_chars"]
     if timed_segments is None:
-        lines = subtitle_parts(text, max_chars * 2)
+        lines = subtitle_parts(text, line_chars)
         weight = sum(max(len(x), 1) for x in lines)
         timed_segments, elapsed = [], 0.0
         for i, line in enumerate(lines):
             end = duration if i == len(lines)-1 else elapsed+duration*max(len(line), 1)/weight
-            timed_segments.append((elapsed, end, captions.wrap(line, max_chars)))
+            timed_segments.append((elapsed, end, captions.wrap(line, line_chars)))
             elapsed = end
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -313,7 +358,7 @@ PlayResY: {h}
 WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Noto Sans SC,{size},&H00FFFFFF,&H00FFFFFF,&H00111111,&H60000000,0,0,0,0,100,100,0,0,1,2,1,2,40,40,{round(h*.075)},1
+Style: Default,{st["family"]},{st["size"]},{st["primary"]},&H00FFFFFF,&H00000000,&H90000000,0,0,0,0,100,100,0,0,1,{st["outline"]},{st["shadow"]},2,{round(w*.04)},{round(w*.04)},{st["margin_v"]},1
 Style: Label,Noto Sans SC,{round(min(w,h)*.028)},&H00FFFFFF,&H00FFFFFF,&H60111111,&H60111111,0,0,0,0,100,100,0,0,3,8,0,9,36,36,36,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -323,9 +368,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         escaped_label = label.replace("\\", "＼").replace("{", "｛").replace("}", "｝").replace("\n", " ").replace("\r", " ")
         header += f"Dialogue: 1,0:00:00.00,{stamps(duration,True)},Label,,0,0,0,,{escaped_label}\n"
     for elapsed, end, line in timed_segments:
-        # Remove ASS override syntax from untrusted narration.
-        escaped = line.replace("\\", "＼").replace("{", "｛").replace("}", "｝").replace("\n", r"\N")
-        header += f"Dialogue: 0,{stamps(elapsed,True)},{stamps(end,True)},Default,,0,0,0,,{escaped}\n"
+        # Untrusted narration: ASS override syntax is escaped; glyphs the style font lacks use the fallback.
+        header += f"Dialogue: 0,{stamps(elapsed,True)},{stamps(end,True)},Default,,0,0,0,,{subtitle_style.ass_text(line, st)}\n"
         segments.append((elapsed, end, line))
     return header, segments
 
@@ -337,19 +381,20 @@ def has_ass(ffmpeg: str) -> bool:
 
 def subtitle_overlays(segments: list[tuple], w: int, h: int, work: Path, visual: str, label: str = "") -> tuple[list[str], str]:
     """Fallback for FFmpeg builds without libass, with the same caption timing."""
-    size = round((46 if w > h else 48) * min(w, h) / 1080)
-    font = ImageFont.truetype(str(paths.font_path()), size)
+    st = subtitle_style.style(w, h)
+    size = st["size"]
+    font = ImageFont.truetype(str(st["file"]), size)
     strip_height = size * 3
     inputs, graph = [], [f"[0:v]{visual}[base0]"]
     for i, (begin, end, line) in enumerate(segments):
         overlay = Image.new("RGBA", (w, strip_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
-        draw.multiline_text((w/2, strip_height/2), line, font=font, fill="white", anchor="mm", align="center",
-                  stroke_width=max(1, round(size/16)), stroke_fill=(17, 17, 17, 255))
+        draw.multiline_text((w/2, strip_height/2), line, font=font, fill=st["css_colour"], anchor="mm", align="center",
+                  stroke_width=st["outline"], stroke_fill=(0, 0, 0, 255))
         name = f"caption-{i}.png"
         overlay.save(work / name)
         inputs += ["-i", name]
-        y = h - round(h*.075) - strip_height//2 - size//2
+        y = h - st["margin_v"] - strip_height//2 - size//2
         graph.append(f"[base{i}][{i+2}:v]overlay=0:{y}:enable='gte(t,{begin:.6f})*lt(t,{end:.6f})'[base{i+1}]")
     last = f"base{len(segments)}"
     if label:
@@ -409,10 +454,12 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
     (work / "fonts").mkdir(exist_ok=True)
     # Packaged fonts may be read-only on Windows. The disposable copy must
     # remain writable so that cleanup cannot invalidate a completed export.
-    shutil.copyfile(paths.font_path(), work / "fonts" / paths.font_path().name)
     w, h = (1920, 1080) if options.get("resolution", "1080p") == "1080p" else (1280, 720)
     if project["aspect"] == "9:16":
         w, h = h, w
+    caption_style = subtitle_style.style(w, h)
+    for font in {paths.font_path(), caption_style["file"], caption_style["fallback_file"]}:
+        shutil.copyfile(font, work / "fonts" / font.name)
     cfg = config.read()
     ass_available = has_ass(paths.binary("ffmpeg"))
     use_gpu = cfg["encoder"] != "cpu" and hardware()["nvenc"]
@@ -452,8 +499,10 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         shot_work.mkdir(exist_ok=True)
         label = shot.get("overlay_label", "")
         track = full_captions or (captions.ensure(project, shot, check, caption_progress) if audio else None)
-        timed = captions.segments(track, begin if full_captions else 0, duration, w, h) if track else None
-        ass, segments = subtitles(shot["narration"], duration, w, h, label, timed_segments=timed)
+        timed = captions.segments(track, begin if full_captions else 0, duration, w, h, narration=shot["narration"],
+                                  char_offset=captions.char_offset(shots, i) if full_captions else 0,
+                                  line_chars=caption_style["line_chars"]) if track else None
+        ass, segments = subtitles(shot["narration"], duration, w, h, label, timed_segments=timed, style=caption_style)
         (shot_work / "subtitle.ass").write_text(ass, "utf-8-sig")
         visual = f"scale={w}:{h}:force_original_aspect_ratio="
         # Express crops were measured on one downloaded file (or its privacy-processed copy); a different
@@ -527,9 +576,8 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         check()
         progress((i+1)/len(shots)*85, f"已合成 {i+1}/{len(shots)} 镜 · {workers} 路并发 · {'NVIDIA' if use_gpu else 'CPU'}")
         timeline.append(f"file '{filename}'")
-        if not full_captions:
-            for begin, end, text in segments:
-                srt_rows.append(f"{len(srt_rows)+1}\n{stamps(item[6]+begin)} --> {stamps(item[6]+end)}\n{text}\n")
+        for begin, end, text in segments:   # the SRT carries exactly the lines burned into the picture
+            srt_rows.append(f"{len(srt_rows)+1}\n{stamps(item[6]+begin)} --> {stamps(item[6]+end)}\n{text}\n")
         source_list.append({"shot": i+1, "narration": shot["narration"], "start": item[6],
                             "duration": duration, "clip_start": shot.get("clip_start", 0),
                             "title": asset["title"], "source_url": asset.get("source_url", ""),
@@ -572,9 +620,6 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
     else:
         run([paths.binary("ffmpeg"), "-v", "error", "-y", "-i", str(joined), "-c", "copy",
              "-movflags", "+faststart", str(final)], check=check)
-    if full_captions:
-        srt_rows = [f"{i+1}\n{stamps(c['start'])} --> {stamps(c['end'])}\n{captions.wrap(c['text'], 24 if w > h else 20)}\n"
-                    for i, c in enumerate(full_captions["cues"])]
     (out / "subtitles.srt").write_text("\n".join(srt_rows), "utf-8-sig")
     (out / "sources.json").write_text(json.dumps(source_list, ensure_ascii=False, indent=2), "utf-8")
     (out / "project.json").write_text(json.dumps(project, ensure_ascii=False, indent=2), "utf-8")

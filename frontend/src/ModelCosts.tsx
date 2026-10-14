@@ -1,12 +1,19 @@
 import {useEffect, useState} from 'react';
 
 type Totals = {requests:number; estimated_cny:number; reserved_cny:number; total_cny:number; limit_cny:number; unresolved_requests:number;cost_complete?:boolean;unpriced_requests?:number};
-export type ModelCostReport = {day:string; daily:Totals; project:Totals|null; provider?:Omit<Totals,'limit_cny'>&{host:string;limit_cny:number|null}; first_recorded_at:number|null; note:string; pricing_url:string; pricing_date:string; categories:{stage:string;category:string;model:string;requests:number;total_cny:number}[];tasks?:{stage:string;category:string;task:string;model:string;requests:number;total_cny:number|null;pricing_status:string}[]};
+type Split = {daily_cny:number;daily_limit_cny:number;project_cny:number|null;project_limit_cny?:number};
+export type ModelCostReport = {day:string; daily:Totals; project:Totals|null; model?:Split; speech?:Split; provider?:Omit<Totals,'limit_cny'>&{host:string;limit_cny:number|null}; first_recorded_at:number|null; note:string; pricing_url:string; pricing_date:string; categories:{stage:string;category:string;model:string;requests:number;total_cny:number}[];tasks?:{stage:string;category:string;task:string;model:string;requests:number;total_cny:number|null;pricing_status:string}[]};
 const money = (value:number) => `¥${value.toFixed(4)}`;
 
 export function ModelCostBar({report, settings}:{report?:ModelCostReport;settings:()=>void}) {
   if (!report?.project) return null;
-  const p = report.project, d = report.daily;
+  const p = report.project, d = report.daily, m = report.model, v = report.speech;
+  if (m && v) return <div className="model-cost-bar">
+    <span>本项目 {money(p.total_cny)}{v.project_cny?` · 其中配音 ${money(v.project_cny)}，模型 ${money(m.project_cny||0)} / ¥${(m.project_limit_cny??p.limit_cny).toFixed(2)}`:` / ¥${p.limit_cny.toFixed(2)}`}</span>
+    {p.cost_complete===false&&<span role="status">另有 {p.unpriced_requests} 次配音费用未核明，总费用待确认</span>}
+    <span>今日模型 {money(m.daily_cny)} / ¥{m.daily_limit_cny.toFixed(2)} · 配音 {money(v.daily_cny)} / ¥{v.daily_limit_cny.toFixed(2)}</span>
+    <button className="text-link" onClick={settings}>费用与预算</button>
+  </div>;
   return <div className="model-cost-bar">
     <span>已记费用 · 本项目 {money(p.estimated_cny)}{p.reserved_cny>0&&` + 预留 ${money(p.reserved_cny)}`} / ¥{p.limit_cny.toFixed(2)}</span>
     {p.cost_complete===false&&<span role="status">另有 {p.unpriced_requests} 次配音费用未核明，总费用待确认</span>}

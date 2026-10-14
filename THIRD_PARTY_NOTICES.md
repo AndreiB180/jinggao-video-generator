@@ -5,6 +5,8 @@
 - Python 3.13.12 嵌入式 Windows x64：[Python 官方发行页](https://www.python.org/downloads/release/python-31312/)，许可证位于 `runtime/python/LICENSE.txt`。
 - FFmpeg：来自 [Gyan Windows builds](https://www.gyan.dev/ffmpeg/builds/)，由 [FFmpeg 下载页](https://ffmpeg.org/download.html) 推荐。Gyan essentials 静态构建依照 GPL v3 分发；原始 LICENSE、README 位于 `runtime/ffmpeg`，版本与下载哈希位于 `runtime/downloads.json`。对应源码和构建信息通过该发行页提供；再次分发者应履行适用许可证要求。
 - Noto Sans SC：[Noto CJK](https://github.com/notofonts/noto-cjk)，SIL Open Font License 1.1，许可证位于 `assets/fonts/LICENSE`。
+- Noto Sans SC Black、Noto Serif SC Black（字幕字体）：[Noto CJK](https://github.com/notofonts/noto-cjk)，SIL Open Font License 1.1，许可证位于 `assets/fonts/LICENSE` 与 `assets/fonts/LICENSE-NotoSerifSC.txt`。
+- 站酷庆科黄油体 ZCOOL QingKe HuangYou、站酷快乐体 ZCOOL KuaiLe（可选字幕字体）：来自 [Google Fonts](https://github.com/google/fonts)，SIL Open Font License 1.1，许可证位于 `assets/fonts/OFL-*.txt`。
 - Python 依赖（FastAPI、Uvicorn、HTTPX、Pillow、Pydantic、websocket-client 及传递依赖）来自 PyPI。各组件许可证/NOTICE 位于 `runtime/python/Lib/site-packages` 内相应 `.dist-info` 目录。
 - 前端使用 React、Vite、TypeScript、Lucide React；版本及许可证记录见前端源码中的 `package-lock.json` 及发行包 `frontend/licenses.json`。
 - 公开视频元数据提取：[yt-dlp 2026.08.19](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19) 官方 Windows 可执行程序，包含 EJS；主项目及捆绑依赖的许可证位于 `runtime/yt-dlp`。不修改二进制，SHA256 与官方校验文件一并核对。

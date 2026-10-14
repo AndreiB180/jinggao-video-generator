@@ -212,7 +212,7 @@ def test_normal_match_downloads_neighbourhood_then_reviews_shifted_actual_window
     monkeypatch.setattr(pooled_match, "online_rescue_queries", lambda *a: {})
     discoveries, downloads, reviews = [], [], []
 
-    def discover(*args):
+    def discover(*args, **kwargs):
         discoveries.append(1)
         proposals = (
             [

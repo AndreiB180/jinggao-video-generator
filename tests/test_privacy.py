@@ -87,7 +87,8 @@ def test_old_approval_and_new_audit_cannot_ignore_readable_phone(current_audit):
             "verification": verdict | {"identity_audit": deepcopy(audit)}}
     project = {"shots": [shot], "assets": [{"id": "asset", "kind": "image"}]}
     assert curation.approve_verified(project) == 0 and not shot["approved"]
-    with pytest.raises(ValueError, match="手机号" if current_audit else "当前版本的实帧与字幕核验"):
+    # v60 reports the privacy blocker first for both old and current audits.
+    with pytest.raises(ValueError, match="手机号"):
         curation.validate_export(project)
 
 

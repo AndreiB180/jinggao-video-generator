@@ -1,6 +1,7 @@
 """Editorial checks based on source evidence and actual playable durations."""
 from __future__ import annotations
 
+from copy import deepcopy
 from urllib.parse import urlparse
 
 from . import context_labels, privacy
@@ -40,6 +41,71 @@ def express_result(shot: dict) -> dict:
     return result.get("express") if isinstance(result.get("express"), dict) else {}
 
 
+def express_project(project: dict) -> bool:
+    """Planned by the express pipeline: ordinary shots need no paid per-frame audit chain."""
+    return (project.get("plan_info") or {}).get("mode") == "express"
+
+
+# Workbench edits that change how the chosen footage is framed, timed or labelled, not what it is.
+FRAMING_FIELDS = {"fit", "overlay_label", "clip_start", "duration", "visual", "subject", "location", "era",
+                  "exclusions", "preferred_media", "query", "source_review_note", "source_review_url"}
+IDENTITY_FIELDS = {"persons", "event", "evidence_mode", "event_scope"}
+
+
+def express_edit(project: dict, shot: dict, before: dict, changed: set) -> bool:
+    """Keep an express pick across a workbench edit instead of demanding a classic re-audit.
+    A changed person/event target drops the identity result; any edit beyond framing needs a new confirm."""
+    if not express_project(project) or not express_result(before):
+        return False
+    verification = deepcopy(before["verification"])
+    if changed & IDENTITY_FIELDS:
+        verification["express"]["identity"] = ""
+        verification["identity_evidence"] = None
+        # The editor re-sends the old source note; it described the previous person or event.
+        if not changed & {"source_review_note", "source_review_url"}:
+            shot.update(source_review_note="", source_review_url="")
+    if changed - FRAMING_FIELDS:
+        # New narration or a new target: the footage needs a new look (a re-match, or the user's confirm).
+        verification["needs_source_check"] = True
+    shot.update(verification=verification)
+    shot["approved"] = bool(before.get("approved")) and not (changed - FRAMING_FIELDS) and identity_ready(shot)
+    return True
+
+
+def keep_express(project: dict, shot: dict, *, recheck: bool = False) -> bool:
+    """A retimed, re-voiced or metadata-edited express pick keeps its pick (and a manual choice stays
+    the user's) instead of falling back to the paid classic audit. It needs a new look (a re-match on
+    produce, or the user's confirm) when asked to, or when the clip no longer covers the shot."""
+    if not express_project(project) or not express_result(shot):
+        return False
+    asset = next((a for a in project.get("assets", []) if a["id"] == shot.get("selected_asset")), None)
+    short = bool(asset and asset.get("kind") == "video" and float(shot.get("duration") or 0)
+                 > float(asset.get("duration") or 0) - float(shot.get("clip_start") or 0) + .16)
+    if recheck or short:
+        shot["verification"]["needs_source_check"] = True
+        shot["approved"] = False
+    return True
+
+
+def manual_choice(shot: dict) -> bool:
+    """The user picked this footage by hand; automatic re-matching must not replace it (also after an
+    AI check replaced its verification)."""
+    return bool(shot.get("selected_asset")) and (shot.get("manual_asset") == shot.get("selected_asset")
+                                                  or express_result(shot).get("lane") == "manual")
+
+
+def manual_pick(project: dict, shot: dict, asset: dict) -> None:
+    """The user's own pick in an express project counts as confirmed, except where a named
+    person or event must be shown: that still needs the source note and link."""
+    if not express_project(project) or not asset or asset.get("kind") not in ("video", "image"):
+        return
+    shot.update(verification={"verdict": "match", "scene_alignment": "match", "selection_blocked": False,
+                              "needs_source_check": False, "reason": "手动选择的画面",
+                              "express": {"version": 0, "lane": "manual", "identity": "", "flags": []}},
+                search_note="手动选择的画面", manual_asset=asset.get("id"))
+    shot["approved"] = identity_ready(shot)
+
+
 def identity_ready(shot: dict) -> bool:
     if not needs_identity(shot):
         return True
@@ -47,7 +113,9 @@ def identity_ready(shot: dict) -> bool:
     if express:
         # Supported: source text names the person and the pick shows a person
         # as subject. not_shown: people-free context footage, never someone else.
-        return express.get("identity") in ("supported", "not_shown")
+        evidence = (shot.get("verification") or {}).get("identity_evidence") or {}
+        checked = evidence.get("status") == "supported" and not (shot.get("verification") or {}).get("selection_blocked", True)
+        return express.get("identity") in ("supported", "not_shown") or has_manual_source(shot) or checked
     evidence = (shot.get("verification") or {}).get("identity_evidence") or {}
     return (evidence.get("status") == "supported"
             and not (shot.get("verification") or {}).get("selection_blocked", True)) or has_manual_source(shot)
@@ -98,6 +166,8 @@ def selection_error(project, shot, asset, *, verify_files=False):
     if asset.get("kind") == "video" and (result.get("visual_quality") or {}).get("representation") == "uncertain":
         return "片段含无法确认类型的帧，需检查空白或片尾转场后重选"
     frames = (result.get("identity_audit") or {}).get("frame_observations") or []
+    if not isinstance(frames, list) or any(not isinstance(f, dict) for f in frames):
+        return "实际帧核验记录无效，需要重新核验"
     if not frames:
         return frame_sampling.selection_error(project, shot, asset)
     separate = {key for key in frame_contract.requirements(shot, frames) if key.startswith("frame_scope_")}

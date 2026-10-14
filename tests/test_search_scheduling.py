@@ -67,7 +67,7 @@ def test_match_has_one_video_query_per_group_total_budget_and_deferred_images(tm
     def images(query):
         calls.append(("image", query, False))
         return [], []
-    def discovery(*args):
+    def discovery(*args, **kwargs):
         calls.append(("discovery", "", False))
         return {}, {}, {"model_requests": 0, "sampled_bytes": 0, "failures": []}
     monkeypatch.setattr(video_sources, "search_videos", search)

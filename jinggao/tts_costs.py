@@ -53,6 +53,9 @@ def validate_pricing(raw):
 
 def identity(cfg):
     provider = cfg["tts_provider"]
+    if provider == "qwen_tts":
+        from . import qwen_tts
+        return qwen_tts.endpoint(cfg), qwen_tts.MODEL, qwen_tts.voice(cfg)
     if provider in BAIDU:
         return "https://huibo.baidu.com", "public-voice", cfg["baidu_voice_name"].strip()
     if provider == "compatible":
@@ -76,6 +79,17 @@ class speech_request(costs.request):
         self.offline = cfg["tts_provider"] == "system"
         self.cost_basis = "offline_system" if self.offline else "unverified_account_entitlement"
         self.pricing_status = "known" if self.offline else "unpriced"
+        if cfg["tts_provider"] == "qwen_tts":
+            # Published list price, billed per character (a Chinese character counts as two);
+            # settled on the service's own count when the response carries it.
+            from . import qwen_tts
+            self.unit, self.usage_units = "million_characters", qwen_tts.billed(text)
+            self.rates = (Decimal(qwen_tts.RATE_PER_MILLION),)
+            self.amount = int((self.rates[0] * self.usage_units).to_integral_value(rounding=ROUND_CEILING))
+            self.cost_basis, self.pricing_status = "published_list_price", "known"
+            self.pricing_hash = costs.request_hash("tts-pricing-v1", {"provider": "qwen_tts", "model": model,
+                                                                      "cny_per_million": qwen_tts.RATE_PER_MILLION})
+            return
         if self.offline:
             # This is only the marginal API charge, never a claim about power,
             # equipment, voice quality or the acquisition cost of imported audio.
@@ -126,6 +140,16 @@ class speech_request(costs.request):
         # Character/request-priced speech returns binary audio, not token usage.
         # Account on HTTP success even if later audio validation fails.
         if 200 <= response.status_code < 300:
+            if self.cfg["tts_provider"] == "qwen_tts":
+                try:
+                    counted = int(response.json()["usage"]["characters"])
+                except (ValueError, KeyError, TypeError):
+                    counted = None
+                if counted is not None and 0 < counted:
+                    self.usage_units = counted
+                    self.amount = int((self.rates[0] * counted).to_integral_value(rounding=ROUND_CEILING))
+                    with costs._db() as con:
+                        con.execute("UPDATE charges SET usage_units=? WHERE id=?", (counted, self.id))
             self.success(response.status_code)
         elif response.status_code in {400, 401, 402, 403, 404, 413, 422, 429}:
             self._close("rejected", 0, response.status_code)

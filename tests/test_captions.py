@@ -43,13 +43,14 @@ def test_line_wrap_prefers_clause_and_does_not_split_daowei():
     assert max(map(len, wrapped.splitlines())) <= 20
 
 
-def test_one_caption_survives_a_shot_cut_and_has_same_ass_clock():
+def test_long_caption_shows_one_line_per_shot_and_keeps_the_ass_clock():
+    # Subtitles are one line at a time; a line wider than the frame is split and each shot shows its own part.
     track = {"cues": [{"start": 1.2, "end": 4.8, "text": "字幕不会因为画面切换而断成半句话。"}]}
     first = captions.segments(track, 0, 3, 720, 1280)
     second = captions.segments(track, 3, 3, 720, 1280)
-    assert first[0][:2] == (1.2, 3)
-    assert second[0][:2] == (0, 1.8)
-    assert first[0][2] == second[0][2]
+    assert [line for *_, line in first] == ["字幕不会因为画面"]
+    assert [line for *_, line in second] == ["切换而断成半句话。"]
+    assert first[0][0] == 1.2 and second[0][:2] == (0, 1.8)
     ass, segments = media.subtitles("旧分镜文字", 3, 720, 1280, timed_segments=second)
     assert segments == second
     assert "0:00:00.00,0:00:01.80" in ass

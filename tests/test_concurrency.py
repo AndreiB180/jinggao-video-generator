@@ -174,7 +174,7 @@ def test_concurrent_reservations_never_claim_overlapping_source_ranges(tmp_path,
 
 def test_parallel_image_selection_rechecks_budget_transactionally(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path)
-    monkeypatch.setattr(config, "read", lambda: {"model_api_key": "test", "match_workers": "2"})
+    monkeypatch.setattr(config, "read", lambda: {"model_api_key": "test", "match_workers": "2", "pipeline": "classic"})
     store.init()
     p = store.new_project("budget test", min_video_ratio=.5)
     shots = [planner.new_shot("Test footage") for _ in range(2)]
@@ -189,7 +189,7 @@ def test_parallel_image_selection_rechecks_budget_transactionally(tmp_path, monk
         store.mutate(pid, lambda body: body["assets"].append(asset), internal=True)
         return asset
     monkeypatch.setattr(worker, "materialize", materialize)
-    def verify(*args):
+    def verify(*args, **kwargs):
         barrier.wait(timeout=3)
         return {"verdict": "match", "reason": "Matches generic conditions", "selection_blocked": False}
     monkeypatch.setattr(planner, "verify", verify)

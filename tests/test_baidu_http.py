@@ -6,7 +6,7 @@ import pytest
 import websocket
 
 from jinggao import baidu_http as api
-from jinggao import baidu_web, config, media
+from jinggao import baidu_web, config, media, network
 
 
 VOICE = {"display_name": "测试公共音色", "id": 3596, "voice_type": 1, "status": 1,
@@ -63,6 +63,9 @@ def flow(monkeypatch):
     monkeypatch.setattr(api, "_session", session)
     monkeypatch.setattr(config, "read", lambda: {"baidu_voice_name": VOICE["display_name"]})
     monkeypatch.setattr(websocket, "create_connection", connect)
+    # On macOS network.websocket_connection opens a raw TCP socket to tts.baidu.com
+    # before calling websocket.create_connection; fake the whole connector.
+    monkeypatch.setattr(network, "websocket_connection", connect)
     monkeypatch.setattr(media, "run", convert)
     monkeypatch.setattr(media, "probe", lambda path: {"format": {"duration": "7.68"}})
     return state

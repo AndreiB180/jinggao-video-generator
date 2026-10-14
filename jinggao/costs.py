@@ -309,17 +309,23 @@ class request:
             waiting = False
             with _db() as con:
                 con.execute("BEGIN IMMEDIATE")
-                rows = con.execute("SELECT id,project_id,job_id,day,state,amount,provider FROM charges "
+                rows = con.execute("SELECT id,project_id,job_id,day,state,amount,provider,category FROM charges "
                                    "WHERE project_id=? OR day=? OR provider=? OR provider='' OR state IN ('reserved','unknown')",
                                    (pid, day, self.provider)).fetchall()
                 with _settlements:
                     active = _active.copy()
-                for name, subset, limit in (
+                # Speech is priced per character and grows with the script, so it has its own daily
+                # cap; the model caps cover planning, rewriting and picture checks only.
+                speech = self.category == "tts"
+                rows = [r for r in rows if (r["category"] == "tts") == speech]
+                today = [r for r in rows if r["day"] == day or r["state"] in {"reserved", "unknown"}]
+                caps = ((("今日配音", today, limits["tts_daily_budget_cny"]),) if speech else (
                     ("本次任务", [r for r in rows if r["job_id"] == jid], limits["model_job_budget_cny"] if jid else ""),
                     ("项目累计", [r for r in rows if r["project_id"] == pid], limits["model_project_budget_cny"]),
-                    ("今日", [r for r in rows if r["day"] == day or r["state"] in {"reserved", "unknown"}], limits["model_daily_budget_cny"]),
+                    ("今日", today, limits["model_daily_budget_cny"]),
                     ("当前服务累计", [r for r in rows if r["provider"] in {self.provider, ""}], limits["model_provider_budget_cny"]),
-                ):
+                ))
+                for name, subset, limit in caps:
                     if limit == "":
                         continue
                     used = sum(r["amount"] for r in subset)
@@ -333,7 +339,7 @@ class request:
                         continue
                     if stopped is not None:
                         stopped.set()
-                    raise BudgetExceeded(f"{name}模型预算 ¥{Decimal(limit):.2f}：已记账/预留 ¥{used/MICROS:.4f}，"
+                    raise BudgetExceeded(f"{name}{'' if speech else '模型'}预算 ¥{Decimal(limit):.2f}：已记账/预留 ¥{used/MICROS:.4f}，"
                                          f"下一请求需预留 ¥{reserve/MICROS:.4f}，已在发送前停止。已保存进度；重试不会清零费用。")
                 if not waiting:
                     self._insert(con, reserve)
@@ -404,6 +410,15 @@ def summary(project_id=None):
         daily = totals(con, "day=? OR state IN ('reserved','unknown','unpriced')", (day,))
         provider = totals(con, "provider=? OR provider=''", (_provider(cfg),))
         project = totals(con, "project_id=?", (project_id,)) if project_id else None
+        # Speech has its own daily cap: show model and voice money side by side against their own limits.
+        open_states = "state IN ('reserved','unknown','unpriced')"
+        def split(where, args):
+            rows = con.execute("SELECT category='tts' AS speech, COALESCE(SUM(amount),0) AS total FROM charges WHERE ("
+                               + where + ") GROUP BY category='tts'", args).fetchall()
+            found = {bool(r["speech"]): r["total"] / MICROS for r in rows}
+            return found.get(False, 0.0), found.get(True, 0.0)
+        model_day, speech_day = split("day=? OR " + open_states, (day,))
+        model_project, speech_project = split("project_id=?", (project_id,)) if project_id else (None, None)
         where, args = ("project_id=?", (project_id,)) if project_id else ("day=? OR state IN ('reserved','unknown','unpriced')", (day,))
         groups = con.execute("SELECT stage,category,model,COUNT(*) AS requests,SUM(amount) AS amount FROM charges WHERE "+where+" GROUP BY stage,category,model", args).fetchall()
         tasks = con.execute("SELECT stage,category,COALESCE(NULLIF(task,''),category) AS task,model,provider,pricing_status,COUNT(*) AS requests,SUM(amount) AS amount FROM charges WHERE "+where+" GROUP BY stage,category,task,model,provider,pricing_status", args).fetchall()
@@ -412,7 +427,11 @@ def summary(project_id=None):
                     if cfg["model_provider_budget_cny"] else None))
     if project is not None:
         project["limit_cny"] = float(cfg["model_project_budget_cny"])
-    return {"day": day, "day_basis": "本机日期", "daily": daily, "project": project, "provider": provider,
+    split_totals = {"model": {"daily_cny": model_day, "daily_limit_cny": float(cfg["model_daily_budget_cny"]),
+                              "project_cny": model_project, "project_limit_cny": float(cfg["model_project_budget_cny"])},
+                    "speech": {"daily_cny": speech_day, "daily_limit_cny": float(cfg["tts_daily_budget_cny"]),
+                               "project_cny": speech_project}}
+    return {"day": day, "day_basis": "本机日期", "daily": daily, "project": project, "provider": provider, **split_totals,
             "categories": [{"stage": r["stage"], "category": r["category"], "model": r["model"], "requests": r["requests"],
                             "total_cny": r["amount"]/MICROS} for r in groups],
             "tasks": [{"stage": r["stage"], "category": r["category"], "task": r["task"], "model": r["model"],

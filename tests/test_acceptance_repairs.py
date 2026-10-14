@@ -78,7 +78,10 @@ def test_produce_resumes_partial_voice_without_replacing_existing_audio(client, 
     worker.run_once()
     assert store.get_job(job["id"])["status"] == "completed"
     assert calls == ["第二段。"]
-    assert reviewed == [second["id"]]
+    # Express (default) keeps approved selections without a retained re-review
+    # (worker.process produce: retained = [] if express); classic only re-reviews
+    # unapproved/legacy video windows, and this approved image has neither.
+    assert reviewed == []
     assert store.get_project(p["id"])["shots"][0]["audio"]["path"] == "original.wav"
 
 

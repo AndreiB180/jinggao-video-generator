@@ -1,4 +1,5 @@
 """Offline checks for the express pipeline (no network, no paid calls)."""
+import hashlib
 import struct
 
 import pytest
@@ -68,6 +69,33 @@ def test_allocation_never_overlaps_windows_in_one_source(data):
     assert all(c["start"] <= c["tile"]["t"] <= c["start"] + 8.0 for c in assigned.values())
     assert all(b[0] >= a[1] + express_match.WINDOW_GAP - 1e-6 for a, b in zip(windows, windows[1:], strict=False))
     assert all(0 <= start and end <= 40.0 for start, end in windows)
+
+
+def test_allocation_spreads_shots_over_sources_and_skips_reuploaded_pictures(data):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 4.0} for i in range(12)]
+    m = _matcher(data, shots)
+    def look(name):    # a 64-bit picture hash, unrelated for different names
+        return int(hashlib.md5(name.encode()).hexdigest()[:16], 16)
+    big = {"provider": "bilibili", "id": "BV_big", "duration": 900.0}
+    others = [{"provider": "bilibili", "id": f"BV_{n}", "duration": 120.0} for n in range(6)]
+    # The big source is every shot's best-ranked option; the others are a little further down.
+    options = {s["id"]: [({"source": big, "t": 20.0 + 60 * i, "hash": look(f"big{i}")}, "pick")]
+               + [({"source": o, "t": t, "hash": look(f"{n}-{t}")}, "pick")
+                  for n, o in enumerate(others) for t in (20.0, 60.0, 100.0)]
+               for i, s in enumerate(m.shots)}
+    assigned = m.allocate(options, {}, {}, m.shots)
+    used = [c["tile"]["source"]["id"] for _, c in sorted(assigned.items(), key=lambda kv: m.position[kv[0]])]
+    assert used.count("BV_big") <= 4                       # capped near its share instead of filling everything
+    assert all(a != b or a != "BV_big" for a, b in zip(used, used[1:]))
+    # A re-upload (same picture, another id) loses to fresh footage when there is any.
+    twin = {"provider": "bilibili", "id": "BV_twin", "duration": 120.0}
+    m2 = _matcher(data, shots[:2])
+    first, second = m2.shots
+    m2.looks[m2.position[first["id"]]] = look("shown")
+    options = {second["id"]: [({"source": twin, "t": 30.0, "hash": look("shown") ^ 0b101}, "pick"),
+                              ({"source": others[0], "t": 30.0, "hash": look("fresh")}, "pick")]}
+    choice = m2.allocate(options, {}, {}, [second])[second["id"]]
+    assert choice["tile"]["source"]["id"] == "BV_0"
 
 
 def test_person_identity_requires_name_in_source_text():
@@ -171,6 +199,22 @@ def test_platform_watermark_found_on_moving_footage(tmp_path):
                "testsrc2=size=1280x720:rate=2:duration=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(plain)],
               check=True)
     assert ec.platform_watermark(plain, 6.0, (1280, 720)) == []
+
+
+def test_tv_broadcast_sources_crop_away_the_top_left_channel_logo(tmp_path):
+    from jinggao import express_clean as ec
+    pytest.importorskip("numpy")
+    clip = tmp_path / "doc.mp4"
+    __import__("subprocess").run([str(paths.binary("ffmpeg")), "-v", "error", "-y", "-f", "lavfi", "-i",
+                                  "testsrc2=size=1280x720:rate=5:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                  str(clip)], check=True)
+    plain = ec.analyse(clip, 3.0, (1280, 720), 16 / 9)
+    broadcast = ec.analyse(clip, 3.0, (1280, 720), 16 / 9, channel_logo=True)
+    assert not any(o["kind"] == "logo" and o["box"][0] < .05 and o["box"][1] < .05 for o in plain["overlays"])
+    assert any(o["kind"] == "logo" and o["box"][:2] == [0.0, 0.0] for o in broadcast["overlays"])
+    x, y, w, h = broadcast["crop"]
+    assert (x >= ec.CHANNEL_LOGO[2] - .01 or y >= ec.CHANNEL_LOGO[3] - .01) and broadcast["zoom"] <= ec.MAX_ZOOM
+    assert express_match.BROADCAST.search("【1080P】四集纪录片《追寻宋金时代的别样生活》【CCTV9-HD】")
 
 
 def test_subtitles_need_steady_strokes_not_moving_bright_texture():
@@ -291,3 +335,67 @@ def test_slow_downloads_carry_over_to_the_next_round(data, tmp_path):
     m.download([("c#1a", m.shots[0]["id"], {"tile": {"source": source}, "slow": True})], {},
                deadline=_time.monotonic() + 0.2)
     assert m.stop_downloads() == {"c#1a": "下载超时，已放弃该片段"} and not m.inflight
+
+
+def test_shots_hold_one_subtitle_line_each():
+    from jinggao import subtitle_style
+    script = "第二局只拿到2分。\n这场胜利不能掩盖长时间脱离高强度赛事留下的隐患。\n比分定格在7比11、2比11、11比6、10比12。"
+    shots = express_plan.line_shots(script, 20)
+    texts = [s["narration"] for s in shots]
+    assert "".join(texts) == script.replace("\n", "")
+    assert all(subtitle_style.width(t) <= 20 for t in texts)
+    assert texts[1:3] == ["这场胜利不能掩盖长时间", "脱离高强度赛事留下的隐患。"]
+    assert not any(t in "。，、" for t in texts)   # no shot is a lone punctuation mark
+    assert subtitle_style.line_chars_for("16:9", {"subtitle_size": "84"}) == 20
+    assert subtitle_style.line_chars_for("9:16", {"subtitle_size": "84"}) < 20
+
+
+def test_shot_lines_are_timed_by_their_own_characters():
+    # Uneven speech: the first five characters of the second sentence take 2.0 s, the rest 0.5 s.
+    # A proportional (cue-only) split would cut at 1.25 s; a wrong char_offset would read the first sentence.
+    text = "第一句话。第二句稍长一点的话。"
+    normal = captions._normal(text)
+    first = len(captions._normal("第一句话。"))
+    spans, at = [], 0.0
+    for i in range(len(normal)):
+        step = 0.2 if i < first else (0.4 if i < first + 5 else 0.1)
+        spans.append([at, at + step * .9, True, True])
+        at += step
+    track = {"cues": [{"start": 0, "end": spans[-1][1], "text": text}], "character_timing": {"spans": spans}}
+    shots = [{"narration": "第一句话。"}, {"narration": "第二句稍长一点的话。"}]
+    second_start = spans[first][0]
+    lines = captions.segments(track, second_start, 2.5, 1280, 720, narration=shots[1]["narration"],
+                              char_offset=captions.char_offset(shots, 1), line_chars=6)
+    assert [t for *_, t in lines] == ["第二句稍长", "一点的话。"]
+    assert lines[0][0] == 0 and lines[-1][1] == 2.5 and abs(lines[0][1] - 2.0) < .05 and lines[0][1] == lines[1][0]
+    wrong = captions.segments(track, second_start, 2.5, 1280, 720, narration=shots[1]["narration"],
+                              char_offset=0, line_chars=6)
+    assert wrong != lines
+
+
+def test_subtitle_style_falls_back_for_missing_glyphs():
+    from jinggao import subtitle_style
+    if not (subtitle_style.font_file("huangyou") and subtitle_style.font_file("black")):
+        pytest.skip("optional fonts not fetched")
+    st = subtitle_style.style(1280, 720, {"subtitle_font": "huangyou", "subtitle_size": "84", "subtitle_color": "yellow"})
+    assert st["size"] == 56 and st["primary"] == "&H0000E6FF"
+    text = subtitle_style.ass_text("吴晙诚{\\b1}", st)
+    assert "{\\fnNoto Sans SC Black}晙{\\fnZCOOL QingKe HuangYou}" in text and "{\\b1}" not in text
+
+
+def test_alignment_survives_digits_read_as_one_syllable():
+    text = "比分来到10比11。"
+    spoken, _ = captions._spoken(captions._normal(text))
+    words = [{"text": ch, "start": i * .3, "end": i * .3 + .25} for i, ch in enumerate(spoken)]
+    track = captions.align(text, words, len(spoken) * .3)
+    spans = track["character_timing"]["spans"]
+    assert len(spans) == len(captions._normal(text))
+    assert all(b[0] >= a[1] - .001 and b[0] <= b[1] for a, b in zip(spans, spans[1:]))
+
+
+def test_black_screens_and_fades_are_flagged_dark_but_night_scenes_are_not():
+    import numpy as np
+    rng = np.random.default_rng(1)
+    black = [np.zeros((27, 48), dtype=np.float32)] * 2 + [rng.random((27, 48), dtype=np.float32) * 255 for _ in range(4)]
+    night = [np.full((27, 48), 35, dtype=np.float32) + rng.random((27, 48), dtype=np.float32) * 30 for _ in range(6)]
+    assert express_clean.motion(black)["dark"] and not express_clean.motion(night)["dark"]

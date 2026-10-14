@@ -29,7 +29,7 @@ def test_repair_releases_rejected_windows_but_preserves_selected_ones(
     monkeypatch.setattr(pooled_match.video_sources, "inspect_video_candidate", lambda c, *a: c)
     monkeypatch.setattr(pooled_match, "online_rescue_queries", lambda *a: {})
     calls, sampled = [], []
-    def discovery(project, group_rows, *args):
+    def discovery(project, group_rows, *args, **kwargs):
         proposals = {}
         for members, candidates in group_rows:
             assert len(candidates) <= 3

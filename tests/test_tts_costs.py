@@ -12,7 +12,9 @@ from jinggao import baidu_http, config, costs, media, paths, tts_costs
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DATA", tmp_path / "data")
-    cfg = config.DEFAULTS | {"tts_provider": "compatible", "tts_base_url": "https://speech.test/v1",
+    # Model charges below use the DeepSeek flash table; the shipped default is DashScope qwen3.7-flash.
+    cfg = config.DEFAULTS | {"model_base_url": "https://api.deepseek.com", "model_name": "deepseek-flash",
+                             "tts_provider": "compatible", "tts_base_url": "https://speech.test/v1",
                              "tts_api_key": "private-test-key", "tts_model": "test-speech"}
     monkeypatch.setattr(config, "read", lambda: cfg.copy())
     monkeypatch.setattr(media, "probe", lambda path: {"format": {"duration": "2.0"}})
@@ -92,7 +94,7 @@ def test_compatible_missing_or_mismatched_price_stops_before_transport(environme
     assert records() == []
 
 
-def test_character_metered_speech_is_counted_and_uses_shared_project_budget(environment, monkeypatch, tmp_path):
+def test_character_metered_speech_is_counted_and_has_its_own_daily_budget(environment, monkeypatch, tmp_path):
     cfg = environment
     pricing(cfg)
     calls = []
@@ -100,7 +102,7 @@ def test_character_metered_speech_is_counted_and_uses_shared_project_budget(envi
         calls.append(json.loads(request.content))
         return httpx.Response(200, content=b"valid mock wav")
     transport(monkeypatch, post)
-    cfg.update(model_project_budget_cny="0.01", model_job_budget_cny="0.01")
+    cfg.update(model_project_budget_cny="0.01", model_job_budget_cny="0.01", tts_daily_budget_cny="0.01")
     with costs.scope("project", "tts-job", "narrate"):
         media.synthesize("中文😀", tmp_path / "audio.wav")
     row = records()[0]
@@ -111,7 +113,7 @@ def test_character_metered_speech_is_counted_and_uses_shared_project_budget(envi
     assert json.loads(row["rates"]) == ["100"]
     assert "中文😀" not in json.dumps(records(), ensure_ascii=False)
     assert calls == [{"model": "test-speech", "voice": "alloy", "input": "中文😀", "response_format": "wav"}]
-    # Existing model and speech costs share the same project budget across jobs.
+    # Model calls spend the model caps; speech spends its own daily cap. Both count in the project's total.
     with costs.scope("project", "model-job", "match"):
         with costs.request(cfg, {"model": "deepseek-flash", "messages": [], "max_tokens": 1000}, "text") as charge:
             charge.mark_sent()
@@ -141,7 +143,7 @@ def test_speech_http_outcomes_retain_ambiguous_reserves(environment, monkeypatch
 def test_timeout_survives_day_change_and_key_rotation(environment, monkeypatch, tmp_path):
     cfg = environment
     pricing(cfg, unit="request", cny_per_unit="0.01", valid_until="2099-12-31")
-    cfg.update(model_project_budget_cny="0.01", model_job_budget_cny="0.01")
+    cfg.update(tts_daily_budget_cny="0.01")
     def timeout(request):
         raise httpx.ReadTimeout("test", request=request)
     transport(monkeypatch, timeout)
@@ -203,6 +205,7 @@ def test_baidu_explicit_subscription_allocation_is_guarded(environment, monkeypa
     cfg = environment
     cfg["tts_provider"] = "baidu_http"
     pricing(cfg, unit="request", cny_per_unit="0.06", billing="included")
+    cfg["tts_daily_budget_cny"] = "0.10"
     calls = []
     def generate(text, target, check, *, before_submit):
         before_submit()
