@@ -46,7 +46,7 @@ npm run build --prefix frontend
 
 模型配置和素材站 Key 在应用「服务与设置」中填写。原测试使用阿里云北京兼容接口 `https://dashscope.aliyuncs.com/compatible-mode/v1`、`qwen3.7-flash`，具体可用模型和计价须在新环境核实。配音默认千问配音（与模型共用百炼 Key，37 个音色的试听样音随源码放在 `assets/voices/`）；旧设置里的百度一镜会在启动时自动改为千问配音一次。本地字幕模型和字体由上述脚本下载。
 
-本地素材库（左栏「素材库」）只存 B 站视频信息和预览帧的画面描述，不下载视频；出片时先查库再现场搜索。库文件 `data/footage-index.sqlite` 可在界面导出、在另一台机器导入。
+本地素材库（左栏「素材库」）只存 B 站视频信息和预览帧的画面描述，不下载视频；出片时先查库再现场搜索。库文件 `data/footage-index.sqlite` 可在界面导出、在另一台机器导入。已描述的部分随源码放在 `assets/footage-index/part-NN.jsonl.gz`（`scripts/footage_overnight.py` 每轮扩库后自动导出、提交），新机器首次启动时自动导入（`footage_index.install_seed`），Windows 包也会带上。
 
 仓库只带源代码、依赖清单、必要的文本测试夹具与交接文件，不带 API Key、Cookie、浏览器登录态、项目数据库、费用账本、素材、音视频、模型权重或构建产物。新机器的素材库为空；原机器的已积累索引和缓存不会随 Git 克隆，不能假设已有五万条索引或已下载素材。
 
