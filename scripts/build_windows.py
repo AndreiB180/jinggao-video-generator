@@ -212,7 +212,7 @@ def check_private_files(files, public_weights):
                 raise RuntimeError("Private data found in distribution: " + str(path))
 
 
-def package(release_path=None, model_directory=None, requirements=ROOT / "requirements.lock"):
+def package(release_path=None, model_directory=None, requirements=ROOT / "requirements.lock", bundle_pixabay=False):
     app_manifest, model_manifest = {}, {}
     if release_path:
         source, manifest = load_release(release_path)
@@ -233,6 +233,21 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
         (OUTPUT / "scripts").mkdir(exist_ok=True)
         shutil.copy2(ROOT / "scripts" / "sapi.ps1", OUTPUT / "scripts" / "sapi.ps1")
         shutil.copy2(ROOT / "launch.py", OUTPUT / "launch.py")
+        if model_directory:
+            # Subtitle alignment works offline from the first start (no model download on the customer's PC).
+            model_manifest = bundle_captions(ROOT, model_directory)
+    defaults = OUTPUT / "defaults.json"
+    defaults.unlink(missing_ok=True)
+    if bundle_pixabay:
+        # The vendor's free Pixabay key (config.BUNDLED_KEYS), read from this build machine's settings.
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from jinggao import config
+        key = config.read().get("pixabay_api_key", "").strip()
+        if not key:
+            raise RuntimeError("--bundle-pixabay-key: this machine has no Pixabay key in its settings")
+        defaults.write_text(json.dumps({"pixabay_api_key": key}), "utf-8")
+        print("Bundled the Pixabay key (defaults.json)", flush=True)
     for name in ("README.md", "THIRD_PARTY_NOTICES.md", "先看这里.txt"):
         shutil.copy2(ROOT / name, OUTPUT / name)
     shutil.copy2(requirements, OUTPUT / "requirements.lock")
@@ -268,11 +283,15 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
             b'"%~dp0runtime\\python\\python.exe" -X utf8 "%~dp0windows_bootstrap.py"\r\n'
             b'if errorlevel 1 (\r\n  pause\r\n  exit /b 1\r\n)\r\n'
             b'"%~dp0runtime\\python\\python.exe" -X utf8 "%~dp0launch.py"\r\nif errorlevel 1 pause\r\n')
+    (OUTPUT / "双击启动镜稿.cmd").write_bytes((OUTPUT / "Start.cmd").read_bytes())
     (OUTPUT / "Check.cmd").write_bytes(b'@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\nset PYTHONUTF8=1\r\n"%~dp0runtime\\python\\python.exe" -X utf8 -c "from jinggao.media import hardware; import json; print(json.dumps(hardware(), ensure_ascii=True, indent=2))"\r\npause\r\n')
     files = [p for p in OUTPUT.rglob("*") if p.is_file()]
     check_private_files(files, model_manifest)
     (ROOT / "dist").mkdir(exist_ok=True)
-    archive = ROOT / "dist" / (OUTPUT.name + "-test.zip" if release_path else "Jinggao-0.2.4-Windows-x64-test.zip")
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from jinggao import __version__
+    archive = ROOT / "dist" / (OUTPUT.name + "-test.zip" if release_path else f"Jinggao-{__version__}-Windows-x64.zip")
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for path in files:
             z.write(path, Path(OUTPUT.name) / path.relative_to(OUTPUT))
@@ -287,6 +306,8 @@ if __name__ == "__main__":
     parser.add_argument("--model-directory", type=Path, help="Public Paraformer weights directory")
     parser.add_argument("--requirements", type=Path)
     parser.add_argument("--output-name", help="A new folder name under build/, also used for the test archive")
+    parser.add_argument("--bundle-pixabay-key", action="store_true",
+                        help="Ship this machine's Pixabay key as the package default (defaults.json)")
     args = parser.parse_args()
     if args.release:
         load_release(args.release)
@@ -301,4 +322,4 @@ if __name__ == "__main__":
     requirements = args.requirements or ROOT / ("requirements-windows.lock" if args.release else "requirements.lock")
     prepare(requirements)
     if not args.prepare_only:
-        package(args.release, args.model_directory, requirements)
+        package(args.release, args.model_directory, requirements, bundle_pixabay=args.bundle_pixabay_key)

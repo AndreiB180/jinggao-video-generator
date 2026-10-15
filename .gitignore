@@ -37,3 +37,6 @@ auth*.json
 *.key
 
 !assets/voices/*.mp3
+defaults.json
+build/
+dist/

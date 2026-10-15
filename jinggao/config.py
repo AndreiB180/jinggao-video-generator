@@ -37,9 +37,30 @@ SECRETS = {k for k in DEFAULTS if k.endswith("api_key")}
 _lock = threading.Lock()
 
 
+# A package may carry keys for free services the vendor provides (defaults.json beside launch.py);
+# anything the user saves in Settings takes precedence.
+BUNDLED_KEYS = {"pixabay_api_key"}
+_bundled_cache = {}
+
+
+def bundled() -> dict:
+    path = paths.ROOT / "defaults.json"
+    if path not in _bundled_cache:
+        try:
+            raw = json.loads(path.read_text("utf-8")) if path.is_file() else {}
+        except (OSError, ValueError):
+            raw = {}
+        _bundled_cache[path] = {k: v.strip() for k, v in raw.items()
+                                if k in BUNDLED_KEYS and isinstance(v, str) and v.strip()} if isinstance(raw, dict) else {}
+    return _bundled_cache[path]
+
+
 def read() -> dict:
     p = paths.DATA / "settings.json"
-    data = DEFAULTS | json.loads(p.read_text("utf-8")) if p.exists() else DEFAULTS.copy()
+    data = DEFAULTS | bundled() | (json.loads(p.read_text("utf-8")) if p.exists() else {})
+    for key, value in bundled().items():
+        if not data.get(key):       # an empty saved field does not hide the bundled key
+            data[key] = value
     if data["search_provider"] not in ("mixed", "video", "local"):
         data["search_provider"] = "mixed"
     return data
