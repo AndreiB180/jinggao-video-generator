@@ -3,7 +3,7 @@
 便携包附带原始许可证与依赖元数据。下列链接用于查阅来源；商用素材授权应逐项核实，并记录于项目素材说明。
 
 - Python 3.13.12 嵌入式 Windows x64：[Python 官方发行页](https://www.python.org/downloads/release/python-31312/)，许可证位于 `runtime/python/LICENSE.txt`。
-- FFmpeg：来自 [Gyan Windows builds](https://www.gyan.dev/ffmpeg/builds/)，由 [FFmpeg 下载页](https://ffmpeg.org/download.html) 推荐。Gyan essentials 静态构建依照 GPL v3 分发；原始 LICENSE、README 位于 `runtime/ffmpeg`，版本与下载哈希位于 `runtime/downloads.json`。对应源码和构建信息通过该发行页提供；再次分发者应履行适用许可证要求。
+- FFmpeg 7.1：来自 [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)（win64-gpl 静态构建），由 [FFmpeg 下载页](https://ffmpeg.org/download.html) 推荐。依照 GPL v3 分发；原始 LICENSE 位于 `runtime/ffmpeg`，版本与下载哈希位于 `runtime/downloads.json`。对应源码和构建脚本通过该项目的发行页与仓库提供；再次分发者应履行适用许可证要求。选用这一构建是因为它的 NVIDIA 编码只要求 471.41 以上的显卡驱动。
 - Noto Sans SC：[Noto CJK](https://github.com/notofonts/noto-cjk)，SIL Open Font License 1.1，许可证位于 `assets/fonts/LICENSE`。
 - Noto Sans SC Black、Noto Serif SC Black（字幕字体）：[Noto CJK](https://github.com/notofonts/noto-cjk)，SIL Open Font License 1.1，许可证位于 `assets/fonts/LICENSE` 与 `assets/fonts/LICENSE-NotoSerifSC.txt`。
 - 站酷庆科黄油体 ZCOOL QingKe HuangYou、站酷快乐体 ZCOOL KuaiLe（可选字幕字体）：来自 [Google Fonts](https://github.com/google/fonts)，SIL Open Font License 1.1，许可证位于 `assets/fonts/OFL-*.txt`。

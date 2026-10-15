@@ -92,13 +92,13 @@ def test_shared_slots_bound_every_worker_together():
     throttle.install(throttle.shared(multiprocessing.get_context("spawn")))
     try:
         held = []
-        for _ in range(throttle.LIMITS["render"]):
-            context = throttle.slot("render")
+        for _ in range(throttle.LIMITS["gpu"]):
+            context = throttle.slot("gpu")
             context.__enter__()
             held.append(context)
         got = threading.Event()
         def another():
-            with throttle.slot("render"):
+            with throttle.slot("gpu"):
                 got.set()
         thread = threading.Thread(target=another, daemon=True)
         thread.start()
@@ -139,32 +139,34 @@ def test_temporary_names_differ_per_thread_and_publish_replaces(tmp_path):
     assert target.read_text() == "1" and not list(tmp_path.glob(".*.tmp"))
 
 
-def _cut_runs(monkeypatch, tmp_path, gpu, refuse_gpu=False):
-    from jinggao import express_sources as es, media
+def _cut_runs(monkeypatch, tmp_path, way, refuse_gpu=False):
+    from jinggao import express_sources as es, gpu, media
     runs = []
     def run(args, **kwargs):
-        runs.append("nvenc" if "h264_nvenc" in args else "x264")
+        runs.append("full" if "scale_cuda" in " ".join(args) else "nvenc" if "h264_nvenc" in args else "x264")
         if refuse_gpu and "h264_nvenc" in args:
             raise ValueError("媒体处理失败：OpenEncodeSessionEx failed: out of memory")
         from pathlib import Path
         Path(args[-1]).write_bytes(b"clip")
         return ""
     monkeypatch.setattr(media, "run", run)
-    monkeypatch.setattr(es, "_nvenc", lambda: gpu)
-    es.cut_window("in.mp4", 1, 3, tmp_path / "clip.mp4")
+    monkeypatch.setattr(gpu, "mode", lambda kind="clip": way)
+    used = es.cut_window("in.mp4", 1, 3, tmp_path / "clip.mp4")
     assert (tmp_path / "clip.mp4").read_bytes() == b"clip"
-    return runs
+    return runs, used
 
 
-def test_candidate_clips_use_a_free_gpu_session_and_fall_back_to_the_cpu(tmp_path, monkeypatch):
-    assert _cut_runs(monkeypatch, tmp_path, gpu=False) == ["x264"]
-    assert _cut_runs(monkeypatch, tmp_path, gpu=True) == ["nvenc"]
-    assert _cut_runs(monkeypatch, tmp_path, gpu=True, refuse_gpu=True) == ["nvenc", "x264"]
-    held = [throttle.slot("render") for _ in range(throttle.LIMITS["render"])]
+def test_candidate_clips_go_to_the_card_and_fall_back_to_the_cpu(tmp_path, monkeypatch):
+    assert _cut_runs(monkeypatch, tmp_path, "cpu") == (["x264"], "cpu")
+    assert _cut_runs(monkeypatch, tmp_path, "full") == (["full"], "full")
+    assert _cut_runs(monkeypatch, tmp_path, "nvenc") == (["nvenc"], "nvenc")
+    assert _cut_runs(monkeypatch, tmp_path, "full", refuse_gpu=True) == (["full", "x264"], "cpu")
+    monkeypatch.setattr(throttle, "GPU_WAIT", 0)
+    held = [throttle.slot("gpu") for _ in range(throttle.LIMITS["gpu"])]
     for context in held:
         context.__enter__()
-    try:   # every NVENC session busy with renders: the clip goes to the CPU instead of waiting
-        assert _cut_runs(monkeypatch, tmp_path, gpu=True) == ["x264"]
+    try:   # every NVENC session stays busy: after a short wait the clip takes a free CPU slot instead
+        assert _cut_runs(monkeypatch, tmp_path, "full") == (["x264"], "cpu")
     finally:
         for context in held:
             context.__exit__(None, None, None)

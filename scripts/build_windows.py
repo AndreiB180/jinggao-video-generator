@@ -19,7 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "build" / "downloads"
 OUTPUT = ROOT / "build" / "Jinggao-Windows-x64"
 PYTHON_URL = "https://www.python.org/ftp/python/3.13.12/python-3.13.12-embed-amd64.zip"
-FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+# FFmpeg 7.1 built against NVIDIA Video Codec SDK 11.1 headers: NVENC works with drivers 471.41+ (mid-2021).
+# The gyan.dev 9.x builds need driver 610+, so most customers' cards silently fell back to the CPU.
+FFMPEG_URL = ("https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-30-13-34/"
+              "ffmpeg-n7.1.5-1-g7d0e842004-win64-gpl-7.1.zip")
+FFMPEG_SHA256 = "405b190f746db40539eb453967f72c0e69d8bf260b10ceff36e0c2149a9ad22f"
 YTDLP_BASE = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/"
 YTDLP_SHA256 = "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a"
 DENO_BASE = "https://github.com/denoland/deno/releases/download/v2.9.7/"
@@ -89,7 +93,7 @@ def prepare(requirements=ROOT / "requirements.lock"):
             raise RuntimeError("Jieba did not produce a platform-independent wheel")
     python_zip = fetch(PYTHON_URL)
     ffmpeg_zip = fetch(FFMPEG_URL)
-    checksum = fetch(FFMPEG_URL + ".sha256").read_text().split()[0].lower()
+    checksum = FFMPEG_SHA256
     if digest(ffmpeg_zip) != checksum:
         raise RuntimeError("FFmpeg checksum mismatch. Clear build/downloads/ffmpeg* and rebuild.")
     py = runtime / "python"
@@ -120,15 +124,19 @@ def prepare(requirements=ROOT / "requirements.lock"):
         "    if _directory.is_dir():\n"
         "        _jinggao_dll_handles.append(os.add_dll_directory(str(_directory)))\n", encoding="utf-8")
     ff = runtime / "ffmpeg"
-    if not (ff / "ffmpeg.exe").exists():
+    source = ff / "source.txt"
+    current = source.read_text("utf-8").strip() if source.exists() else ""
+    if not (ff / "ffmpeg.exe").exists() or current != FFMPEG_URL:
+        shutil.rmtree(ff, ignore_errors=True)       # a runtime prepared with another FFmpeg build is replaced
         ff.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(ffmpeg_zip) as z:
             for name in z.namelist():
-                if name.endswith(("/bin/ffmpeg.exe", "/bin/ffprobe.exe", "/LICENSE", "/README.txt")):
+                if name.endswith(("/bin/ffmpeg.exe", "/bin/ffprobe.exe", "/LICENSE.txt", "/LICENSE", "/README.txt")):
                     (ff / Path(name).name).write_bytes(z.read(name))
+        (ff / "source.txt").write_text(FFMPEG_URL + "\n", "utf-8")
     manifest = {"python": {"url": PYTHON_URL, "sha256": digest(python_zip)},
                 "ffmpeg": {"url": FFMPEG_URL, "sha256": checksum,
-                           "vendor_checksum": FFMPEG_URL + ".sha256"}}
+                           "nvenc_minimum_driver": "471.41"}}
     manifest.update(prepare_youtube(runtime))
     (runtime / "downloads.json").write_text(json.dumps(manifest, indent=2), "utf-8")
     print("Windows runtime ready:", runtime, flush=True)

@@ -51,3 +51,23 @@ def keep_awake():
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait(timeout=2)
+
+
+def lower_priority() -> str:
+    """Video work runs below normal priority, so the desktop and other programs stay responsive while every
+    core is busy; FFmpeg processes started from here inherit it. Returns what was set."""
+    try:
+        if sys.platform == "win32":
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            if kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x4000):   # BELOW_NORMAL_PRIORITY_CLASS
+                return "below_normal"
+        elif hasattr(os, "nice"):
+            current = os.nice(0)
+            if current < 10:
+                os.nice(10 - current)
+            return "nice"
+    except (OSError, AttributeError):
+        pass
+    return "unchanged"

@@ -118,7 +118,7 @@ class BatchRequest(Strict):
     projects: list[BatchItem] = Field(min_length=1, max_length=200)
     requirements: str = Field(default="", max_length=2000)
     resolution: Literal["720p", "1080p"] = "1080p"
-    workers: int | None = Field(default=None, ge=1, le=4)     # videos made at the same time (video_workers)
+    workers: int | None = Field(default=None, ge=1, le=6)     # videos made at the same time (video_workers)
 
 
 class QueueAction(Strict):
@@ -164,3 +164,7 @@ class LibraryBuild(Strict):
 
 class LibraryUse(Strict):
     project_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class FileAction(Strict):
+    export_id: str | None = Field(default=None, max_length=64)     # default: the latest export

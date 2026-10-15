@@ -17,7 +17,7 @@ from functools import lru_cache
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from . import captions, config, curation, execution, express_clean, paths, store, subtitle_style, throttle
+from . import captions, config, curation, execution, express_clean, gpu, paths, store, subtitle_style, throttle
 
 
 class Cancelled(Exception):
@@ -110,26 +110,17 @@ def inspect_asset(project_id: str, path: Path, title: str, **metadata) -> dict:
 
 
 def hardware() -> dict:
-    result = {"ffmpeg": False, "nvenc": False, "gpu": "未检测到 NVIDIA GPU", "system": sys.platform}
+    """FFmpeg and the NVIDIA card as checked at start (gpu.detect), plus what this computer offers for CPU work."""
+    result = {"ffmpeg": False, "system": sys.platform, "cores": os.cpu_count() or 0,
+              "cpu_slots": throttle.LIMITS["cpu"], "gpu_slots": throttle.LIMITS["gpu"]}
     try:
         paths.binary("ffmpeg")
         paths.binary("ffprobe")
         result["ffmpeg"] = True
     except RuntimeError:
-        return result
-    smi = shutil.which("nvidia-smi")
-    if smi:
-        try:
-            result["gpu"] = run([smi, "--query-gpu=name,memory.total", "--format=csv,noheader"], timeout=10).strip()
-        except ValueError:
-            pass
-    try:
-        run([paths.binary("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=s=320x180:r=25",
-             "-t", "0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], timeout=15)
-        result["nvenc"] = True
-    except ValueError:
-        pass
-    return result
+        return result | {"nvenc": False, "full": False, "gpu": "未检测到 NVIDIA GPU"}
+    state = gpu.status()
+    return result | state | {"gpu": state.get("gpu") or "未检测到 NVIDIA GPU", "summary": gpu.summary(state)}
 
 
 def synthesize(text: str, target: Path, check=None) -> None:
@@ -238,6 +229,81 @@ def output_folder() -> Path:
         if videos and videos.is_dir():
             return videos / "镜稿成片"
     return Path.home() / "镜稿成片"
+
+
+def finished_file(project: dict, export_id: str | None = None) -> Path:
+    """A project's finished video on disk: the copy in the output folder if it is still there, else the export
+    inside the project."""
+    exports = project.get("exports") or []
+    export = next((e for e in exports if e.get("id") == export_id), None) if export_id else (exports[0] if exports else None)
+    if not export:
+        raise ValueError("这个项目还没有成片")
+    saved = Path(export["saved_to"]) if export.get("saved_to") else None
+    if saved and saved.is_file():
+        return saved
+    inner = paths.project_dir(project["id"]) / export["path"]
+    if not inner.is_file():
+        raise ValueError("成片文件已被移动或删除")
+    return inner
+
+
+def _windows_flags() -> int:
+    return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def open_path(target: Path) -> None:
+    """Open a file with its default program (a video plays in the system player) or a folder in the file manager."""
+    if os.name == "nt":
+        os.startfile(str(target))  # noqa: S606 - the app's own files on the user's machine
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+
+
+def reveal(target: Path) -> None:
+    """Show the file selected in Explorer / Finder."""
+    if os.name == "nt":
+        # Windows file names cannot contain quotes, so the path is safe inside them.
+        subprocess.Popen(f'explorer /select,"{target}"')
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target.parent)])
+
+
+def choose_folder(initial: str = "") -> str | None:
+    """The system's folder picker; returns the chosen folder, or None when cancelled or unavailable."""
+    if os.name == "nt":
+        # The chosen path comes back as Base64 of its UTF-8 bytes: a Chinese Windows console would otherwise
+        # hand over GBK text.
+        script = ("Add-Type -AssemblyName System.Windows.Forms;"
+                  "$owner=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false};"
+                  "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
+                  "$d.Description='选择成片保存位置';$d.ShowNewFolderButton=$true;"
+                  "if($env:JINGGAO_FOLDER){$d.SelectedPath=$env:JINGGAO_FOLDER};"
+                  "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){"
+                  "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($d.SelectedPath))}")
+        command = ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script]
+    elif sys.platform == "darwin":
+        command = ["osascript", "-e", 'POSIX path of (choose folder with prompt "选择成片保存位置")']
+    else:
+        return None
+    try:
+        done = subprocess.run(command, capture_output=True, timeout=900, creationflags=_windows_flags(),
+                              env=os.environ | {"JINGGAO_FOLDER": initial})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    chosen = done.stdout.decode("utf-8", errors="replace").strip().splitlines()
+    if done.returncode != 0 or not chosen:
+        return None
+    if os.name == "nt":
+        import base64
+        try:
+            return base64.b64decode(chosen[-1].strip()).decode("utf-8") or None
+        except ValueError:
+            return None
+    return chosen[-1].strip() or None
 
 
 def deliver(project: dict, result: dict) -> str:
@@ -494,11 +560,11 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         shutil.copyfile(font, work / "fonts" / font.name)
     cfg = config.read()
     ass_available = has_ass(paths.binary("ffmpeg"))
-    use_gpu = cfg["encoder"] != "cpu" and hardware()["nvenc"]
+    use_gpu = gpu.mode("render") == "nvenc"
     if cfg["encoder"] == "nvenc" and not use_gpu:
-        raise ValueError("NVIDIA 编码不可用，请检查驱动或改为自动/CPU")
-    encode = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-b:v", "0"] if use_gpu else \
-             ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-threads", "4"]
+        state = gpu.status()
+        raise ValueError("NVIDIA 编码不可用：" + (state.get("advice") or state.get("reason") or "请检查驱动或改为自动/CPU"))
+    encoders = {}
     assets = {a["id"]: a for a in project["assets"]}
     def caption_progress(fraction, message):
         progress(fraction * 4, message)
@@ -577,7 +643,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
                        f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={w}x{h}:fps=25")
         visual = prefix + visual
         visual += f",setsar=1,fps=25,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}"
-        args = [paths.binary("ffmpeg"), "-v", "error", "-y"]
+        args = [paths.binary("ffmpeg"), "-v", "error", "-y", "-filter_threads", "2"]
         if asset["kind"] == "image":
             args += ["-loop", "1", "-framerate", "25", "-i", str(source)]
         else:
@@ -586,7 +652,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
                 raise ValueError(f"镜头 {i+1} 的截取起点超出素材时长")
             if project.get("media_policy", "mixed") != "mixed" and duration > asset["duration"]-start+.16:
                 raise ValueError(f"镜头 {i+1} 视频短于实际配音，需补足片段后导出")
-            args += ["-ss", str(start), "-i", str(source)]
+            args += ["-threads", "2", "-ss", str(start), "-i", str(source)]
         if full_audio:
             args += ["-ss", str(begin), "-i", str(paths.file_path(project["id"], full_audio["path"]))]
         elif audio:
@@ -603,16 +669,29 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         # priming/padding on every cut otherwise introduces timing drift.
         args += (["-an"] if full_audio else
                  ["-map", "1:a:0", "-af", "apad", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"])
-        args += ["-t", str(duration), *encode,
-                 "-movflags", "+faststart", str(work / filename)]
-        with throttle.slot("render", check):     # shared by every video being made (NVENC sessions)
-            run(args, cwd=shot_work, check=check)
-        return item, segments, filename, label
+        def encode(way):
+            run(args + ["-t", str(duration), *(gpu.NVENC_RENDER if way == "nvenc" else gpu.X264_RENDER),
+                        "-movflags", "+faststart", str(work / filename)], cwd=shot_work, check=check)
+        # Slots are shared by every video being made: NVENC sessions on the card, CPU encodes on the cores.
+        way = gpu.mode("render")
+        if way == "nvenc":
+            with throttle.slot("gpu", check):
+                try:
+                    encode("nvenc")
+                    gpu.worked("nvenc")
+                except ValueError as exc:     # the card refused this shot: the CPU makes it below
+                    gpu.failed("nvenc", exc)
+                    way = "cpu"
+        if way == "cpu":
+            with throttle.slot("cpu", check):
+                encode("cpu")
+        return item, segments, filename, label, way
 
     workers = int(options.get("render_workers") or cfg.get("render_workers", "1"))
     progress(0, f"开始合成 {len(shots)} 镜 · {workers} 路并发 · {'NVIDIA' if use_gpu else 'CPU'}")
-    for item, segments, filename, label in execution.ordered_map(render_shot, prepared, workers):
+    for item, segments, filename, label, way in execution.ordered_map(render_shot, prepared, workers):
         i, shot, asset, source, audio, duration, begin = item
+        encoders[way] = encoders.get(way, 0) + 1
         check()
         progress((i+1)/len(shots)*85, f"已合成 {i+1}/{len(shots)} 镜 · {workers} 路并发 · {'NVIDIA' if use_gpu else 'CPU'}")
         timeline.append(f"file '{filename}'")
@@ -668,7 +747,9 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
             bundle.write(out / name, name)
     result = {"id": job_id, "path": final.relative_to(root).as_posix(),
               "bundle": (out / "delivery.zip").relative_to(root).as_posix(), "created": time.time(),
-              "duration": elapsed, "width": w, "height": h, "encoder": "nvenc" if use_gpu else "cpu",
+              "duration": elapsed, "width": w, "height": h,
+              "encoder": "nvenc" if encoders.get("nvenc") and not encoders.get("cpu") else "cpu" if not encoders.get("nvenc") else "mixed",
+              "encoders": encoders,
               "revision": project["revision"], "silent_preview": bool(options.get("allow_silent")), "subtitles": burn}
     result["image_motion"] = bool(options.get("image_motion", True))
     result["composition"] = composition

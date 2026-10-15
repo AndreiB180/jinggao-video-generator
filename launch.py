@@ -14,7 +14,7 @@ import webbrowser
 import httpx
 import uvicorn
 
-from jinggao import __version__, config, instance, paths, source_index, store, throttle
+from jinggao import __version__, config, gpu, instance, paths, source_index, store, throttle
 from jinggao.api import create_app
 from jinggao.worker import loop, video_workers
 
@@ -146,6 +146,15 @@ def main():
         except Exception as exc:
             print(f"素材库种子未能载入：{exc}", flush=True)
     threading.Thread(target=footage_seed, name="footage-seed", daemon=True).start()
+    card = {}
+    def check_card():
+        # The real encode test with the bundled FFmpeg, once per start; workers read data/gpu-check.json.
+        try:
+            card.update(gpu.detect())
+        except Exception as exc:
+            card.update(reason=f"显卡检测出错：{exc}")
+    checking = threading.Thread(target=check_card, name="gpu-check", daemon=True)
+    checking.start()
     seeded = source_index.install_seed()
     source_index.prepare_entities()
     if seeded:
@@ -157,7 +166,10 @@ def main():
     store.init()
     store.recover("main")
     store.recover("background")
-    limits = throttle.shared(multiprocessing)
+    checking.join(90)
+    print(gpu.summary(card) if card.get("checked") else "显卡检测未完成，先用 CPU 合成", flush=True)
+    limits = throttle.shared(multiprocessing, {"gpu": card.get("sessions") or 3})
+    throttle.install(limits)      # this process too, so the settings page reports the real slot sizes
     def start_slot(lane="main", slot=0):
         process = multiprocessing.Process(target=loop, args=(stop, lane, slot, limits, False), daemon=True)
         process.start()

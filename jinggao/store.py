@@ -85,7 +85,7 @@ def list_projects() -> list[dict]:
         video = (p.get("exports") or [None])[0]
         result.append({key: p.get(key) for key in ("id", "title", "updated", "aspect", "revision")}
                       | {"shot_count": len(p["shots"]), "script_length": len(p["script"]),
-                         "video": video and {k: video.get(k) for k in ("path", "duration", "created", "saved_to")},
+                         "video": video and {k: video.get(k) for k in ("id", "path", "duration", "created", "saved_to")},
                          "audio_source": bool(p.get("source_audio")),
                          "job": latest.get(p["id"]) and {k: latest[p["id"]][k] for k in ("kind", "status", "progress", "message")}})
     return result

@@ -118,9 +118,11 @@ def update(values: dict) -> dict:
         raise ValueError("语速须为 1.0、1.1、1.2 或 1.3")
     if values.get("search_provider", "mixed") not in ("mixed", "video", "local"):
         raise ValueError("素材检索仅支持多源检索、视频检索或本地素材")
-    for key in ("plan_workers", "match_workers", "render_workers", "video_workers"):
+    for key in ("plan_workers", "match_workers", "render_workers"):
         if key in values and values[key] not in ("1", "2", "3", "4"):
             raise ValueError("并发数须为 1 到 4")
+    if "video_workers" in values and values["video_workers"] not in ("1", "2", "3", "4", "5", "6"):
+        raise ValueError("同时制作的视频须为 1 到 6 条")
     if values.get("pipeline", "express") not in ("express", "classic"):
         raise ValueError("制作流程须为 express 或 classic")
     if values.get("auto_save_exports", "1") not in ("0", "1"):

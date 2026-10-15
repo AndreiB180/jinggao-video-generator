@@ -1,9 +1,10 @@
 import {useEffect,useState} from 'react';
-import {FolderOpen,Plus,RotateCcw,Square,Trash2,Upload,X} from 'lucide-react';
+import {CheckCircle2,FolderOpen,Plus,RotateCcw,Square,Trash2,Upload,X} from 'lucide-react';
 import {useVoices} from './VoicePicker';
+import {FolderBar,VideoFileActions,fileName} from './FileActions';
 
 type Item={title:string;script:string};
-type Row={id:string;project_id:string;title:string;status:string;progress:number;message:string;error:string;kind:string;batch?:string|null;created:number;updated:number};
+type Row={id:string;project_id:string;title:string;status:string;progress:number;message:string;error:string;kind:string;batch?:string|null;created:number;updated:number;video?:{path:string;saved_to:string;duration:number}|null};
 type Costs={model:{daily_cny:number;daily_limit_cny:number}};
 async function request(path:string,body?:unknown,method?:string){const r=await fetch('/api'+path,{method:method||(body===undefined?'GET':'POST'),headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(typeof d.detail==='string'?d.detail:'请求内容无效');return d}
 const names:Record<string,string>={queued:'排队中',running:'制作中',completed:'已完成',needs_review:'待补素材 / 核对',failed:'失败，可重试',cancelled:'已取消',interrupted:'已中断'};
@@ -31,12 +32,15 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
  const [settings,setSettings]=useState<Record<string,any>>({}),[costs,setCosts]=useState<Costs|null>(null);
  const provider=settings.tts_provider||'edge_tts', voices=useVoices(['edge_tts','qwen_tts'].includes(provider)?provider:'edge_tts');
  const workers=Number(settings.video_workers||3);
+ const [system,setSystem]=useState<Record<string,any>>({});
+ // With the NVIDIA card encoding, more videos at once mostly overlap downloads and model calls.
+ const recommended=system.nvenc?4:(system.cores||8)>=12?3:2;
  const refresh=()=>request('/queue').then((r:Row[])=>{
   // Each project's latest video job; a later retry supersedes the failed run.
   const seen=new Set<string>();setRows(r.filter(j=>j.kind==='produce'&&!seen.has(j.project_id)&&!!seen.add(j.project_id)));setQueueError('')
  }).catch(()=>setQueueError('工作台暂时连接中断，恢复后会自动更新队列。'));
  useEffect(()=>{
-  refresh();request('/settings').then(setSettings).catch(()=>{});request('/costs').then(setCosts).catch(()=>{});
+  refresh();request('/settings').then(setSettings).catch(()=>{});request('/costs').then(setCosts).catch(()=>{});request('/system').then(setSystem).catch(()=>{});
   const t=setInterval(refresh,2500);return()=>clearInterval(t)
  },[]);
  useEffect(()=>{try{localStorage.setItem('jinggao.burn',burn?'1':'0')}catch{/* private window */}},[burn]);
@@ -91,7 +95,7 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
    {items.map((item,i)=><div className="batch-item" key={i}><span>{i+1}</span><input aria-label={`第 ${i+1} 篇标题`} value={item.title} maxLength={100} onChange={e=>setItems(items.map((v,j)=>j===i?{...v,title:e.target.value}:v))}/><small>{item.script.length} 字</small><button className="icon-button" aria-label={`移除第 ${i+1} 篇`} onClick={()=>setItems(items.filter((_,j)=>j!==i))}><X size={16}/></button></div>)}
   </div>}
   <div className="field-grid">
-   <label>同时制作<select value={String(workers)} onChange={e=>change('video_workers',e.target.value)}>{[1,2,3,4].map(n=><option key={n} value={n}>{n} 条{n===3?'（推荐）':n===4?'（电脑和网络较好时）':''}</option>)}</select></label>
+   <label>同时制作<select value={String(workers)} onChange={e=>change('video_workers',e.target.value)}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n} 条{n===recommended?'（推荐）':''}</option>)}</select></label>
    <label>清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p · 更快</option></select></label>
    <label>画面比例<select value={aspect} onChange={e=>setAspect(e.target.value)}><option value="16:9">横屏 16:9</option><option value="9:16">竖屏 9:16</option></select></label>
    <label>素材组合<select value={policy} onChange={e=>setPolicy(e.target.value)}><option value="video_preferred">至少 80% 实拍视频</option><option value="video_only">全部实拍视频</option><option value="mixed">图片与视频混合</option></select></label>
@@ -113,7 +117,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
    <div>{failed.length>0&&<button className="secondary small" disabled={busy} onClick={retryAll}><RotateCcw size={14}/>失败的全部重试</button>}
    {live.length>0&&<button className="secondary small danger" disabled={busy} onClick={cancelAll}><Square size={13}/>全部取消</button>}</div>
   </div>
+  <FolderBar label="做好的视频自动保存在（每条一个 MP4，文件名就是标题）"/>
   {!rows.length&&<p>还没有整片制作任务。</p>}
-  {sorted.map(row=><div className="queue-row" key={row.id}><div><button className="text-link" onClick={()=>{close();openProject(row.project_id)}}>{row.title}</button><span>{names[row.status]||row.status}</span></div>{row.status!=='completed'&&row.status!=='cancelled'&&<progress value={row.progress} max={100}/>}<p>{row.message}{row.error&&` · ${row.error}`}</p>{['failed','needs_review','cancelled','interrupted'].includes(row.status)&&<button className="secondary small" disabled={busy} onClick={()=>act(async()=>{await request(`/jobs/${row.id}/retry`,{});await refresh()})}>从未完成处继续</button>}{['running','queued'].includes(row.status)&&<button className="text-link" disabled={busy} onClick={()=>act(async()=>{await request(`/jobs/${row.id}/cancel`,{});await refresh()})}>取消这一条</button>}</div>)}
+  {sorted.map(row=><div className="queue-row" key={row.id}><div><button className="text-link" onClick={()=>{close();openProject(row.project_id)}}>{row.title}</button><span>{names[row.status]||row.status}</span></div>{row.status!=='completed'&&row.status!=='cancelled'&&<progress value={row.progress} max={100}/>}{row.status==='completed'&&row.video&&<div className="queue-file"><span title={row.video.saved_to}><CheckCircle2 size={13}/>{row.video.saved_to?'已保存为 '+fileName(row.video.saved_to):'已完成（自动保存已关闭，点标题查看）'}</span><VideoFileActions pid={row.project_id} path={row.video.saved_to||undefined} compact/><button className="text-link" onClick={()=>{close();openProject(row.project_id)}}>在这里看成片</button></div>}<p>{row.message}{row.error&&` · ${row.error}`}</p>{['failed','needs_review','cancelled','interrupted'].includes(row.status)&&<button className="secondary small" disabled={busy} onClick={()=>act(async()=>{await request(`/jobs/${row.id}/retry`,{});await refresh()})}>从未完成处继续</button>}{['running','queued'].includes(row.status)&&<button className="text-link" disabled={busy} onClick={()=>act(async()=>{await request(`/jobs/${row.id}/cancel`,{});await refresh()})}>取消这一条</button>}</div>)}
  </div><div className="modal-footer"><small>同时制作的几条视频共用同一份 B 站和配音的访问额度，请求量不会随并发成倍增加；首页单独做的视频会排在批量前面。</small><button className="secondary" onClick={close}>关闭</button></div></section></div>;
 }

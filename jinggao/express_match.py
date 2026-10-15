@@ -183,6 +183,7 @@ class Matcher:
         self.calls = {"pick": 0, "qa": 0}
         self.timing = {}
         self.fetch_seconds = []
+        self.encoders = {}    # how candidate clips were encoded: full / nvenc / cpu -> count
         self.qa_unchecked = set()
         self.job_choice = {}
         self.subtitled = set()
@@ -756,12 +757,14 @@ class Matcher:
             out.unlink(missing_ok=True)
             if source["provider"] == "pixabay":
                 local = self.pixa.download(source, check)
-                es.cut_window(str(local), choice["start"], duration, out, check=check, short_edge=self.min_height)
+                way = es.cut_window(str(local), choice["start"], duration, out, check=check, short_edge=self.min_height)
             else:
                 stream = streams.get(source["id"]) or {}
                 if not stream.get("available"):
                     raise ValueError("该视频没有满足最低清晰度的可用流")
-                es.dash_window(stream, choice["start"], duration, out, check=check, short_edge=self.min_height)
+                way = es.dash_window(stream, choice["start"], duration, out, check=check, short_edge=self.min_height)
+            with self.lock:
+                self.encoders[way] = self.encoders.get(way, 0) + 1
             got = es.probe_duration(out)
             if got < need:
                 out.unlink(missing_ok=True)
@@ -959,18 +962,25 @@ class Matcher:
 
     # ---------------------------------------------------------------------- QA
     def qa_frames(self, job_id, path, shot):
-        frames = []
         duration = float(shot["duration"])
         prefix = express_clean.video_filter(self.clean.get(job_id))
         tag = hashlib.sha1(prefix.encode()).hexdigest()[:8] if prefix else "raw"
-        for fraction in (0.15, 0.5, 0.85):
-            target = path.parent / f"{path.stem}-qa{int(fraction*100)}-{tag}.jpg"
-            if not target.exists():
-                media.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-ss", f"{duration*fraction:.2f}", "-i",
-                           str(path), "-frames:v", "1", "-vf",
-                           (prefix + "," if prefix else "") +
-                           f"scale={QA_W}:{QA_H}:force_original_aspect_ratio=decrease,"
-                           f"pad={QA_W}:{QA_H}:(ow-iw)/2:(oh-ih)/2", str(target)], timeout=30)
+        fractions = (0.15, 0.5, 0.85)
+        targets = [path.parent / f"{path.stem}-qa{int(fraction*100)}-{tag}.jpg" for fraction in fractions]
+        missing = [(fraction, target) for fraction, target in zip(fractions, targets) if not target.exists()]
+        if missing:
+            # One FFmpeg run for all three stills: each is its own fast-seeking input and output.
+            args = [paths.binary("ffmpeg"), "-v", "error", "-y"]
+            for fraction, _ in missing:
+                args += ["-threads", "1", "-ss", f"{duration*fraction:.2f}", "-i", str(path)]
+            picture = ((prefix + ",") if prefix else "") + (f"scale={QA_W}:{QA_H}:force_original_aspect_ratio=decrease,"
+                                                            f"pad={QA_W}:{QA_H}:(ow-iw)/2:(oh-ih)/2")
+            for index, (_, target) in enumerate(missing):
+                args += ["-map", f"{index}:v:0", "-frames:v", "1", "-vf", picture, str(target)]
+            with throttle.slot("frames", self.check):
+                media.run(args, timeout=30)
+        frames = []
+        for target in targets:
             with Image.open(target) as im:
                 frames.append(im.convert("RGB"))
         return frames
@@ -1570,6 +1580,7 @@ class Matcher:
                                                (self.clean.get(c.get("job")) or {}).get("residual", [])],
                                   "flags": sorted(self.flags(c.get("job")))} for sid, c in final.items()},
                   "bilibili_logged_in": self.bili.logged_in, "notes": self.notes[:40],
+                  "clip_encoders": dict(self.encoders),
                   "fetch_seconds": {"count": len(self.fetch_seconds),
                                     "max": max([x[1] for x in self.fetch_seconds] or [0]),
                                     "mean": round(sum(x[1] for x in self.fetch_seconds) / max(1, len(self.fetch_seconds)), 2)}}

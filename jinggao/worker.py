@@ -969,6 +969,8 @@ def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
     throttle.install(shared)
     parent = multiprocessing.parent_process()
     if parent is not None:
+        # A worker process started by the launcher: its encodes must not make the computer sluggish.
+        power.lower_priority()
         def watch_parent():
             while parent.is_alive():
                 time.sleep(.5)

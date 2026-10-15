@@ -16,6 +16,17 @@ def private_output_folder(tmp_path_factory, monkeypatch):
     monkeypatch.setitem(config.DEFAULTS, "export_dir", str(tmp_path_factory.mktemp("output")))
 
 
+@pytest.fixture(autouse=True)
+def no_graphics_card(monkeypatch):
+    """Tests never run the real NVIDIA check: the card is absent unless a test says otherwise."""
+    from jinggao import gpu
+    monkeypatch.setattr(gpu, "_cache", {"mtime": None, "value": {"nvenc": False, "full": False, "nvidia": False,
+                                                                  "sessions": 0, "reason": "测试环境"}})
+    monkeypatch.setattr(gpu, "_disabled", {})
+    monkeypatch.setattr(gpu, "_failures", {"full": 0, "nvenc": 0})
+    monkeypatch.setattr(gpu, "_counts", {})
+
+
 @pytest.fixture
 def isolated_pixel_quality(monkeypatch):
     """Text-judgment unit tests isolate the separately tested pixel observer.

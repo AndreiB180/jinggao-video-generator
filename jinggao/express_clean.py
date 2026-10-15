@@ -20,7 +20,7 @@ from functools import lru_cache
 
 from PIL import Image
 
-from . import paths
+from . import paths, throttle
 
 try:
     import numpy as np
@@ -81,10 +81,11 @@ def clip_frames(path, duration: float, size, count: int = 10) -> list:
     """Evenly spaced grey frames of a local clip at the analysis size."""
     w, h = size
     rate = count / max(0.5, duration)
-    raw = subprocess.run(
-        [paths.binary("ffmpeg"), "-v", "error", "-i", str(path), "-vf",
-         f"fps={rate:.4f},scale={w}:{h}:flags=area,format=gray", "-frames:v", str(count),
-         "-f", "rawvideo", "-"], capture_output=True, timeout=60, check=True).stdout
+    with throttle.slot("frames"):    # shared by every video being made: the computer stays responsive
+        raw = subprocess.run(
+            [paths.binary("ffmpeg"), "-v", "error", "-threads", "2", "-i", str(path), "-vf",
+             f"fps={rate:.4f},scale={w}:{h}:flags=area,format=gray", "-frames:v", str(count),
+             "-f", "rawvideo", "-"], capture_output=True, timeout=60, check=True).stdout
     n = len(raw) // (w * h)
     return [np.frombuffer(raw[i * w * h:(i + 1) * w * h], dtype=np.uint8).reshape(h, w).astype(np.float32)
             for i in range(n)]
@@ -514,10 +515,11 @@ def platform_watermark(path, duration: float, clip_size: tuple[int, int], count:
         width, height = round(cw * 720 / ch / 2) * 2, 720
     else:
         width, height = 720, round(ch * 720 / cw / 2) * 2
-    raw = subprocess.run(
-        [paths.binary("ffmpeg"), "-v", "error", "-i", str(path), "-vf",
-         f"fps={count / max(0.5, duration):.4f},scale={width}:{height},crop=iw:{band}:0:0,format=gray",
-         "-frames:v", str(count), "-f", "rawvideo", "-"], capture_output=True, timeout=60).stdout
+    with throttle.slot("frames"):
+        raw = subprocess.run(
+            [paths.binary("ffmpeg"), "-v", "error", "-threads", "2", "-i", str(path), "-vf",
+             f"fps={count / max(0.5, duration):.4f},scale={width}:{height},crop=iw:{band}:0:0,format=gray",
+             "-frames:v", str(count), "-f", "rawvideo", "-"], capture_output=True, timeout=60).stdout
     n = len(raw) // (width * band)
     if n < 2:
         return []

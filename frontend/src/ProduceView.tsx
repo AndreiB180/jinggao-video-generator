@@ -1,10 +1,30 @@
 import {useEffect, useRef, useState} from 'react';
-import {Check, Clapperboard, Download, FolderOpen, Loader2, Plus, RefreshCw, Subtitles, TriangleAlert} from 'lucide-react';
+import {Check, Clapperboard, Download, Gauge, Loader2, Plus, RefreshCw, Subtitles, TriangleAlert} from 'lucide-react';
 import type {Job, Project} from './types';
+import {VideoFileActions} from './FileActions';
 
 const fileUrl=(pid:string,path:string)=>`/api/projects/${pid}/files/${path.split('/').map(encodeURIComponent).join('/')}`;
 const clock=(s:number)=>`${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
 const live=(j?:Job)=>!!j&&['queued','running'].includes(j.status);
+const span=(s:number)=>s<60?`${Math.round(s)} 秒`:clock(s);
+const STAGES:[string,string][]=[['transcribe','识别文字'],['rewrite','洗稿'],['plan','规划分镜'],['align','对齐'],['match','找画面'],['render','合成']];
+
+/** How long each step took and whether the NVIDIA card did the encoding, so slow runs can be explained. */
+function RunFacts({project,job}:{project:Project;job?:Job}){
+ const flow=project.workflow_info, video=project.exports[0];
+ const wall=flow?.stage_wall_seconds||{};
+ const steps=STAGES.filter(([key])=>wall[key]>=1).map(([key,name])=>`${name} ${span(wall[key])}`);
+ const total=job&&job.kind==='produce'&&job.status==='completed'&&job.created?job.updated-job.created:0;
+ const clips=project.express_report?.clip_encoders||{}, shots=video?.encoders||{};
+ const onCard=(clips.full||0)+(clips.nvenc||0), onCpu=clips.cpu||0;
+ const parts=[];
+ const split=(gpu:number,cpu:number,unit:string,what:string)=>!gpu?`${what}全部用 CPU（${cpu} ${unit}）`:!cpu?`${what}全部用显卡（${gpu} ${unit}）`:`${what} 显卡 ${gpu} ${unit} · CPU ${cpu} ${unit}`;
+ if(onCard+onCpu)parts.push(split(onCard,onCpu,'段','画面转码'));
+ if(shots.nvenc||shots.cpu)parts.push(split(shots.nvenc||0,shots.cpu||0,'镜','合成'));
+ else if(video)parts.push(video.encoder==='nvenc'?'合成用显卡':'合成用 CPU');
+ if(!steps.length&&!parts.length)return null;
+ return <p className="run-facts"><Gauge size={13}/><span>{total?`总用时 ${span(total)}`:''}{total&&steps.length?'：':''}{steps.join(' · ')}{parts.length?<><br/>{parts.join('；')}</>:null}</span></p>;
+}
 
 /** Which numbered stage ("2/4 生成完整配音 · …") a produce job is in; the alignment message sits in stage 2. */
 function stageOf(message:string,last:number){
@@ -21,7 +41,6 @@ export function ProduceView({project,jobs,act,refine,again}:{project:Project;job
  const last=useRef(0);
  const [now,setNow]=useState(Date.now()/1000);
  useEffect(()=>{if(!live(job))return;const t=setInterval(()=>setNow(Date.now()/1000),1000);return()=>clearInterval(t)},[job?.id,job?.status]);
- const [opened,setOpened]=useState('');
  const video=project.exports[0];
  const steps=[audio?'识别文字':'整理文案','规划分镜',audio?'对齐原声':'生成配音','匹配画面','合成视频'];
  if(live(job)){
@@ -61,15 +80,18 @@ export function ProduceView({project,jobs,act,refine,again}:{project:Project;job
   <div className="produce-side">
    <h2>{project.title}</h2>
    <p className="meta">{clock(video.duration)} · {video.width}×{video.height} · {project.shots.length} 个镜头 · {burned?'带字幕':'无字幕'} · {new Date(video.created*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</p>
-   {saved?<p className="saved"><Check size={14}/>已保存到 <span title={saved}>{saved}</span></p>:null}
+   <div className="file-box">
+    <strong><Check size={14}/>{saved?'成片已保存到这台电脑':'成片保存在项目里（自动保存已关闭）'}</strong>
+    {saved&&<code title={saved}>{saved}</code>}
+    <VideoFileActions pid={project.id} path={saved} exportId={video.id}/>
+   </div>
+   <RunFacts project={project} job={job}/>
    <div className="produce-actions column">
-    <a className="primary" href={fileUrl(project.id,video.path)} download={project.title+'.mp4'}><Download size={16}/>下载视频</a>
+    <a className="secondary" href={fileUrl(project.id,video.path)} download={project.title+'.mp4'} title="浏览器会再存一份到它自己的「下载」文件夹；上面的路径是软件自动保存的那份"><Download size={16}/>另存一份（浏览器下载）</a>
     <a className="secondary" href={fileUrl(project.id,srt)} download={project.title+'.srt'}><Subtitles size={16}/>下载字幕 SRT</a>
     {other?<a className="secondary" href={fileUrl(project.id,other.path)} download={project.title+(burned?'（无字幕）':'')+'.mp4'}><Download size={16}/>下载{burned?'无字幕':'带字幕'}版</a>
      :<button className="secondary" disabled={live(job)} onClick={()=>act('/projects/'+project.id+'/jobs',{kind:'render',resolution:video.height>=1000||video.width>=1900?'1080p':'720p',subtitles:!burned})}>
       <Subtitles size={16}/>再导出一版{burned?'无字幕的（给剪映用）':'带字幕的'}</button>}
-    <button className="secondary" onClick={async()=>{try{const r=await fetch('/api/output-folder/open',{method:'POST'});const d=await r.json();setOpened(d.path||'')}catch{setOpened('')}}}><FolderOpen size={16}/>打开成片文件夹</button>
-    {opened&&<small className="muted-note">已打开 {opened}</small>}
    </div>
    <p className="muted-note">{burned?'字幕已烧录在视频里；SRT 只在上传平台需要外挂字幕时使用，播放时不要再加载，否则会出现两行字幕。'
     :'这一版画面上没有字幕。在剪映里导入视频后，用「文本 → 本地字幕 → 导入」载入 SRT，字幕就按配音时间排好了。'}</p>

@@ -6,7 +6,6 @@ clips when a key is configured. Everything here is free: no model calls.
 """
 from __future__ import annotations
 
-import functools
 import hashlib
 import html
 import io
@@ -20,7 +19,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from . import config, media, paths, throttle
+from . import config, gpu, media, paths, throttle
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
@@ -494,45 +493,74 @@ def scale_filter(short_edge: int = 720) -> str:
             "fps=25,format=yuv420p")
 
 
-def cut_window(source: str, start: float, duration: float, out: Path, *, headers: dict | None = None,
-               check=None, timeout: int = 90, short_edge: int = 720) -> None:
-    """Decode exactly [start, start+duration) into an H.264 clip; partial output never survives."""
-    final = out
-    out = out.with_name(out.stem + ".part.mp4")
+def cuda_scale_filter(short_edge: int = 720) -> str:
+    """scale_filter on the card: frames stay in GPU memory from the decoder to the encoder."""
+    n = max(720, int(short_edge))
+    return f"scale_cuda=w='if(gte(iw,ih),-2,{n})':h='if(gte(iw,ih),{n},-2)'"
+
+
+def clip_args(source: str, start: float, duration: float, out: Path, way: str, *, headers: dict | None = None,
+              short_edge: int = 720) -> list:
+    """FFmpeg arguments that decode exactly [start, start+duration) into an H.264 clip, made one way:
+    full (NVDEC + CUDA scaling + NVENC), nvenc (CPU decode and scale, NVENC) or cpu (libx264)."""
     args = [paths.binary("ffmpeg"), "-v", "error", "-y"]
+    if way == "full":
+        args += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    else:
+        args += ["-threads", "2", "-filter_threads", "1"]      # many clips run at once: few threads each
     if headers:
         args += ["-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_streamed", "1",
                  "-reconnect_delay_max", "3", "-rw_timeout", "15000000",
                  "-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
-    args += ["-ss", f"{max(0.0, start):.3f}", "-i", source, "-t", f"{duration:.3f}", "-an",
-             "-vf", scale_filter(short_edge)]
-    tail = ["-movflags", "+faststart", str(out)]
+    args += ["-ss", f"{max(0.0, start):.3f}", "-i", source, "-t", f"{duration:.3f}", "-an"]
+    if way == "full":
+        args += ["-vf", cuda_scale_filter(short_edge), "-fps_mode", "cfr", "-r", "25", *gpu.NVENC_CLIP]
+    else:
+        args += ["-vf", scale_filter(short_edge), *(gpu.NVENC_CLIP if way == "nvenc" else gpu.X264_CLIP)]
+    return args + ["-movflags", "+faststart", str(out)]
+
+
+def cut_window(source: str, start: float, duration: float, out: Path, *, headers: dict | None = None,
+               check=None, timeout: int = 90, short_edge: int = 720, mode: str | None = None) -> str:
+    """Decode exactly [start, start+duration) into an H.264 clip; partial output never survives.
+
+    Returns how it was encoded (full / nvenc / cpu). With an NVIDIA card the clip goes to the card (waiting a
+    moment for a free session); a GPU failure is redone on the CPU. mode forces one way, without fallback."""
+    final = out
+    out = out.with_name(out.stem + ".part.mp4")
+    def make(way):
+        media.run(clip_args(source, start, duration, out, way, headers=headers, short_edge=short_edge),
+                  timeout=timeout, check=check)
     try:
-        # A candidate clip is re-encoded once more by the final render. With several videos at once the CPU is
-        # the bottleneck, so a free NVIDIA encoder session takes the encode; never wait for one.
-        with throttle.try_slot("render") as free:
-            gpu = free and _nvenc()
-            try:
-                media.run(args + (NVENC_CLIP if gpu else X264_CLIP) + tail, timeout=timeout, check=check)
-            except ValueError:
-                if not gpu:
-                    raise
-                media.run(args + X264_CLIP + tail, timeout=timeout, check=check)   # the GPU refused: use the CPU
+        if mode:
+            make(mode)
+            used = mode
+        else:
+            used = _encode_clip(make, check)
         out.replace(final)
+        return used
     finally:
         out.unlink(missing_ok=True)
 
 
-X264_CLIP = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
-NVENC_CLIP = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0"]
-
-
-@functools.lru_cache(maxsize=1)
-def _nvenc() -> bool:
-    """This process may encode clips on the NVIDIA GPU (the render setting allows it and NVENC works)."""
-    if config.read().get("encoder", "auto") == "cpu":
-        return False
-    return bool(media.hardware().get("nvenc"))
+def _encode_clip(make, check) -> str:
+    way = gpu.mode("clip")
+    if way != "cpu":
+        with throttle.either(check) as lane:
+            if lane == "cpu":
+                make("cpu")
+                gpu.worked("cpu")
+                return "cpu"
+            try:
+                make(way)
+                gpu.worked(way)
+                return way
+            except ValueError as exc:      # the card refused this clip: the CPU makes it below
+                gpu.failed(way, exc)
+    with throttle.slot("cpu", check):
+        make("cpu")
+    gpu.worked("cpu")
+    return "cpu"
 
 
 def fetch_range(client: httpx.Client, url: str, start: int, end: int, check=None, attempts: int = 8) -> bytes:
@@ -614,43 +642,44 @@ def dash_index(client: httpx.Client, url: str, check=None, segment_base: dict | 
     return {"init": head[:init_end], "refs": refs}
 
 
-def dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720) -> None:
-    """Fetch only the DASH segments covering the window, then trim locally."""
-    with throttle.slot("bili_download", check):
-        _dash_window(stream, start, duration, out, check, short_edge)
-
-
-def _dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720) -> None:
+def dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720) -> str:
+    """Fetch only the DASH segments covering the window (holding a download slot), then trim locally (holding
+    a gpu or cpu slot instead). Returns how the clip was encoded."""
     last = None
     for url in stream["urls"]:
+        local = out.with_suffix(".src.mp4")
         try:
-            with httpx.Client(headers=stream["headers"], timeout=httpx.Timeout(10, read=8),
-                              follow_redirects=True) as client:
-                index = stream.setdefault("_index", {}).get(url) or dash_index(client, url, check,
-                                                                                    stream.get("segment_base"))
-                stream["_index"][url] = index
-                refs = [r for r in index["refs"] if r[2] + r[3] > start - 0.05 and r[2] < start + duration + 0.05]
-                if not refs:
-                    raise ValueError("时间窗超出视频长度")
-                parts = [None] * len(refs)
-                def get(i, refs=refs, parts=parts, url=url, client=client):
-                    offset, length, _, _ = refs[i]
-                    parts[i] = fetch_range(client, url, offset, offset + length - 1, check)
-                from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=min(4, len(refs))) as pool:
-                    list(pool.map(get, range(len(refs))))
-            local = out.with_suffix(".src.mp4")
-            local.write_bytes(index["init"] + b"".join(parts))
+            with throttle.slot("bili_download", check):
+                refs = _fetch_segments(stream, url, start, duration, local, check)
             try:
-                offset = start - refs[0][2]
-                cut_window(str(local), offset, duration, out, check=check, timeout=60, short_edge=short_edge)
+                return cut_window(str(local), start - refs[0][2], duration, out, check=check, timeout=60,
+                                  short_edge=short_edge)
             finally:
                 local.unlink(missing_ok=True)
-            return
         except (ValueError, httpx.HTTPError, OSError) as exc:
             last = exc
+            local.unlink(missing_ok=True)
             out.unlink(missing_ok=True)
     raise ValueError(f"片段下载失败：{last}")
+
+
+def _fetch_segments(stream: dict, url: str, start: float, duration: float, local: Path, check=None) -> list:
+    """Write the init segment plus the media segments covering the window to local; returns their refs."""
+    with httpx.Client(headers=stream["headers"], timeout=httpx.Timeout(10, read=8), follow_redirects=True) as client:
+        index = stream.setdefault("_index", {}).get(url) or dash_index(client, url, check, stream.get("segment_base"))
+        stream["_index"][url] = index
+        refs = [r for r in index["refs"] if r[2] + r[3] > start - 0.05 and r[2] < start + duration + 0.05]
+        if not refs:
+            raise ValueError("时间窗超出视频长度")
+        parts = [None] * len(refs)
+        def get(i):
+            offset, length, _, _ = refs[i]
+            parts[i] = fetch_range(client, url, offset, offset + length - 1, check)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(4, len(refs))) as pool:
+            list(pool.map(get, range(len(refs))))
+    local.write_bytes(index["init"] + b"".join(parts))
+    return refs
 
 
 def probe_duration(path: Path) -> float:

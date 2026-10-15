@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from copy import deepcopy
 from urllib.parse import urlparse
 
@@ -13,7 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import (__version__, captions, config, costs, curation, demo, library, library_collect, media, paths, source_index,
                sources, store, subtitle_style)
-from .models import (AssetPatch, BatchRequest, FootageBuild, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
+from .models import (AssetPatch, BatchRequest, FileAction, FootageBuild, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
                      NewsCrawl, NewsLink, NewsProduce, NewsText, QueueAction, RewriteRequest, ShotPatch)
 from .worker import shot_by_id
 
@@ -48,17 +47,46 @@ def create_app() -> FastAPI:
     async def runtime_error(request, exc):
         return JSONResponse({"detail": str(exc)}, status_code=503)
 
-    diagnostic = {"at": 0, "value": None}
-
     @app.get("/api/health")
     def health():
         return {"ok": True, "version": __version__, "app": "jinggao"}
 
     @app.get("/api/system")
     def system():
-        if time.time()-diagnostic["at"] > 300:
-            diagnostic.update(at=time.time(), value=media.hardware())
-        return diagnostic["value"] | {"font": (paths.ROOT/"assets/fonts/NotoSansSC-Regular.otf").exists()}
+        return media.hardware() | {"font": (paths.ROOT/"assets/fonts/NotoSansSC-Regular.otf").exists(),
+                                   "version": __version__}
+
+    @app.get("/api/system/report")
+    def system_report():
+        """Plain text the user can paste to support: the card check, CPU, concurrency and the latest videos'
+        step timings and encoders. No keys, scripts or file contents."""
+        import platform
+        from fastapi.responses import PlainTextResponse
+        info, cfg = media.hardware(), config.read()
+        lines = [f"镜稿 {__version__} · {platform.platform()} · Python {platform.python_version()}",
+                 f"显卡：{info.get('gpu')} · 驱动 {info.get('driver') or '-'} · NVENC {'可用' if info.get('nvenc') else '不可用'}"
+                 f" · 全程显卡 {'可用' if info.get('full') else '不可用'} · 显卡编码名额 {info.get('gpu_slots')}",
+                 f"原因：{info.get('reason') or '-'}", f"建议：{info.get('advice') or '-'}",
+                 f"CPU：{info.get('cores')} 核 · CPU 转码名额 {info.get('cpu_slots')}",
+                 "设置：" + " ".join(f"{k}={cfg.get(k)}" for k in ("encoder", "video_workers", "render_workers",
+                                                                 "match_workers", "tts_provider", "pipeline")), ""]
+        rows = [p for p in store.list_projects() if p.get("video")][:12]
+        for row in rows:
+            p = store.get_project(row["id"])
+            video = p["exports"][0]
+            wall = (p.get("workflow_info") or {}).get("stage_wall_seconds") or {}
+            clips = (p.get("express_report") or {}).get("clip_encoders") or {}
+            lines.append(f"{p['title'][:30]} · {len(p['shots'])} 镜 · 成片 {video.get('duration', 0):.0f} 秒 · "
+                         + " ".join(f"{k}={v:.0f}s" for k, v in wall.items())
+                         + f" · 片段转码 {clips or '-'} · 合成 {video.get('encoders') or video.get('encoder')}")
+        return PlainTextResponse("\n".join(lines))
+
+    @app.post("/api/system/gpu-check")
+    def gpu_check():
+        """Run the card check again (after a driver update or closing a screen recorder)."""
+        from . import gpu
+        gpu.detect()
+        return system()
 
     @app.get("/api/settings")
     def settings():
@@ -98,18 +126,32 @@ def create_app() -> FastAPI:
 
     @app.post("/api/output-folder/open")
     def open_output_folder():
-        import os
-        import subprocess
-        import sys
         folder = media.output_folder()
         folder.mkdir(parents=True, exist_ok=True)
-        if os.name == "nt":
-            os.startfile(folder)  # noqa: S606 - the app's own output folder on the user's machine
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(folder)])
-        else:
-            subprocess.Popen(["xdg-open", str(folder)])
+        media.open_path(folder)
         return {"path": str(folder)}
+
+    @app.post("/api/output-folder/choose")
+    def choose_output_folder():
+        """The system folder picker; the chosen folder becomes the place finished videos are saved."""
+        chosen = media.choose_folder(str(media.output_folder()))
+        if chosen:
+            config.update({"export_dir": chosen})
+        return {"path": str(media.output_folder()), "changed": bool(chosen)}
+
+    @app.post("/api/projects/{pid}/reveal")
+    def reveal_video(pid: str, body: FileAction):
+        """Show the finished video selected in its folder."""
+        target = media.finished_file(store.get_project(pid), body.export_id)
+        media.reveal(target)
+        return {"path": str(target)}
+
+    @app.post("/api/projects/{pid}/play")
+    def play_video(pid: str, body: FileAction):
+        """Open the finished video in the computer's own video player."""
+        target = media.finished_file(store.get_project(pid), body.export_id)
+        media.open_path(target)
+        return {"path": str(target)}
 
     @app.get("/api/footage-index")
     def footage_index_status():
@@ -277,12 +319,19 @@ def create_app() -> FastAPI:
     @app.get("/api/queue")
     def queue():
         with store.connection() as con:
-            rows = con.execute("SELECT jobs.*, json_extract(projects.body, '$.title') AS title FROM jobs JOIN projects "
-                               "ON projects.id=jobs.project_id ORDER BY jobs.created DESC LIMIT 400").fetchall()
+            rows = con.execute("SELECT jobs.*, json_extract(projects.body, '$.title') AS title, "
+                               "json_extract(projects.body, '$.aspect') AS aspect, "
+                               "json_extract(projects.body, '$.exports[0].path') AS video_path, "
+                               "json_extract(projects.body, '$.exports[0].saved_to') AS saved_to, "
+                               "json_extract(projects.body, '$.exports[0].duration') AS video_duration FROM jobs "
+                               "JOIN projects ON projects.id=jobs.project_id ORDER BY jobs.created DESC LIMIT 400").fetchall()
         return [{"id": r["id"], "project_id": r["project_id"], "title": r["title"],
                  "kind": r["kind"], "status": r["status"], "progress": r["progress"],
                  "message": r["message"], "error": r["error"], "created": r["created"], "updated": r["updated"],
-                 "batch": json.loads(r["payload"]).get("batch")} for r in rows]
+                 "batch": json.loads(r["payload"]).get("batch"), "aspect": r["aspect"],
+                 # The finished video of a completed job: where it was saved and the copy inside the project.
+                 "video": {"path": r["video_path"], "saved_to": r["saved_to"] or "", "duration": r["video_duration"]}
+                 if r["status"] == "completed" and r["video_path"] else None} for r in rows]
 
     @app.post("/api/projects/{pid}/approve-verified")
     def approve_verified(pid: str):

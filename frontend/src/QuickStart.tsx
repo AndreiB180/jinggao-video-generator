@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {AudioLines, FileText, FolderOpen, Loader2, RotateCcw, Upload, WandSparkles, X} from 'lucide-react';
+import {useOutputFolder} from './FileActions';
 import {VoicePicker, useVoices} from './VoicePicker';
 import {SubtitleSettings} from './SubtitleSettings';
 
@@ -18,13 +19,14 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
  const [script,setScript]=useState(()=>{try{return localStorage.getItem(DRAFT)||''}catch{return ''}});
  const [title,setTitle]=useState(''),[file,setFile]=useState<File|null>(null),[audioSeconds,setAudioSeconds]=useState(0);
  const [aspect,setAspect]=useState<'16:9'|'9:16'>('16:9'),[resolution,setResolution]=useState('1080p');
- const [settings,setSettings]=useState<Settings>({}),[folder,setFolder]=useState('');
+ const [settings,setSettings]=useState<Settings>({});
+ const output=useOutputFolder(), folder=output.folder;
  const [busy,setBusy]=useState(''),[error,setError]=useState(''),[original,setOriginal]=useState<string|null>(null);
  const [dragging,setDragging]=useState(false);
  const [burn,setBurn]=useState(()=>{try{return localStorage.getItem('jinggao.burn')!=='0'}catch{return true}});
  useEffect(()=>{try{localStorage.setItem('jinggao.burn',burn?'1':'0')}catch{/* private window */}},[burn]);
  const input=useRef<HTMLInputElement>(null);
- useEffect(()=>{call<Settings>('/settings').then(setSettings).catch(()=>{});call<{path:string}>('/output-folder').then(f=>setFolder(f.path)).catch(()=>{})},[]);
+ useEffect(()=>{call<Settings>('/settings').then(setSettings).catch(()=>{})},[]);
  useEffect(()=>{try{localStorage.setItem(DRAFT,script)}catch{/* private window */}},[script]);
  const change=(key:string,value:string)=>{setSettings(s=>({...s,[key]:value}));call('/settings','PATCH',{[key]:value}).catch(e=>setError((e as Error).message))};
  const pick=(f:File|undefined|null)=>{
@@ -104,7 +106,7 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
    </section>
    <section className="card quiet">
     <label className="inline">清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p 更快</option></select></label>
-    {folder&&<p className="folder-line"><FolderOpen size={14}/><span title={folder}>成片保存到 {folder}</span></p>}
+    {folder&&<p className="folder-line"><FolderOpen size={14}/><span title={folder}>成片保存到 {folder}</span><button className="text-link" onClick={output.open}>打开</button><button className="text-link" onClick={output.choose}>更改</button>{output.note&&<small>{output.note}</small>}</p>}
    </section>
   </aside>
  </div>;
