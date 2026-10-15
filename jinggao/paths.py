@@ -47,3 +47,26 @@ def font_path() -> Path:
     if not path.exists():
         raise RuntimeError("缺少中文字幕字体，请运行 scripts/fetch_font.py 或使用完整发行包")
     return path
+
+
+def temporary(target: Path) -> Path:
+    """A temporary name next to target that no other process or thread is writing."""
+    import threading
+    return target.with_name(f".{target.name}.{os.getpid()}-{threading.get_ident()}.tmp")
+
+
+def publish(temporary_file: Path, target: Path) -> None:
+    """Move a finished temporary file into place. Another worker may be reading or replacing the same cache
+    file (Windows refuses to replace an open file); if it already holds a finished copy, keep that one."""
+    import time
+    for attempt in range(5):
+        try:
+            os.replace(temporary_file, target)
+            return
+        except PermissionError:
+            if attempt == 4:
+                if target.exists():
+                    temporary_file.unlink(missing_ok=True)
+                    return
+                raise
+            time.sleep(.1 * (attempt + 1))

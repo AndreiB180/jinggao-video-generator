@@ -20,7 +20,7 @@ DEFAULTS = {
     "tts_pricing_json": "",
     "encoder": "auto", "search_provider": "mixed",
     "baidu_voice_name": "磁性专业很灵动",
-    "plan_workers": "3", "match_workers": "3", "render_workers": "3",
+    "plan_workers": "3", "match_workers": "3", "render_workers": "3", "video_workers": "3",
     "plan_retries": "1",
     "source_plan_mode": "unified", "pixel_observer_mode": "joint",
     "model_project_budget_cny": "0.10", "model_daily_budget_cny": "3.00",
@@ -118,7 +118,7 @@ def update(values: dict) -> dict:
         raise ValueError("语速须为 1.0、1.1、1.2 或 1.3")
     if values.get("search_provider", "mixed") not in ("mixed", "video", "local"):
         raise ValueError("素材检索仅支持多源检索、视频检索或本地素材")
-    for key in ("plan_workers", "match_workers", "render_workers"):
+    for key in ("plan_workers", "match_workers", "render_workers", "video_workers"):
         if key in values and values[key] not in ("1", "2", "3", "4"):
             raise ValueError("并发数须为 1 到 4")
     if values.get("pipeline", "express") not in ("express", "classic"):

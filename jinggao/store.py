@@ -14,12 +14,20 @@ def uid() -> str:
     return uuid.uuid4().hex
 
 
+_wal = set()     # database files this process has already switched to WAL (the mode is kept in the file)
+
+
 @contextmanager
 def connection():
     paths.prepare()
-    con = sqlite3.connect(paths.DATA / "jinggao.sqlite3", timeout=30)
+    path = paths.DATA / "jinggao.sqlite3"
+    if not path.exists():
+        _wal.discard(str(path))
+    con = sqlite3.connect(path, timeout=30)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
+    if str(path) not in _wal:
+        con.execute("PRAGMA journal_mode=WAL")
+        _wal.add(str(path))
     con.execute("PRAGMA foreign_keys=ON")
     try:
         yield con
@@ -158,7 +166,9 @@ def _lane(lane: str) -> str:
 def claim(lane: str = "main") -> dict | None:
     with connection() as con:
         con.execute("BEGIN IMMEDIATE")
-        row = con.execute(f"SELECT id FROM jobs WHERE status='queued' AND {_lane(lane)} ORDER BY created LIMIT 1").fetchone()
+        # Batch videos wait behind everything else, so a single video or a quick edit never queues behind 100.
+        row = con.execute(f"SELECT id FROM jobs WHERE status='queued' AND {_lane(lane)} "
+                          "ORDER BY json_extract(payload, '$.batch') IS NOT NULL, created LIMIT 1").fetchone()
         if not row:
             return None
         con.execute("UPDATE jobs SET status='running',message='开始执行',updated=? WHERE id=?",
@@ -174,6 +184,21 @@ def job_update(job_id: str, **changes) -> None:
     with connection() as con:
         con.execute(f"UPDATE jobs SET {','.join(k+'=?' for k in changes)} WHERE id=?",
                     (*changes.values(), job_id))
+
+
+def cancel_all(batch: str | None = None) -> dict:
+    """Cancel every queued and running video job at once (or one batch's): queued ones stop now, running
+    ones at their next check. The footage index build (background lane) is left alone."""
+    where = f"{_lane('main')}" + (" AND json_extract(payload, '$.batch')=?" if batch else "")
+    args = (batch,) if batch else ()
+    now = time.time()
+    with connection() as con:
+        con.execute("BEGIN IMMEDIATE")
+        queued = con.execute(f"UPDATE jobs SET status='cancelled',cancel=1,message='已取消（全部取消）',updated=? "
+                             f"WHERE status='queued' AND {where}", (now, *args)).rowcount
+        running = con.execute(f"UPDATE jobs SET cancel=1,message='正在取消，等待当前操作结束',updated=? "
+                              f"WHERE status='running' AND {where}", (now, *args)).rowcount
+    return {"queued": queued, "running": running}
 
 
 def recover(lane: str = "main") -> None:

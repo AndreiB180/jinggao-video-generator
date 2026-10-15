@@ -14,9 +14,9 @@ import webbrowser
 import httpx
 import uvicorn
 
-from jinggao import __version__, config, instance, paths, source_index
+from jinggao import __version__, config, instance, paths, source_index, store, throttle
 from jinggao.api import create_app
-from jinggao.worker import loop
+from jinggao.worker import loop, video_workers
 
 
 def open_when_ready(url: str):
@@ -152,10 +152,28 @@ def main():
         print(f"已载入 {seeded:,} 条视频来源索引", flush=True)
     app = create_app()
     stop = multiprocessing.Event()
-    worker = multiprocessing.Process(target=loop, args=(stop,), daemon=True)
-    worker.start()
-    background = multiprocessing.Process(target=loop, args=(stop, "background"), daemon=True)
-    background.start()
+    # Jobs left running by a previous run are marked interrupted once, before any worker starts: with several
+    # video slots, a slot starting later must not mark another slot's fresh job as interrupted.
+    store.init()
+    store.recover("main")
+    store.recover("background")
+    limits = throttle.shared(multiprocessing)
+    def start_slot(lane="main", slot=0):
+        process = multiprocessing.Process(target=loop, args=(stop, lane, slot, limits, False), daemon=True)
+        process.start()
+        return process
+    slots = [start_slot()]
+    background = start_slot("background")
+    def add_slots():
+        # Raising 同时制作 in the app takes effect within a few seconds; lowering it lets running videos finish.
+        while not stop.wait(2):
+            try:
+                while len(slots) < video_workers():
+                    slots.append(start_slot(slot=len(slots)))
+            except Exception as exc:
+                print(f"无法启动更多制作进程：{exc}", flush=True)
+                return
+    threading.Thread(target=add_slots, name="video-slots", daemon=True).start()
     url = f"http://127.0.0.1:{port}"
     (paths.DATA / "instance.json").write_text(json.dumps({"port": port}), "utf-8")
     if not args.no_browser:
@@ -171,7 +189,7 @@ def main():
         pass
     finally:
         stop.set()
-        for process in (worker, background):
+        for process in (*slots, background):
             process.join(3)
             if process.is_alive():
                 process.terminate()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from copy import deepcopy
@@ -13,7 +14,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import (__version__, captions, config, costs, curation, demo, library, library_collect, media, paths, source_index,
                sources, store, subtitle_style)
 from .models import (AssetPatch, BatchRequest, FootageBuild, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
-                     NewsCrawl, NewsLink, NewsProduce, NewsText, RewriteRequest, ShotPatch)
+                     NewsCrawl, NewsLink, NewsProduce, NewsText, QueueAction, RewriteRequest, ShotPatch)
 from .worker import shot_by_id
 
 
@@ -240,22 +241,48 @@ def create_app() -> FastAPI:
     def new_batch(body: BatchRequest):
         if not config.read()["model_api_key"]:
             raise ValueError("请先在服务与设置中填写模型 API Key，再启动批量制作")
-        result = []
+        if body.workers:
+            config.update({"video_workers": str(body.workers)})
+        batch, result = store.uid()[:12], []
         for item in body.projects:
             p = store.new_project(**item.model_dump())
             store.mutate(p["id"], lambda p: p.update(requirements=body.requirements))
-            job = store.enqueue(p["id"], "produce", {"resolution": body.resolution, "mode": "model"})
+            job = store.enqueue(p["id"], "produce", {"resolution": body.resolution, "mode": "model", "batch": batch})
             result.append({"project_id": p["id"], "title": p["title"], "job_id": job["id"]})
-        return {"projects": result}
+        return {"batch": batch, "projects": result}
+
+    @app.post("/api/queue/cancel")
+    def cancel_queue(body: QueueAction):
+        return store.cancel_all(body.batch)
+
+    @app.post("/api/queue/retry", status_code=202)
+    def retry_queue(body: QueueAction):
+        """Start again every failed or interrupted video (of one batch), from where each stopped."""
+        with store.connection() as con:
+            rows = con.execute("SELECT * FROM jobs WHERE kind='produce' ORDER BY created DESC LIMIT 1000").fetchall()
+        latest = {}
+        for row in rows:
+            latest.setdefault(row["project_id"], row)
+        retried = 0
+        for row in latest.values():
+            payload = json.loads(row["payload"])
+            if row["status"] in ("failed", "interrupted") and (not body.batch or payload.get("batch") == body.batch):
+                try:
+                    store.enqueue(row["project_id"], "produce", payload)
+                    retried += 1
+                except (KeyError, ValueError):
+                    pass      # the project was deleted or already has a job
+        return {"retried": retried}
 
     @app.get("/api/queue")
     def queue():
         with store.connection() as con:
-            rows = con.execute("SELECT jobs.*, projects.body AS project_body FROM jobs JOIN projects ON projects.id=jobs.project_id ORDER BY jobs.created DESC LIMIT 100").fetchall()
-        import json
-        return [{"id": r["id"], "project_id": r["project_id"], "title": json.loads(r["project_body"])["title"],
+            rows = con.execute("SELECT jobs.*, json_extract(projects.body, '$.title') AS title FROM jobs JOIN projects "
+                               "ON projects.id=jobs.project_id ORDER BY jobs.created DESC LIMIT 400").fetchall()
+        return [{"id": r["id"], "project_id": r["project_id"], "title": r["title"],
                  "kind": r["kind"], "status": r["status"], "progress": r["progress"],
-                 "message": r["message"], "error": r["error"]} for r in rows]
+                 "message": r["message"], "error": r["error"], "created": r["created"], "updated": r["updated"],
+                 "batch": json.loads(r["payload"]).get("batch")} for r in rows]
 
     @app.post("/api/projects/{pid}/approve-verified")
     def approve_verified(pid: str):
@@ -403,8 +430,10 @@ def create_app() -> FastAPI:
         from . import news
         if not config.read()["model_api_key"]:
             raise ValueError("请先在服务与设置中填写模型 API Key")
-        return {"projects": [news.make_project(i, aspect=body.aspect, minutes=body.minutes,
-                                               resolution=body.resolution, auto=body.auto) for i in body.ids]}
+        batch = store.uid()[:12] if body.auto and len(body.ids) > 1 else None
+        return {"batch": batch, "projects": [news.make_project(i, aspect=body.aspect, minutes=body.minutes,
+                                                               resolution=body.resolution, auto=body.auto, batch=batch)
+                                             for i in body.ids]}
 
     @app.get("/api/library")
     def get_library(query: str = "", min_height: int = 720):

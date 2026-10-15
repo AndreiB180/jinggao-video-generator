@@ -6,6 +6,7 @@ clips when a key is configured. Everything here is free: no model calls.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import html
 import io
@@ -19,7 +20,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from . import config, media, paths
+from . import config, media, paths, throttle
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
@@ -49,9 +50,9 @@ def _read_json(path: Path, ttl: float):
 
 
 def _write_json(path: Path, value) -> None:
-    tmp = path.with_suffix(".tmp")
+    tmp = paths.temporary(path)
     tmp.write_text(json.dumps(value, ensure_ascii=False), "utf-8")
-    tmp.replace(path)
+    paths.publish(tmp, path)
 
 
 def _seconds(text) -> float:
@@ -169,12 +170,15 @@ class Bilibili:
         with self.api_gate:
             for attempt in range(3):
                 self._warm()
-                r = self.client.get(url, params=self._sign(params))
+                with throttle.bili_call():
+                    r = self.client.get(url, params=self._sign(params))
                 if r.status_code == 412:
+                    throttle.bili_refused(2.0 * (attempt + 1))
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 body = r.json()
                 if body.get("code") in (-352, -412, -509, -799):
+                    throttle.bili_refused(2.0 * (attempt + 1))
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 self.blocked = 0
@@ -194,9 +198,11 @@ class Bilibili:
             for attempt in range(3):
                 try:
                     self._warm(force=attempt > 0)
-                    r = self.client.get("https://api.bilibili.com/x/web-interface/search/type",
-                                        params={"search_type": "video", "keyword": keyword, "page": page})
+                    with throttle.bili_call():
+                        r = self.client.get("https://api.bilibili.com/x/web-interface/search/type",
+                                            params={"search_type": "video", "keyword": keyword, "page": page})
                     if r.status_code == 412:
+                        throttle.bili_refused(1.5 * (attempt + 1))
                         time.sleep(1.5 * (attempt + 1))
                         continue
                     body = r.json()
@@ -243,12 +249,14 @@ class Bilibili:
             self._warm()
             body = {}
             for attempt in range(3):
-                r = self.client.get("https://api.bilibili.com/x/player/videoshot", params={"bvid": bvid, "index": 1})
+                with throttle.bili_call():
+                    r = self.client.get("https://api.bilibili.com/x/player/videoshot", params={"bvid": bvid, "index": 1})
                 body = r.json() if r.status_code == 200 else {}
                 if r.status_code != 412 and body.get("code") not in (-352, -412, -509, -799):
                     with self.counts:
                         self.shots_blocked = 0
                     break
+                throttle.bili_refused(2.0 * (attempt + 1))
                 if attempt < 2:
                     time.sleep(2.0 * (attempt + 1))
             else:
@@ -290,9 +298,9 @@ class Bilibili:
             response = self.client.get(meta["images"][sheet])
             response.raise_for_status()
             Image.open(io.BytesIO(response.content)).verify()
-            tmp = path.with_suffix(".tmp")
+            tmp = paths.temporary(path)
             tmp.write_bytes(response.content)
-            tmp.replace(path)
+            paths.publish(tmp, path)
         return path
 
     def stream(self, bvid: str, min_height: int = 720) -> dict | None:
@@ -455,15 +463,18 @@ class Pixabay:
         rendition = row["rendition"]
         if path.exists() and path.stat().st_size > 10000:
             return path
-        tmp = path.with_suffix(".part")
-        with self.client.stream("GET", rendition["url"], timeout=60) as r:
-            r.raise_for_status()
-            with tmp.open("wb") as out:
-                for chunk in r.iter_bytes(1 << 20):
-                    if check:
-                        check()
-                    out.write(chunk)
-        tmp.replace(path)
+        tmp = paths.temporary(path)
+        try:
+            with self.client.stream("GET", rendition["url"], timeout=60) as r:
+                r.raise_for_status()
+                with tmp.open("wb") as out:
+                    for chunk in r.iter_bytes(1 << 20):
+                        if check:
+                            check()
+                        out.write(chunk)
+            paths.publish(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
         return path
 
 
@@ -494,13 +505,34 @@ def cut_window(source: str, start: float, duration: float, out: Path, *, headers
                  "-reconnect_delay_max", "3", "-rw_timeout", "15000000",
                  "-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
     args += ["-ss", f"{max(0.0, start):.3f}", "-i", source, "-t", f"{duration:.3f}", "-an",
-             "-vf", scale_filter(short_edge), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-             "-movflags", "+faststart", str(out)]
+             "-vf", scale_filter(short_edge)]
+    tail = ["-movflags", "+faststart", str(out)]
     try:
-        media.run(args, timeout=timeout, check=check)
+        # A candidate clip is re-encoded once more by the final render. With several videos at once the CPU is
+        # the bottleneck, so a free NVIDIA encoder session takes the encode; never wait for one.
+        with throttle.try_slot("render") as free:
+            gpu = free and _nvenc()
+            try:
+                media.run(args + (NVENC_CLIP if gpu else X264_CLIP) + tail, timeout=timeout, check=check)
+            except ValueError:
+                if not gpu:
+                    raise
+                media.run(args + X264_CLIP + tail, timeout=timeout, check=check)   # the GPU refused: use the CPU
         out.replace(final)
     finally:
         out.unlink(missing_ok=True)
+
+
+X264_CLIP = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+NVENC_CLIP = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0"]
+
+
+@functools.lru_cache(maxsize=1)
+def _nvenc() -> bool:
+    """This process may encode clips on the NVIDIA GPU (the render setting allows it and NVENC works)."""
+    if config.read().get("encoder", "auto") == "cpu":
+        return False
+    return bool(media.hardware().get("nvenc"))
 
 
 def fetch_range(client: httpx.Client, url: str, start: int, end: int, check=None, attempts: int = 8) -> bytes:
@@ -584,6 +616,11 @@ def dash_index(client: httpx.Client, url: str, check=None, segment_base: dict | 
 
 def dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720) -> None:
     """Fetch only the DASH segments covering the window, then trim locally."""
+    with throttle.slot("bili_download", check):
+        _dash_window(stream, start, duration, out, check, short_edge)
+
+
+def _dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720) -> None:
     last = None
     for url in stream["urls"]:
         try:

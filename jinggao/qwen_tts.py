@@ -11,14 +11,13 @@ import hashlib
 import re
 import shutil
 import tempfile
-import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
-from . import config, paths
+from . import config, paths, throttle
 from .execution import ThreadPoolExecutor
 
 MODEL = "qwen3-tts-flash"
@@ -71,7 +70,6 @@ VOICES = [
     ("Nofish", "不吃鱼", "男声 · 不卷舌", "角色"),
 ]
 NAMES = {voice for voice, *_ in VOICES}
-_gate = threading.BoundedSemaphore(WORKERS)
 
 
 def voices() -> list[dict]:
@@ -147,7 +145,7 @@ def _voice_part(client, cfg, text, target, check):
     payload = {"model": MODEL, "input": {"text": text, "voice": voice(cfg), "language_type": "Chinese"}}
     for attempt in range(6):
         retry = 0.0
-        with _gate:
+        with throttle.slot("qwen_tts"):
             if check:
                 check()
             with speech_request(cfg, text, check=check) as charge:

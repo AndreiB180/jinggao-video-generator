@@ -183,7 +183,11 @@ def run_rounds(args, log, ship, started, set_cap, PACKS):
                 continue
             current = status.get("job") or {}
             if current.get("id") != job["id"]:
-                continue
+                # A newer index job is the latest one (or ours was replaced): follow ours by its id.
+                try:
+                    current = api(args.base, f"/jobs/{job['id']}")
+                except Exception:
+                    continue
             seen = (current.get("progress"), current.get("message"))
             if seen != last_seen:
                 last_seen, last_change = seen, time.time()

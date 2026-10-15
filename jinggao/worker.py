@@ -9,7 +9,7 @@ import re
 import threading
 
 from . import (captions, config, costs, curation, execution, express_plan, identity, instance, media, paths, planner, power,
-               sources, store, video_sources)
+               sources, store, throttle, video_sources)
 
 
 def shot_by_id(project: dict, shot_id: str) -> dict:
@@ -955,7 +955,18 @@ def run_once(stop=None, lane="main") -> bool:
     return True
 
 
-def loop(stop=None, lane="main") -> None:
+def video_workers() -> int:
+    """How many videos are made at the same time (setting video_workers)."""
+    try:
+        return max(1, min(throttle.MAX_VIDEOS, int(config.read().get("video_workers") or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
+    """One worker. The main lane runs one process per video made at the same time (slot 0, 1, ...); a slot
+    above the video_workers setting stays idle. The launcher recovers the queue before starting any slot."""
+    throttle.install(shared)
     parent = multiprocessing.parent_process()
     if parent is not None:
         def watch_parent():
@@ -969,7 +980,8 @@ def loop(stop=None, lane="main") -> None:
     while ownership is None:
         if stop is not None and stop.is_set():
             return
-        ownership = instance.acquire("worker.lock" if lane == "main" else "worker-background.lock")
+        ownership = instance.acquire("worker-background.lock" if lane == "background" else
+                                     "worker.lock" if slot == 0 else f"worker-{slot + 1}.lock")
         if ownership is None:
             time.sleep(.2)
     if lane == "background":
@@ -978,8 +990,12 @@ def loop(stop=None, lane="main") -> None:
         execution.MODEL_SLOTS = threading.BoundedSemaphore(10)
     try:
         store.init()
-        store.recover(lane)
+        if recover:
+            store.recover(lane)
         while stop is None or not stop.is_set():
+            if slot and slot >= video_workers():
+                time.sleep(1)
+                continue
             if not run_once(stop, lane):
                 time.sleep(0.5)
     finally:

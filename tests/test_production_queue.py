@@ -38,7 +38,7 @@ def narration_clock(monkeypatch):
 def test_batch_validates_all_items_before_creating_any_projects(client):
     assert client.post("/api/batch", json={"projects": [{"script": "有效文稿"}, {"script": "   "}]}).status_code == 422
     assert client.get("/api/projects").json() == []
-    assert client.post("/api/batch", json={"projects": [{"script": "稿件"}]*21}).status_code == 422
+    assert client.post("/api/batch", json={"projects": [{"script": "稿件"}]*201}).status_code == 422
     result = client.post("/api/batch", json={"projects": [{"title": "甲", "script": "第一篇", "media_policy": "mixed"},
                                                               {"title": "乙", "script": "第二篇", "aspect": "9:16"}]}).json()
     assert len(result["projects"]) == 2

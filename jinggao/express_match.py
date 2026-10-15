@@ -23,7 +23,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
-from . import config, curation, execution, express_clean, express_sources as es, media, paths, planner, store
+from . import config, curation, execution, express_clean, express_sources as es, media, paths, planner, store, throttle
 
 VERSION = 1
 BILI_PER_QUERY = 4
@@ -205,6 +205,18 @@ class Matcher:
         self.ancient = set(self.plan.get("ancient") or [])   # people from before photography (no real footage can exist)
         self.host_hits, self.host_sources = {}, set()   # sources whose windows keep showing a presenter on camera
         self.presenter_sources = set()                  # presenter-led videos found from their preview frames
+
+    @staticmethod
+    def share() -> int:
+        """Videos being made at the same time share the CPU and the download slots, so every wait of each one
+        stretches about that much; the time limits below were tuned for one video alone and scale with it."""
+        try:
+            with store.connection() as con:
+                running = con.execute("SELECT COUNT(*) FROM jobs WHERE status='running' "
+                                      "AND kind IN ('produce','match')").fetchone()[0]
+        except Exception:
+            return 1
+        return max(1, min(throttle.MAX_VIDEOS, int(running)))
 
     def chat(self, system, content, *, max_tokens, task, timeout=40, attempts=3):
         """Vision call with short timeouts and retries; Germany->Beijing calls occasionally stall."""
@@ -474,7 +486,7 @@ class Matcher:
             out = set()
             for label, (key, cache) in ids.items():
                 hit = label in flagged
-                cache.write_text(json.dumps({"presenter": hit}))
+                es._write_json(cache, {"presenter": hit})
                 if hit:
                     out.add(key)
             return out
@@ -1404,7 +1416,8 @@ class Matcher:
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
             # Longer scripts (one subtitle line per shot) download proportionally more clips per round.
             extra = max(0, len(pending) - 30)
-            limit = time.monotonic() + (75 + 0.6 * extra if round_no == 0 else 50 + 0.4 * extra)
+            share = self.share()
+            limit = time.monotonic() + (75 + 0.6 * extra if round_no == 0 else 50 + 0.4 * extra) * share
             got, failed, bad, running = self.download(jobs, streams, qa=checking, deadline=limit)
             failures.update(failed)
             qa_bad.update(bad)
@@ -1412,7 +1425,7 @@ class Matcher:
             carried = settle(carried + jobs, got, bad, running, last=round_no == 2)
             stamp(f"round{round_no+1}", began)
             pending = [s for s in pending if s["id"] not in final]   # provisional shots keep looking
-            budget = 300 + 1.2 * max(0, len(self.shots) - 30)
+            budget = (300 + 1.2 * max(0, len(self.shots) - 30)) * self.share()
             if pending and time.monotonic() - self.started > budget:
                 self.notes.append(f"匹配已超过 {budget:.0f} 秒，停止继续替换")
                 break
@@ -1474,7 +1487,7 @@ class Matcher:
                     break
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
             got, failed, bad, running = self.download(jobs, streams, qa=checking,
-                                                       deadline=time.monotonic() + 45 + 0.3 * max(0, len(jobs) - 10))
+                                                       deadline=time.monotonic() + (45 + 0.3 * max(0, len(jobs) - 10)) * self.share())
             failures.update(failed)
             qa_bad.update(bad)
             carried = settle(carried, got, bad, running, last=True)   # late clips of the main rounds win

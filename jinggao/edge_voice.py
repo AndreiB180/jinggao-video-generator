@@ -12,11 +12,10 @@ import hashlib
 import os
 import shutil
 import tempfile
-import threading
 import time
 from pathlib import Path
 
-from . import config, paths
+from . import config, paths, throttle
 from .execution import ThreadPoolExecutor
 
 PART = 800                  # characters per request (the service cuts at 4096 bytes)
@@ -41,7 +40,6 @@ VOICES = [
     ("zh-TW-YunJheNeural", "雲哲", "男声 · 台湾腔", "方言"),
 ]
 NAMES = {voice for voice, *_ in VOICES}
-_gate = threading.BoundedSemaphore(WORKERS)
 
 
 def voices() -> list[dict]:
@@ -73,7 +71,7 @@ def _voice_part(text: str, target: Path, name: str, speed: str, check) -> None:
     import edge_tts
     last = None
     for attempt in range(4):
-        with _gate:
+        with throttle.slot("edge_tts"):
             if check:
                 check()
             try:

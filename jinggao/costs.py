@@ -28,6 +28,7 @@ ALIYUN_PRICING_URL = "https://help.aliyun.com/zh/model-studio/qwen3-7-flash"
 QWEN_FLASH_MODELS = {"qwen3.7-flash", "qwen3.7-flash-2026-07-15"}
 _scope = ContextVar("model_cost_scope", default=("unassigned", "", "direct", None))
 _schema_lock = Lock()
+_ready = set()          # ledger files whose schema this process has already checked
 _settlements = Condition()
 _active = set()
 _cancel_check = ContextVar("model_cost_cancel_check", default=None)
@@ -89,44 +90,56 @@ def request_hash(endpoint, payload):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _schema(con):
+    con.execute("PRAGMA journal_mode=WAL")
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS charges (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, job_id TEXT NOT NULL,
+        stage TEXT NOT NULL, category TEXT NOT NULL, model TEXT NOT NULL,
+        created REAL NOT NULL, day TEXT NOT NULL, state TEXT NOT NULL,
+        reserved INTEGER NOT NULL, amount INTEGER NOT NULL,
+        input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER,
+        rates TEXT NOT NULL, http_status INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS charges_project ON charges(project_id);
+    CREATE INDEX IF NOT EXISTS charges_day ON charges(day);
+    """)
+    columns = {r[1] for r in con.execute("PRAGMA table_info(charges)")}
+    additions = {
+        "provider": "TEXT NOT NULL DEFAULT ''",
+        "task": "TEXT NOT NULL DEFAULT ''",
+        "request_hash": "TEXT NOT NULL DEFAULT ''",
+        "cost_basis": "TEXT NOT NULL DEFAULT 'model_tokens'",
+        "pricing_status": "TEXT NOT NULL DEFAULT 'known'",
+        "unit": "TEXT NOT NULL DEFAULT 'tokens'",
+        "usage_units": "INTEGER",
+        "pricing_hash": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            con.execute(f"ALTER TABLE charges ADD COLUMN {name} {definition}")
+    for name, column in (("provider", "provider"), ("request_hash", "request_hash"), ("job", "job_id"),
+                         ("state", "state")):
+        con.execute(f"CREATE INDEX IF NOT EXISTS charges_{name} ON charges({column})")
+    con.commit()
+
+
 @contextmanager
 def _db():
     paths.prepare()
-    con = sqlite3.connect(paths.DATA / "model-costs.sqlite3", timeout=30)
+    path = paths.DATA / "model-costs.sqlite3"
+    if not path.exists():
+        _ready.discard(str(path))
+    con = sqlite3.connect(path, timeout=30)
     con.row_factory = sqlite3.Row
     try:
         # SQLite's initial journal-mode change can fail immediately when many
-        # first requests race, even with busy_timeout. Initialize it serially.
+        # first requests race, even with busy_timeout. Initialize it serially,
+        # once per process: several video workers share this ledger.
         with _schema_lock:
-            con.execute("PRAGMA journal_mode=WAL")
-            con.executescript("""
-            CREATE TABLE IF NOT EXISTS charges (
-                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, job_id TEXT NOT NULL,
-                stage TEXT NOT NULL, category TEXT NOT NULL, model TEXT NOT NULL,
-                created REAL NOT NULL, day TEXT NOT NULL, state TEXT NOT NULL,
-                reserved INTEGER NOT NULL, amount INTEGER NOT NULL,
-                input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER,
-                rates TEXT NOT NULL, http_status INTEGER
-            );
-            CREATE INDEX IF NOT EXISTS charges_project ON charges(project_id);
-            CREATE INDEX IF NOT EXISTS charges_day ON charges(day);
-            """)
-            columns = {r[1] for r in con.execute("PRAGMA table_info(charges)")}
-            additions = {
-                "provider": "TEXT NOT NULL DEFAULT ''",
-                "task": "TEXT NOT NULL DEFAULT ''",
-                "request_hash": "TEXT NOT NULL DEFAULT ''",
-                "cost_basis": "TEXT NOT NULL DEFAULT 'model_tokens'",
-                "pricing_status": "TEXT NOT NULL DEFAULT 'known'",
-                "unit": "TEXT NOT NULL DEFAULT 'tokens'",
-                "usage_units": "INTEGER",
-                "pricing_hash": "TEXT NOT NULL DEFAULT ''",
-            }
-            for name, definition in additions.items():
-                if name not in columns:
-                    con.execute(f"ALTER TABLE charges ADD COLUMN {name} {definition}")
-            con.execute("CREATE INDEX IF NOT EXISTS charges_provider ON charges(provider)")
-            con.execute("CREATE INDEX IF NOT EXISTS charges_request_hash ON charges(request_hash)")
+            if str(path) not in _ready:
+                _schema(con)
+                _ready.add(str(path))
         yield con
         con.commit()
     except BaseException:
@@ -314,28 +327,31 @@ class request:
             waiting = False
             with _db() as con:
                 con.execute("BEGIN IMMEDIATE")
-                rows = con.execute("SELECT id,project_id,job_id,day,state,amount,provider,category FROM charges "
-                                   "WHERE project_id=? OR day=? OR provider=? OR provider='' OR state IN ('reserved','unknown')",
-                                   (pid, day, self.provider)).fetchall()
                 with _settlements:
-                    active = _active.copy()
+                    active = list(_active)
                 # Speech and library building have their own daily caps (OWN_CAPS).
                 own = OWN_CAPS.get(self.category)
-                rows = [r for r in rows if (r["category"] == self.category if own else r["category"] not in OWN_CAPS)]
-                today = [r for r in rows if r["day"] == day or r["state"] in {"reserved", "unknown"}]
+                kind = (("category=?", (self.category,)) if own else
+                        (f"category NOT IN ({','.join('?' * len(OWN_CAPS))})", tuple(OWN_CAPS)))
+                today = ("(day=? OR state IN ('reserved','unknown'))", (day,))
                 caps = (((own[0], today, limits[own[1]]),) if own else (
-                    ("本次任务", [r for r in rows if r["job_id"] == jid], limits["model_job_budget_cny"] if jid else ""),
-                    ("项目累计", [r for r in rows if r["project_id"] == pid], limits["model_project_budget_cny"]),
+                    ("本次任务", ("job_id=?", (jid,)), limits["model_job_budget_cny"] if jid else ""),
+                    ("项目累计", ("project_id=?", (pid,)), limits["model_project_budget_cny"]),
                     ("今日", today, limits["model_daily_budget_cny"]),
-                    ("当前服务累计", [r for r in rows if r["provider"] in {self.provider, ""}], limits["model_provider_budget_cny"]),
+                    ("当前服务累计", ("provider IN (?, '')", (self.provider,)), limits["model_provider_budget_cny"]),
                 ))
-                for name, subset, limit in caps:
+                # Sums in SQL (indexed): the ledger keeps every request ever made, and the write lock is held
+                # while they are computed, so loading all rows would slow every model call of every video.
+                live = (f"SUM(CASE WHEN state='reserved' AND id IN ({','.join('?' * len(active))}) THEN amount ELSE 0 END)"
+                        if active else "0")
+                for name, (where, args), limit in caps:
                     if limit == "":
                         continue
-                    used = sum(r["amount"] for r in subset)
+                    used, live_reserves = con.execute(
+                        f"SELECT COALESCE(SUM(amount),0), COALESCE({live},0) FROM charges WHERE {kind[0]} AND {where}",
+                        (*active, *kind[1], *args)).fetchone()
                     if used + reserve <= _micros(limit):
                         continue
-                    live_reserves = sum(r["amount"] for r in subset if r["id"] in active and r["state"] == "reserved")
                     # Only wait on this process's genuinely in-flight calls.
                     # Crash leftovers and unknown usage never free themselves.
                     if live_reserves and used-live_reserves+reserve <= _micros(limit) and time.monotonic()<deadline:

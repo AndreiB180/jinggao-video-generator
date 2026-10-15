@@ -163,7 +163,7 @@ def _mark(item_id: str, project_id: str) -> None:
 
 
 def make_project(item_id: str, *, aspect: str = "16:9", minutes: float | None = None,
-                 resolution: str = "720p", auto: bool = True) -> dict:
+                 resolution: str = "720p", auto: bool = True, batch: str | None = None) -> dict:
     """A project holding the article. With auto, a produce job rewrites it and makes the video;
     otherwise the raw article is the draft script, to be rewritten from the editor."""
     item = get(item_id)
@@ -174,7 +174,8 @@ def make_project(item_id: str, *, aspect: str = "16:9", minutes: float | None = 
     news = {key: item.get(key, "") for key in ("id", "title", "text", "url", "source", "published", "koubo", "koubo_title")} \
         | {"minutes": minutes}
     project = store.mutate(project["id"], lambda p: p.update(news=news))
-    job = store.enqueue(project["id"], "produce", {"resolution": resolution, "mode": "model"}) if auto else None
+    payload = {"resolution": resolution, "mode": "model"} | ({"batch": batch} if batch else {})
+    job = store.enqueue(project["id"], "produce", payload) if auto else None
     _mark(item_id, project["id"])
     return {"project_id": project["id"], "title": project["title"], "job_id": job["id"] if job else None}
 

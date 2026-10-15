@@ -224,6 +224,19 @@
 - 版权风险：B 站 UP 主视频用于商用营销号风险高（13 秒短视频即构成作品；《庆余年》“AI 一键成片”切片匹配案判赔 80 万元；B 站协议禁止脚本抓取、限非商业使用）。调研称花生用户协议写明“不可用于商业用途”。需客户知情并决定商用发布时是否只用授权素材。
 - 主要来源：pexels.com/api、help.pexels.com、pixabay.com/api/docs、api.dvidshub.net/docs、ibaotu API 文档（baotu-api.apifox.cn）、699pic.com/vip/api、open.hellorf.com、thepaper.cn《庆余年》案报道、court.gov.cn 13 秒短视频案。
 
+## 同时制作多条视频（0.3.5，2026-10-15）
+
+- 设置 `video_workers`（默认 3，1–4）：启动器为每条同时制作的视频开一个 worker 进程（slot 0..N-1，锁文件 worker.lock / worker-2.lock …）；调高后约 2 秒内补开进程，调低时正在做的做完、多出的 slot 不再领任务。队列恢复（interrupted）只在启动器里做一次，worker 不再各自 recover。
+- 共享限额 `jinggao/throttle.py`：启动器用 multiprocessing 建一份，所有 worker（含素材库后台进程）共用：`bili_api` 6（api.bilibili.com 的搜索、预览、播放地址）、`bili_download` 32（B站 CDN 片段下载+裁切）、`render` 3（镜头编码；老驱动的 GeForce 只允许 3 路 NVENC）、`qwen_tts` 3（百炼账号级并发）、`edge_tts` 4。任一进程遇到 B站风控（412 / -352 等）会设一个共享暂停时间，所有进程下一次请求前一起等。没有 install 时是同样大小的进程内限额。
+- 共享缓存写入改成每个进程/线程唯一的临时文件名（`paths.temporary`），`paths.publish` 处理 Windows 上目标文件被别的进程打开时 replace 失败的情况。
+- 队列：批量任务的 payload 带 `batch`，领取顺序是非批量任务在前（首页单条、导出、精修不会排在 100 条批量后面）。`POST /api/queue/cancel`（可带 batch）一次取消全部排队和正在做的；`POST /api/queue/retry` 重试最新一次失败/中断的视频。批量上限 200 篇，新闻选题一次最多选 200 条（有全选）。
+- 百炼限流按主账号合并计算（所有 API Key 共享），多填几个同账号的 Key 没有用；我们的用量离限额很远。
+- 模型费用账本（model-costs.sqlite3）：原来每次模型请求都在写锁里把所有历史记录（约 1.5 万行，且只增不减）读进 Python 求和，多进程时排队可超过 30 秒，抽检报 “database is locked”。现在在 SQL 里按索引求和（新增 job_id、state 索引），建表/WAL 每个进程只做一次；4 进程×8 线程压测，预留等待从最长 4.6 秒降到 0.3 秒。jinggao.sqlite3 的 WAL 设置同样每进程只做一次。
+- 匹配阶段的等待上限（每轮下载 75 秒起、整体 300 秒起、补位 45 秒起）原本按“一条视频独占电脑”调的；同时做多条时会提前到点、放弃未下完的片段、多出文字卡片（实测钱学森一度只剩 67% 视频）。现在乘以正在制作的视频条数（Matcher.share）。
+- 候选片段裁切（cut_window）在有 NVIDIA 且编码设置不是 CPU 时，若当下有空闲的 render 名额就用 h264_nvenc，否则/失败时用 libx264；从不为显卡排队。单个候选片段 libx264 约 5.5 秒 CPU。
+- 实测（本机 8 核、18 个用户共用，负载 30–100，德国访问 B站 CDN，结论偏保守）：3 条同时做，B站未触发风控，账本不再锁；修复后 3 条（89/52/49 镜）全部 100% 实拍、0 文字卡，共 1024 秒。本机 CPU 被占满，吞吐提升有限；客户独占的电脑上需要实测 2 条和 3 条哪个快。
+- 磁盘：每个项目连同候选片段 150–500 MB（exports 里 video.mp4 与 delivery.zip 重复一份），批量 100 条约 20–50 GB。
+
 ## 代码入口
 
 | 路径 | 用途 |

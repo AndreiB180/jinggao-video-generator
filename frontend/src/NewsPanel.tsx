@@ -25,7 +25,8 @@ export function NewsPanel({close,openProject,onCreated}:{close:()=>void;openProj
   setPicked([]);await load();onCreated();
   if(!auto&&r.projects[0]){close();openProject(r.projects[0].project_id)}else{setNote(`已加入制作队列 ${r.projects.length} 篇：先 AI 洗稿并核对事实，再配素材、配音、出片。`);queue()}
  });
- const toggle=(id:string)=>setPicked(p=>p.includes(id)?p.filter(x=>x!==id):p.length>=20?p:[...p,id]);
+ const toggle=(id:string)=>setPicked(p=>p.includes(id)?p.filter(x=>x!==id):p.length>=200?p:[...p,id]);
+ const fresh=items.filter(i=>!i.projects?.length).map(i=>i.id);
  return <div className="modal-backdrop"><section className="modal news-modal" role="dialog" aria-modal="true" aria-label="新闻选题"><div className="modal-heading"><div><h2>新闻选题与洗稿</h2></div><button className="icon-button" aria-label="关闭新闻选题" onClick={close}><X/></button></div><div className="modal-content">
   <p>从新闻爬虫、新闻链接或粘贴的原文开始。AI 先改写成口播稿（保留人名、数字和事实，对照原文核对），再自动配素材、配音并导出视频。</p>
   <div className="news-sources">
@@ -38,7 +39,8 @@ export function NewsPanel({close,openProject,onCreated}:{close:()=>void;openProj
   <details className="news-paste"><summary>手动粘贴新闻原文</summary><input aria-label="新闻标题" placeholder="标题（可选）" value={title} maxLength={200} onChange={e=>setTitle(e.target.value)}/><textarea aria-label="新闻原文" rows={5} placeholder="粘贴新闻正文" value={text} onChange={e=>setText(e.target.value)}/><button className="secondary small" disabled={!!busy||text.trim().length<30} onClick={()=>act('text',async()=>{const item=await request<Item>('/news/text','POST',{title,text});setTitle('');setText('');await load();setOpen(item.id)})}><FileText size={15}/>加入选题</button></details>
   {!bottom&&error&&<p role="alert" className="candidate-warning">{error}</p>}
   {!bottom&&note&&<p role="status" className="news-note">{note}</p>}
-  <h3><Newspaper size={16}/>选题 · {items.length} 条{picked.length>0&&<span className="news-picked">已选 {picked.length}</span>}</h3>
+  <h3><Newspaper size={16}/>选题 · {items.length} 条{picked.length>0&&<span className="news-picked">已选 {picked.length}</span>}
+   {items.length>0&&<span className="news-pick-all"><button className="text-link" onClick={()=>setPicked(items.map(i=>i.id).slice(0,200))}>全选</button>{fresh.length>0&&fresh.length<items.length&&<button className="text-link" onClick={()=>setPicked(fresh.slice(0,200))}>只选没做过的（{fresh.length}）</button>}{picked.length>0&&<button className="text-link" onClick={()=>setPicked([])}>全不选</button>}</span>}</h3>
   {!items.length&&<p className="news-empty">还没有新闻。抓取最新新闻、粘贴链接或原文后会显示在这里。</p>}
   <div className="news-list">{items.map(item=><div key={item.id} className={'news-item '+(picked.includes(item.id)?'picked':'')}>
    <label className="checkbox"><input type="checkbox" checked={picked.includes(item.id)} onChange={()=>toggle(item.id)}/><span><strong>{item.title}</strong><small>{[item.source,item.published&&item.published.slice(0,16),`${item.chars} 字`,origins[item.origin]||item.origin,item.koubo?'已有爬虫口播稿':'',item.projects?.length?`已做 ${item.projects.length} 次`:''].filter(Boolean).join(' · ')}</small></span></label>
@@ -49,7 +51,7 @@ export function NewsPanel({close,openProject,onCreated}:{close:()=>void;openProj
   <button className="primary" disabled={!!busy||!picked.length} onClick={()=>produce(true,picked)}>{busy==='produce'?<Loader2 className="spin" size={16}/>:<Sparkles size={16}/>}{picked.length?`洗稿并自动出片 ${picked.length} 篇`:'勾选新闻后洗稿并自动出片'}</button>
   {bottom&&error&&<p role="alert" className="candidate-warning">{error}</p>}
   {bottom&&note&&<p role="status" className="news-note">{note}</p>}
-  {rows.some(r=>newsProjects.has(r.project_id))&&<><h3>新闻制作队列</h3>{rows.filter(r=>newsProjects.has(r.project_id)).slice(0,20).map(row=><div className="queue-row" key={row.id}><div><button className="text-link" onClick={()=>{close();openProject(row.project_id)}}>{row.title}</button><span>{row.kind!=='produce'?(kinds[row.kind]||row.kind)+' · ':''}{names[row.status]||row.status}</span></div><progress value={row.progress} max={100}/><p>{row.message}{row.error&&` · ${row.error}`}</p>{row.kind==='produce'&&['failed','needs_review','cancelled','interrupted'].includes(row.status)&&<button className="secondary small" disabled={!!busy} onClick={()=>act('retry',async()=>{await request(`/jobs/${row.id}/retry`,'POST',{});await queue()})}>从未完成处继续</button>}</div>)}</>}
+  {rows.some(r=>newsProjects.has(r.project_id))&&<><h3>新闻制作队列{rows.some(r=>newsProjects.has(r.project_id)&&['running','queued'].includes(r.status))&&<button className="secondary small danger" disabled={!!busy} onClick={()=>{if(confirm('取消全部排队和制作中的视频？已经做好的不受影响。'))act('cancel',async()=>{await request('/queue/cancel','POST',{});await queue()})}}>全部取消</button>}</h3>{rows.filter(r=>newsProjects.has(r.project_id)).slice(0,200).map(row=><div className="queue-row" key={row.id}><div><button className="text-link" onClick={()=>{close();openProject(row.project_id)}}>{row.title}</button><span>{row.kind!=='produce'?(kinds[row.kind]||row.kind)+' · ':''}{names[row.status]||row.status}</span></div><progress value={row.progress} max={100}/><p>{row.message}{row.error&&` · ${row.error}`}</p>{row.kind==='produce'&&['failed','needs_review','cancelled','interrupted'].includes(row.status)&&<button className="secondary small" disabled={!!busy} onClick={()=>act('retry',async()=>{await request(`/jobs/${row.id}/retry`,'POST',{});await queue()})}>从未完成处继续</button>}</div>)}</>}
  </div><div className="modal-footer"><small>每篇洗稿约 0.01-0.02 元（两次模型请求），计入该项目费用。</small><button className="secondary" onClick={close}>关闭</button></div></section></div>;
 }
 

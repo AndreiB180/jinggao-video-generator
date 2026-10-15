@@ -17,7 +17,7 @@ from functools import lru_cache
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from . import captions, config, curation, execution, express_clean, paths, store, subtitle_style
+from . import captions, config, curation, execution, express_clean, paths, store, subtitle_style, throttle
 
 
 class Cancelled(Exception):
@@ -605,7 +605,8 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
                  ["-map", "1:a:0", "-af", "apad", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"])
         args += ["-t", str(duration), *encode,
                  "-movflags", "+faststart", str(work / filename)]
-        run(args, cwd=shot_work, check=check)
+        with throttle.slot("render", check):     # shared by every video being made (NVENC sessions)
+            run(args, cwd=shot_work, check=check)
         return item, segments, filename, label
 
     workers = int(options.get("render_workers") or cfg.get("render_workers", "1"))

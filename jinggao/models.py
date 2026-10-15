@@ -52,7 +52,7 @@ class NewsCrawl(Strict):
 
 
 class NewsProduce(Strict):
-    ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{16}$")]] = Field(min_length=1, max_length=20)
+    ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{16}$")]] = Field(min_length=1, max_length=200)
     aspect: Literal["16:9", "9:16"] = "16:9"
     minutes: float | None = Field(default=None, ge=0.5, le=15)
     resolution: Literal["720p", "1080p"] = "720p"
@@ -115,9 +115,14 @@ class BatchItem(NewProject):
 
 
 class BatchRequest(Strict):
-    projects: list[BatchItem] = Field(min_length=1, max_length=20)
+    projects: list[BatchItem] = Field(min_length=1, max_length=200)
     requirements: str = Field(default="", max_length=2000)
-    resolution: Literal["720p", "1080p"] = "720p"
+    resolution: Literal["720p", "1080p"] = "1080p"
+    workers: int | None = Field(default=None, ge=1, le=4)     # videos made at the same time (video_workers)
+
+
+class QueueAction(Strict):
+    batch: str | None = Field(default=None, max_length=40)
 
 
 class AssetPatch(Strict):
