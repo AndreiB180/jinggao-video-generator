@@ -122,7 +122,10 @@ def test_settings_validate_voice_speed_and_migrate_baidu_once(tmp_path, monkeypa
         config.update({"tts_speed": "2"})
     (paths.DATA / "settings.json").write_text(json.dumps({"tts_provider": "baidu_http"}), "utf-8")
     config.migrate()
-    assert config.read()["tts_provider"] == "qwen_tts"
+    assert config.read()["tts_provider"] == "edge_tts"          # Baidu and then 千问 move to the free voice
+    config.update({"tts_provider": "qwen_tts"})
+    config.migrate()
+    assert config.read()["tts_provider"] == "qwen_tts"          # a choice made afterwards is kept
     config.update({"tts_provider": "system"})
     config.migrate()
     assert config.read()["tts_provider"] == "system"

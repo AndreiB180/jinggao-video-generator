@@ -137,6 +137,10 @@ def synthesize(text: str, target: Path, check=None) -> None:
     import tempfile
 
     cfg = config.read()
+    if cfg["tts_provider"] == "edge_tts":
+        from . import edge_voice
+        edge_voice.synthesize(text, target, check)     # free: nothing to record in the ledger
+        return
     if cfg["tts_provider"] == "qwen_tts":
         from . import qwen_tts
         qwen_tts.synthesize(text, target, check)      # one charge per request part, inside

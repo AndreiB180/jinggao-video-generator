@@ -156,35 +156,47 @@ def create_app() -> FastAPI:
             target.unlink(missing_ok=True)
         return footage_index.stats() | {"added": added}
 
+    def voice_module(provider):
+        from . import edge_voice, qwen_tts
+        return {"edge_tts": (edge_voice, "edge_tts_voice", 0.0), "qwen_tts": (qwen_tts, "qwen_tts_voice", 0.16)}.get(provider)
+
     @app.get("/api/tts/voices")
-    def tts_voices():
-        from . import qwen_tts
+    def tts_voices(provider: str = ""):
         cfg = config.read()
-        return {"provider": cfg["tts_provider"], "voice": qwen_tts.voice(cfg), "speed": cfg["tts_speed"],
-                "speeds": list(qwen_tts.SPEEDS), "voices": qwen_tts.voices(),
-                "price_per_1000_chars": 0.16, "key_set": bool(cfg["model_api_key"])}
+        provider = provider or cfg["tts_provider"]
+        found = voice_module(provider)
+        if not found:
+            return {"provider": provider, "voices": [], "voice": "", "voice_key": "", "speed": cfg["tts_speed"],
+                    "speeds": ["1.0", "1.1", "1.2", "1.3"], "price_per_1000_chars": 0, "key_set": bool(cfg["model_api_key"])}
+        module, key, price = found
+        return {"provider": provider, "voice": module.voice(cfg), "voice_key": key, "speed": cfg["tts_speed"],
+                "speeds": list(module.SPEEDS), "voices": module.voices(), "price_per_1000_chars": price,
+                "key_set": bool(cfg["model_api_key"])}
+
+    def voice_owner(name):
+        from . import edge_voice, qwen_tts
+        return edge_voice if name in edge_voice.NAMES else qwen_tts if name in qwen_tts.NAMES else None
 
     @app.post("/api/tts/preview")
     def tts_preview(values: dict):
-        from . import qwen_tts
         name = values.get("voice")
-        if not isinstance(name, str) or name not in qwen_tts.NAMES:
+        module = voice_owner(name) if isinstance(name, str) else None
+        if not module:
             raise ValueError("没有这个音色")
-        qwen_tts.preview(name)
+        module.preview(name)
         return {"url": "/api/tts/sample/" + name}
 
     @app.get("/api/tts/sample/{name}")
     def tts_sample(name: str):
-        from . import qwen_tts
-        if name not in qwen_tts.NAMES:
+        if not voice_owner(name):
             raise KeyError("没有这个音色")
         bundled = paths.ROOT / "assets" / "voices" / f"{name}.mp3"
         if bundled.exists():
             return FileResponse(bundled, media_type="audio/mpeg")
-        cached = sorted((paths.DATA / "voice-samples").glob(f"{name}-*.wav"))
+        cached = sorted((paths.DATA / "voice-samples").glob(f"{name}-*.*"))
         if not cached:
             raise KeyError("这个音色还没有试听样音")
-        return FileResponse(cached[-1], media_type="audio/wav")
+        return FileResponse(cached[-1], media_type="audio/mpeg" if cached[-1].suffix == ".mp3" else "audio/wav")
 
     @app.post("/api/baidu/browser")
     def open_baidu_browser():

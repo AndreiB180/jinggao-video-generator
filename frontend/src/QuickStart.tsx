@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {AudioLines, FileText, FolderOpen, Loader2, RotateCcw, Upload, WandSparkles, X} from 'lucide-react';
-import {VoicePicker} from './VoicePicker';
+import {VoicePicker, useVoices} from './VoicePicker';
 import {SubtitleSettings} from './SubtitleSettings';
 
 type Settings = Record<string,any>;
@@ -35,7 +35,9 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
  const chars=plain(script).length;
  const speed=Number(settings.tts_speed||'1.1');
  const seconds=mode==='text'?chars/(4.2*speed):audioSeconds;
- const voiceCost=mode==='text'?chars*2*0.00008:0;
+ const provider=settings.tts_provider||'edge_tts';
+ const voices=useVoices(provider);
+ const voiceCost=mode==='text'?chars/1000*(voices?.price_per_1000_chars??0):0;
  const modelCost=seconds?Math.min(0.12,0.012+seconds/60*0.006):0;
  const ready=mode==='text'?chars>=10:!!file;
  const rewrite=async()=>{
@@ -83,15 +85,16 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
     <button className="primary go" disabled={!ready||!!busy} onClick={start}>{busy==='start'?<><Loader2 className="spin" size={18}/>正在提交…</>:'开始生成'}</button>
    </div>
    {error&&<div className="message error" role="alert">{error}</div>}
-   <p className="estimate">{ready&&seconds>0?<>视频约 {clock(seconds)} · 预计费用约 ¥{(voiceCost+modelCost).toFixed(2)}{mode==='text'?`（其中配音 ¥${voiceCost.toFixed(2)}）`:''} · 预计用时 {Math.max(2,Math.round((60+seconds*1.2)/60))} 分钟左右</>:mode==='text'?'粘贴至少 10 个字的文案':'选择一个音频文件'}</p>
+   <p className="estimate">{ready&&seconds>0?<>视频约 {clock(seconds)} · 预计费用约 ¥{(voiceCost+modelCost).toFixed(2)}{mode==='text'?(voiceCost>0?`（其中配音 ¥${voiceCost.toFixed(2)}）`:'（配音免费）'):''} · 预计用时 {Math.max(2,Math.round((60+seconds*1.2)/60))} 分钟左右</>:mode==='text'?'粘贴至少 10 个字的文案':'选择一个音频文件'}</p>
   </div>
   <aside className="quick-side">
    <section className="card"><h3>画面比例</h3>
     <div className="aspect-pick">{([['16:9','横屏','西瓜 / B 站 / 头条'],['9:16','竖屏','抖音 / 快手 / 视频号']] as const).map(([value,name,where])=><button key={value} className={aspect===value?'on':''} onClick={()=>setAspect(value)}><i className={value==='16:9'?'wide':'tall'}/><span><strong>{name} {value}</strong><small>{where}</small></span></button>)}</div>
    </section>
    {mode==='text'&&<section className="card"><h3>配音</h3>
-    {settings.tts_provider&&settings.tts_provider!=='qwen_tts'?<p className="muted-note">当前在设置里选择了其他配音方式。</p>:
-     <VoicePicker compact voice={settings.qwen_tts_voice||'Ethan'} speed={settings.tts_speed||'1.1'} change={change}/>}
+    {!['edge_tts','qwen_tts'].includes(provider)?<p className="muted-note">当前在设置里选择了其他配音方式。</p>:<>
+     <VoicePicker compact provider={provider} values={settings} change={change}/>
+     <p className="muted-note">{provider==='edge_tts'?'免费配音（微软神经网络音色），不收费。':'千问配音，约 ¥0.16 / 千字。'}可在设置里切换。</p></>}
    </section>}
    <section className="card"><h3>字幕</h3><SubtitleSettings compact values={settings} change={change}/></section>
    <section className="card quiet">

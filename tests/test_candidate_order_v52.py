@@ -39,7 +39,7 @@ def test_fresh_install_uses_one_qwen_key_for_models_and_voice(tmp_path, monkeypa
     assert {model_routing.model(cfg, task) for task in (
         "planning", "requirements", "evidence_review", "retrieval_grouping", "pixel_observation",
         "candidate_ranking")} == {"qwen3.7-flash"}
-    assert cfg["tts_provider"] == "qwen_tts" and cfg["qwen_tts_voice"] == "Ethan"
+    assert cfg["tts_provider"] == "edge_tts" and cfg["edge_tts_voice"] == "zh-CN-YunxiNeural"
     assert cfg["source_plan_mode"] == "unified" and cfg["pixel_observer_mode"] == "joint"
     assert cfg["model_project_budget_cny"] == cfg["model_job_budget_cny"] == "0.10"
     assert all(not cfg[key] for key in config.SECRETS)

@@ -12,8 +12,8 @@ DEFAULTS = {
     "model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model_api_key": "", "model_name": "qwen3.7-flash",
     "vision_model": "qwen3.7-flash", "tavily_api_key": "", "pixabay_api_key": "", "pexels_api_key": "", "coverr_api_key": "",
     "planning_model": "", "requirements_model": "", "review_model": "", "rewrite_model": "",
-    "tts_provider": "qwen_tts", "qwen_tts_voice": "Ethan", "tts_speed": "1.1", "tts_daily_budget_cny": "5.00", "index_daily_budget_cny": "2.00",
-    "tts_migrated": "",
+    "tts_provider": "edge_tts", "edge_tts_voice": "zh-CN-YunxiNeural", "qwen_tts_voice": "Ethan", "tts_speed": "1.1", "tts_daily_budget_cny": "5.00", "index_daily_budget_cny": "2.00",
+    "tts_migrated": "", "tts_migrated_edge": "",
     "export_dir": "", "auto_save_exports": "1",
     "tts_base_url": "https://api.openai.com/v1",
     "tts_api_key": "", "tts_model": "", "tts_voice": "alloy",
@@ -67,17 +67,20 @@ def read() -> dict:
 
 
 def migrate() -> None:
-    """Baidu 一镜 voices were retired: a saved Baidu choice moves to 千问配音 once."""
+    """Once per change of the default voice: a saved Baidu 一镜 choice (retired) and then a saved 千问配音
+    (paid per character) move to the free voice; a choice made after that is kept."""
     p = paths.DATA / "settings.json"
     if not p.exists():
         return
     with _lock:
         data = json.loads(p.read_text("utf-8"))
-        if data.get("tts_migrated"):
+        if data.get("tts_migrated") and data.get("tts_migrated_edge"):
             return
-        if data.get("tts_provider") in ("baidu_web", "baidu_http"):
+        if not data.get("tts_migrated") and data.get("tts_provider") in ("baidu_web", "baidu_http"):
             data["tts_provider"] = "qwen_tts"
-        data["tts_migrated"] = "1"
+        if not data.get("tts_migrated_edge") and data.get("tts_provider") == "qwen_tts":
+            data["tts_provider"] = "edge_tts"
+        data["tts_migrated"] = data["tts_migrated_edge"] = "1"
         temporary = p.with_suffix(".tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
         os.chmod(temporary, 0o600)
@@ -104,9 +107,11 @@ def update(values: dict) -> dict:
                 raise ValueError("服务地址必须是 HTTP(S) 地址，不能包含用户名密码")
     if values.get("encoder", "auto") not in ("auto", "cpu", "nvenc"):
         raise ValueError("编码方式无效")
-    if values.get("tts_provider", "system") not in ("system", "qwen_tts", "compatible", "import", "baidu_web", "baidu_http"):
+    if values.get("tts_provider", "system") not in ("system", "edge_tts", "qwen_tts", "compatible", "import", "baidu_web", "baidu_http"):
         raise ValueError("配音方式无效")
-    from . import qwen_tts
+    from . import edge_voice, qwen_tts
+    if values.get("edge_tts_voice", edge_voice.DEFAULT_VOICE) not in edge_voice.NAMES:
+        raise ValueError("免费配音音色无效")
     if values.get("qwen_tts_voice", qwen_tts.DEFAULT_VOICE) not in qwen_tts.NAMES:
         raise ValueError("千问音色无效")
     if values.get("tts_speed", "1.0") not in qwen_tts.SPEEDS:

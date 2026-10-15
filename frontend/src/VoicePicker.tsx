@@ -2,15 +2,18 @@ import {useEffect, useRef, useState} from 'react';
 import {Check, Loader2, Pause, Play} from 'lucide-react';
 
 export type Voice = {id:string;name:string;note:string;group:string};
-type VoiceList = {provider:string;voice:string;speed:string;speeds:string[];voices:Voice[];key_set:boolean};
+export type VoiceList = {provider:string;voice:string;voice_key:string;speed:string;speeds:string[];voices:Voice[];
+ price_per_1000_chars:number;key_set:boolean};
 
-let cached:Promise<VoiceList>|null=null;
-export function useVoices() {
+const cached:Record<string,Promise<VoiceList>>={};
+/** The voices of one provider (the free Edge voices or 千问配音). */
+export function useVoices(provider:string) {
  const [list,setList]=useState<VoiceList|null>(null);
  useEffect(()=>{
-  cached=cached||fetch('/api/tts/voices').then(r=>{if(!r.ok)throw new Error('voices');return r.json()});
-  cached.then(setList).catch(()=>{cached=null});
- },[]);
+  setList(null);
+  cached[provider]=cached[provider]||fetch('/api/tts/voices?provider='+encodeURIComponent(provider)).then(r=>{if(!r.ok)throw new Error('voices');return r.json()});
+  cached[provider].then(setList).catch(()=>{delete cached[provider]});
+ },[provider]);
  return list;
 }
 
@@ -36,16 +39,18 @@ function useSample() {
 export function voiceLabel(list:VoiceList|null,id:string){const v=list?.voices.find(v=>v.id===id);return v?v.name:id}
 
 /** Voice cards grouped by use, each with a sample; plus the reading speed. */
-export function VoicePicker({voice,speed,change,compact=false}:{voice:string;speed:string;change:(key:'qwen_tts_voice'|'tts_speed',value:string)=>void;compact?:boolean}) {
- const list=useVoices(), sample=useSample();
+export function VoicePicker({provider,values,change,compact=false}:{provider:string;values:Record<string,any>;change:(key:string,value:string)=>void;compact?:boolean}) {
+ const list=useVoices(provider), sample=useSample();
  const [group,setGroup]=useState('解说');
  if(!list) return <p className="muted-note"><Loader2 className="spin" size={14}/> 正在读取音色…</p>;
+ if(!list.voices.length) return null;
+ const voice=values[list.voice_key]||list.voice, speed=values.tts_speed||list.speed;
  const groups=[...new Set(list.voices.map(v=>v.group))];
  const shown=list.voices.filter(v=>v.group===group);
  return <div className={'voice-picker'+(compact?' compact':'')}>
   <div className="segmented small" role="tablist">{groups.map(g=><button key={g} role="tab" aria-selected={g===group} className={g===group?'on':''} onClick={()=>setGroup(g)}>{g}</button>)}</div>
   <div className="voice-grid">{shown.map(v=><div key={v.id} className={'voice-card'+(v.id===voice?' chosen':'')}>
-   <button className="voice-choose" onClick={()=>change('qwen_tts_voice',v.id)} aria-pressed={v.id===voice}>
+   <button className="voice-choose" onClick={()=>change(list.voice_key,v.id)} aria-pressed={v.id===voice}>
     <strong>{v.name}{v.id===voice&&<Check size={14}/>}</strong><small>{v.note}</small>
    </button>
    <button className="voice-play" aria-label={'试听 '+v.name} onClick={()=>sample.toggle(v.id)}>{sample.loading===v.id?<Loader2 className="spin" size={15}/>:sample.playing===v.id?<Pause size={15}/>:<Play size={15}/>}</button>

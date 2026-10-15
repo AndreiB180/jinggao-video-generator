@@ -41,3 +41,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+## edge-tts 7.3.1 (免费配音)
+
+- edge-tts — GNU Lesser General Public License v3.0 — https://github.com/rany2/edge-tts — used unmodified as a
+  separate library in `runtime/python/Lib/site-packages/edge_tts`; it may be replaced with another build of the
+  same library. The voices are produced by Microsoft's Edge read-aloud service, which is not a published,
+  contracted API.
+- aiohttp, aiohappyeyeballs, aiosignal, frozenlist, multidict, propcache, yarl — Apache License 2.0;
+  attrs — MIT; tabulate — MIT (dependencies of edge-tts).

@@ -270,7 +270,7 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         early = None
         if (not project["shots"] and project.get("script", "").strip() and not project.get("full_audio")
                 and not project.get("source_audio") and config.read().get("pipeline", "express") == "express"
-                and config.read().get("tts_provider") == "qwen_tts"):
+                and config.read().get("tts_provider") in ("edge_tts", "qwen_tts")):
             # 千问配音 needs only the standard text, not the shots: put the script in its standard form, then
             # voice it while the shots are planned (the account allows three speech requests at a time).
             from . import script_norm
@@ -310,7 +310,7 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
                         return
                     media.align_narration(p, {"path": early["target"].relative_to(paths.project_dir(pid)).as_posix(),
                                               "duration": duration, "text": p["script"], "title": "整段自动配音",
-                                              "provider": "qwen_tts"})
+                                              "provider": config.read().get("tts_provider")})
                 store.mutate(pid, attach_voice, internal=True)
             # Any other failure: the voice stage below tries again and reports it.
         project = store.get_project(pid)
