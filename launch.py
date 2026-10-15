@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import signal
 import socket
+import subprocess
 import threading
 import time
 import webbrowser
@@ -29,38 +30,100 @@ def open_when_ready(url: str):
         time.sleep(.2)
 
 
+DEFAULT_PORT = 8770     # 0.3.2+; earlier versions used 8765, whose browser cache could keep showing the old page
+LEGACY_PORT = 8765
+
+
+def netstat_listeners(text: str, port: int) -> set[int]:
+    """PIDs listening on port in Windows `netstat -ano` output. The state word may be localised, so a
+    listening socket is recognised by its foreign address 0.0.0.0:0."""
+    pids = set()
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].endswith(f":{port}") \
+                and parts[2] in ("0.0.0.0:0", "[::]:0") and parts[-1].isdigit():
+            pids.add(int(parts[-1]))
+    return pids
+
+
+def _listening_pids(port: int) -> set[int]:
+    """Processes listening on 127.0.0.1:port."""
+    if os.name == "nt":
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, errors="replace").stdout
+        return netstat_listeners(out, port)
+    out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True).stdout
+    return {int(x) for x in out.split() if x.isdigit()}
+
+
+def _running_copy(port: int) -> dict | None:
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=1, trust_env=False)
+        info = r.json() if r.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError):
+        return None
+    return info if info.get("app") == "jinggao" else None
+
+
+def _close_copy(port: int, info: dict) -> None:
+    """End another running 镜稿 (an old version or another folder) so this one opens instead."""
+    for pid in _listening_pids(port) - {os.getpid()}:
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+            else:
+                os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    for _ in range(75):     # up to 15 s for it to let go of the port
+        with socket.socket() as sock:
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                break
+        time.sleep(.2)
+    print(f"已关闭正在运行的镜稿 {info.get('version', '旧版本')}（端口 {port}），改为启动 {__version__}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="镜稿本地视频工作台")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     paths.prepare()
     config.migrate()
     ownership = instance.acquire()
     if ownership is None:
+        # This folder is already running: the same version is simply opened again; another version
+        # (e.g. a new one unpacked over the old folder) replaces it.
         for _ in range(30):
             try:
                 old = json.loads((paths.DATA / "instance.json").read_text("utf-8"))
-                url = "http://127.0.0.1:" + str(int(old["port"]))
-                if httpx.get(url+"/api/health", timeout=1, trust_env=False).json().get("app") == "jinggao":
+                old_port = int(old["port"])
+                info = _running_copy(old_port)
+                if info and info.get("version") == __version__:
+                    url = f"http://127.0.0.1:{old_port}"
                     if not args.no_browser:
                         webbrowser.open(url)
                     print("镜稿已在 " + url + " 运行")
                     return
-            except (OSError, ValueError, KeyError, httpx.HTTPError):
+                if info:
+                    _close_copy(old_port, info)
+                    ownership = instance.acquire()
+                    if ownership is not None:
+                        break
+            except (OSError, ValueError, KeyError):
                 pass
             time.sleep(.2)
-        raise RuntimeError("已有工作台进程占用此数据目录，请检查原启动窗口")
+            ownership = instance.acquire()
+            if ownership is not None:
+                break
+        if ownership is None:
+            raise RuntimeError("已有工作台进程占用此数据目录，请检查原启动窗口")
     port = args.port
-    # This folder's data is ours (the lock above), so a 镜稿 already answering on the port is another copy,
-    # usually an older version still running: never open that one; start on the next free port instead.
-    try:
-        r = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=1, trust_env=False)
-        if r.status_code == 200 and r.json().get("app") == "jinggao":
-            print(f"注意：端口 {port} 上还有另一个镜稿在运行（版本 {r.json().get('version', '未知')}），"
-                  f"本版本 {__version__} 改用其他端口。旧版本的黑色窗口可以关掉。", flush=True)
-    except (httpx.HTTPError, ValueError):
-        pass
+    # This folder's data is ours (the lock above), so a 镜稿 answering on our port, or on the port earlier
+    # versions used, is another copy (usually the old version): close it so only the new one runs.
+    for candidate in dict.fromkeys((args.port, LEGACY_PORT)):
+        info = _running_copy(candidate)
+        if info:
+            _close_copy(candidate, info)
     for offset in range(20):
         with socket.socket() as sock:
             try:

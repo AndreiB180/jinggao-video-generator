@@ -684,6 +684,7 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "接口不存在")
         if not (frontend / "index.html").exists():
             return JSONResponse({"message": "请先在 frontend 执行 npm run build"}, status_code=503)
-        return FileResponse(frontend / "index.html")
+        # The page must be fetched again after an update (its scripts have hashed names and may be cached).
+        return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
