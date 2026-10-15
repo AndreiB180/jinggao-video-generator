@@ -53,7 +53,7 @@ export function ProduceView({project,jobs,act,refine,again}:{project:Project;job
  }
  const srt=video.path.replace(/[^/]+$/,'subtitles.srt');
  const burned=video.subtitles!==false;
- const other=project.exports.find(e=>(e.subtitles!==false)!==burned);
+ const other=project.exports.find(e=>e.revision===video.revision&&(e.subtitles!==false)!==burned);
  const saved=video.saved_to;
  const tall=project.aspect==='9:16';
  return <div className="produce done">
@@ -71,7 +71,8 @@ export function ProduceView({project,jobs,act,refine,again}:{project:Project;job
     <button className="secondary" onClick={async()=>{try{const r=await fetch('/api/output-folder/open',{method:'POST'});const d=await r.json();setOpened(d.path||'')}catch{setOpened('')}}}><FolderOpen size={16}/>打开成片文件夹</button>
     {opened&&<small className="muted-note">已打开 {opened}</small>}
    </div>
-   <p className="muted-note">字幕已烧录在视频里；SRT 只在上传平台需要外挂字幕时使用，播放时不要再加载，否则会出现两行字幕。</p>
+   <p className="muted-note">{burned?'字幕已烧录在视频里；SRT 只在上传平台需要外挂字幕时使用，播放时不要再加载，否则会出现两行字幕。'
+    :'这一版画面上没有字幕。在剪映里导入视频后，用「文本 → 本地字幕 → 导入」载入 SRT，字幕就按配音时间排好了。'}</p>
    <div className="produce-actions">
     <button className="secondary" onClick={refine}><Clapperboard size={16}/>精修画面</button>
     <button className="secondary" onClick={again}><Plus size={16}/>再做一条</button>

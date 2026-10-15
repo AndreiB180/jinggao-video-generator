@@ -205,13 +205,39 @@ def synthesize(text: str, target: Path, check=None) -> None:
 SUBTITLE_FOLDER = "外挂字幕（仅上传平台时用，播放时不要加载）"
 
 
+def _windows_videos() -> Path | None:
+    """The user's 视频 folder as Windows knows it, which may have been moved (to D:\\ or OneDrive)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+        folder_id = uuid.UUID("18989B1D-99B5-455B-841C-AB7C74E4DDFC")      # FOLDERID_Videos
+        guid = (ctypes.c_ubyte * 16).from_buffer_copy(folder_id.bytes_le)
+        found = ctypes.c_wchar_p()
+        shell = ctypes.windll.shell32
+        shell.SHGetKnownFolderPath.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE,
+                                               ctypes.POINTER(ctypes.c_wchar_p)]
+        if shell.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(found)) != 0:
+            return None
+        try:
+            return Path(found.value) if found.value else None
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(found)
+    except Exception:
+        return None
+
+
 def output_folder() -> Path:
     """Where finished videos are copied: the chosen folder, else 视频/镜稿成片 in the user's home."""
     chosen = config.read().get("export_dir", "").strip()
     if chosen:
         return Path(chosen).expanduser()
-    videos = Path.home() / ("Movies" if sys.platform == "darwin" else "Videos")
-    return (videos if videos.is_dir() else Path.home()) / "镜稿成片"
+    for videos in (_windows_videos(), Path.home() / ("Movies" if sys.platform == "darwin" else "Videos")):
+        if videos and videos.is_dir():
+            return videos / "镜稿成片"
+    return Path.home() / "镜稿成片"
 
 
 def deliver(project: dict, result: dict) -> str:

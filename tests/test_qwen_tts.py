@@ -207,3 +207,14 @@ def test_produce_voices_the_standard_script_while_shots_are_planned(tmp_path, mo
     assert q["full_audio"]["duration"] == 6.5 and q["full_audio"]["provider"] == "qwen_tts"
     assert len(q["shots"]) == 2 and all(s["audio"] is None for s in q["shots"])
     assert "voice_full" in q["workflow_info"]["stages"]
+
+
+def test_output_folder_follows_a_moved_videos_folder(tmp_path, monkeypatch):
+    moved = tmp_path / "D" / "我的视频"
+    moved.mkdir(parents=True)
+    monkeypatch.setattr(config, "read", lambda: config.DEFAULTS | {"export_dir": ""})
+    monkeypatch.setattr(media, "_windows_videos", lambda: moved)
+    assert media.output_folder() == moved / "镜稿成片"
+    monkeypatch.setattr(media, "_windows_videos", lambda: tmp_path / "gone")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    assert media.output_folder() == tmp_path / "home" / "镜稿成片"
