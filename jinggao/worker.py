@@ -912,7 +912,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         message = "已完成"
         if kind == "produce":
             ratio = curation.composition(store.get_project(pid))["video_ratio"]
-            message = f"成片已完成 · 实际视频 {ratio:.0%} · 字幕已烧录"
+            burned = (store.get_project(pid).get("exports") or [{}])[0].get("subtitles", True)
+            message = f"成片已完成 · 实际视频 {ratio:.0%} · " + ("字幕已烧录" if burned else "画面不带字幕（附 SRT 字幕文件）")
         store.job_update(jid, status="completed", progress=100, message=message)
 
 

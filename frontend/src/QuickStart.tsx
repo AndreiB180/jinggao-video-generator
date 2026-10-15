@@ -21,6 +21,8 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
  const [settings,setSettings]=useState<Settings>({}),[folder,setFolder]=useState('');
  const [busy,setBusy]=useState(''),[error,setError]=useState(''),[original,setOriginal]=useState<string|null>(null);
  const [dragging,setDragging]=useState(false);
+ const [burn,setBurn]=useState(()=>{try{return localStorage.getItem('jinggao.burn')!=='0'}catch{return true}});
+ useEffect(()=>{try{localStorage.setItem('jinggao.burn',burn?'1':'0')}catch{/* private window */}},[burn]);
  const input=useRef<HTMLInputElement>(null);
  useEffect(()=>{call<Settings>('/settings').then(setSettings).catch(()=>{});call<{path:string}>('/output-folder').then(f=>setFolder(f.path)).catch(()=>{})},[]);
  useEffect(()=>{try{localStorage.setItem(DRAFT,script)}catch{/* private window */}},[script]);
@@ -51,7 +53,7 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
    const first=plain(script).split(/[。！？!?，,；;]/)[0]?.slice(0,24);
    const name=title.trim()||(mode==='text'?first:file?.name.replace(/\.[^.]+$/,'').slice(0,40))||'新视频';
    const clean=(t:string)=>t.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,'');   // broken characters from a bad copy
-   const p=await call<{id:string}>('/projects','POST',{title:clean(name),script:mode==='text'?clean(script).trim():'',aspect});
+   const p=await call<{id:string}>('/projects','POST',{title:clean(name),script:mode==='text'?clean(script).trim():'',aspect,burn_subtitles:burn});
    if(mode==='audio'&&file){const body=new FormData();body.append('file',file);body.append('role','source_audio');await call('/projects/'+p.id+'/upload','POST',body)}
    await call('/projects/'+p.id+'/jobs','POST',{kind:'produce',resolution});
    if(mode==='text'){setScript('');setOriginal(null)}else setFile(null);
@@ -96,7 +98,10 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
      <VoicePicker compact provider={provider} values={settings} change={change}/>
      <p className="muted-note">{provider==='edge_tts'?'免费配音（微软神经网络音色），不收费。':'千问配音，约 ¥0.16 / 千字。'}可在设置里切换。</p></>}
    </section>}
-   <section className="card"><h3>字幕</h3><SubtitleSettings compact values={settings} change={change}/></section>
+   <section className="card"><h3>字幕</h3>
+    <label className="checkbox burn-toggle"><input type="checkbox" checked={burn} onChange={e=>setBurn(e.target.checked)}/>画面上显示字幕<small>{burn?'直接出片带字幕':'不带字幕，另附 SRT 字幕文件（适合导入剪映再加工）'}</small></label>
+    {burn&&<SubtitleSettings compact values={settings} change={change}/>}
+   </section>
    <section className="card quiet">
     <label className="inline">清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p 更快</option></select></label>
     {folder&&<p className="folder-line"><FolderOpen size={14}/><span title={folder}>成片保存到 {folder}</span></p>}

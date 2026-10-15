@@ -15,7 +15,7 @@ function stageOf(message:string,last:number){
 }
 
 /** A project's main page: where its video is being made, or the finished video with its files. */
-export function ProduceView({project,jobs,act,refine,again}:{project:Project;jobs:Job[];act:(path:string)=>Promise<void>;refine:()=>void;again:()=>void}) {
+export function ProduceView({project,jobs,act,refine,again}:{project:Project;jobs:Job[];act:(path:string,body?:unknown)=>Promise<void>;refine:()=>void;again:()=>void}) {
  const job=jobs.find(j=>j.kind==='produce')||jobs[0];
  const audio=!!project.source_audio;
  const last=useRef(0);
@@ -52,17 +52,22 @@ export function ProduceView({project,jobs,act,refine,again}:{project:Project;job
   </div></div>;
  }
  const srt=video.path.replace(/[^/]+$/,'subtitles.srt');
+ const burned=video.subtitles!==false;
+ const other=project.exports.find(e=>(e.subtitles!==false)!==burned);
  const saved=video.saved_to;
  const tall=project.aspect==='9:16';
  return <div className="produce done">
   <div className={'produce-video'+(tall?' tall':'')}><video key={video.id} controls src={fileUrl(project.id,video.path)}/></div>
   <div className="produce-side">
    <h2>{project.title}</h2>
-   <p className="meta">{clock(video.duration)} · {video.width}×{video.height} · {project.shots.length} 个镜头 · {new Date(video.created*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</p>
+   <p className="meta">{clock(video.duration)} · {video.width}×{video.height} · {project.shots.length} 个镜头 · {burned?'带字幕':'无字幕'} · {new Date(video.created*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</p>
    {saved?<p className="saved"><Check size={14}/>已保存到 <span title={saved}>{saved}</span></p>:null}
    <div className="produce-actions column">
     <a className="primary" href={fileUrl(project.id,video.path)} download={project.title+'.mp4'}><Download size={16}/>下载视频</a>
     <a className="secondary" href={fileUrl(project.id,srt)} download={project.title+'.srt'}><Subtitles size={16}/>下载字幕 SRT</a>
+    {other?<a className="secondary" href={fileUrl(project.id,other.path)} download={project.title+(burned?'（无字幕）':'')+'.mp4'}><Download size={16}/>下载{burned?'无字幕':'带字幕'}版</a>
+     :<button className="secondary" disabled={live(job)} onClick={()=>act('/projects/'+project.id+'/jobs',{kind:'render',resolution:video.height>=1000||video.width>=1900?'1080p':'720p',subtitles:!burned})}>
+      <Subtitles size={16}/>再导出一版{burned?'无字幕的（给剪映用）':'带字幕的'}</button>}
     <button className="secondary" onClick={async()=>{try{const r=await fetch('/api/output-folder/open',{method:'POST'});const d=await r.json();setOpened(d.path||'')}catch{setOpened('')}}}><FolderOpen size={16}/>打开成片文件夹</button>
     {opened&&<small className="muted-note">已打开 {opened}</small>}
    </div>

@@ -168,3 +168,42 @@ def test_contain_photograph_really_moves_and_preserves_all_edges(tmp_path, monke
                if frame.getpixel((x, y))[0] > 180 and frame.getpixel((x, y))[1] < 75]
         assert red and min(x for x, _ in red) > 200 and max(x for x, _ in red) < 1080
         assert min(y for _, y in red) >= 0
+
+
+def test_render_without_subtitles_keeps_the_srt_and_a_clean_picture(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    store.init()
+    p = store.new_project("字幕开关", media_policy="mixed", burn_subtitles=False)
+    path = paths.project_dir(p["id"]) / "plain.jpg"
+    Image.new("RGB", (1280, 720), "#2c6578").save(path)
+    asset = media.inspect_asset(p["id"], path, "纯色")
+    shot = planner.new_shot("这是一段检查字幕开关的口播文字")
+    shot.update(duration=2, fit="cover", selected_asset=asset["id"], approved=True, locked=True)
+    p.update(shots=[shot], assets=[asset])
+
+    def bright_text_pixels(options):
+        result = media.render(p, store.uid(), {"resolution": "720p", "allow_silent": True, "image_motion": False} | options,
+                              lambda *_: None, lambda: None)
+        video = paths.file_path(p["id"], result["path"])
+        frame = tmp_path / f"frame-{result['id']}.png"
+        media.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-ss", "1", "-i", str(video), "-frames:v", "1", str(frame)])
+        image = Image.open(frame).convert("RGB")
+        lower = [image.getpixel((x, y)) for y in range(480, 720, 3) for x in range(0, 1280, 3)]
+        srt = video.with_name("subtitles.srt").read_text("utf-8-sig")
+        return result, sum(1 for r, g, b in lower if min(r, g, b) > 200), srt
+
+    plain, clean, srt = bright_text_pixels({})          # the project's choice: no subtitles
+    assert plain["subtitles"] is False and clean == 0
+    assert "检查字幕开关" in srt
+    burned, text, _ = bright_text_pixels({"subtitles": True})
+    assert burned["subtitles"] is True and text > 50
+
+
+def test_project_subtitle_choice_is_saved_and_patchable(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    with TestClient(create_app()) as client:
+        r = client.post("/api/projects", json={"title": "剪映用", "burn_subtitles": False})
+        assert r.status_code == 201 and r.json()["burn_subtitles"] is False
+        pid = r.json()["id"]
+        assert client.patch(f"/api/projects/{pid}", json={"burn_subtitles": True}).json()["burn_subtitles"] is True
+        assert client.post("/api/projects", json={"title": "默认"}).json()["burn_subtitles"] is True

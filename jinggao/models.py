@@ -14,6 +14,7 @@ class NewProject(Strict):
     media_policy: Literal["video_preferred", "video_only", "mixed"] = "video_preferred"
     min_video_ratio: float = Field(default=0.8, ge=0, le=1)
     min_video_height: Literal[270, 480, 720, 1080] = 720
+    burn_subtitles: bool = True
 
 
 class ProjectPatch(Strict):
@@ -25,6 +26,7 @@ class ProjectPatch(Strict):
     media_policy: Literal["video_preferred", "video_only", "mixed"] | None = None
     min_video_ratio: float | None = Field(default=None, ge=0, le=1)
     min_video_height: Literal[270, 480, 720, 1080] | None = None
+    burn_subtitles: bool | None = None
 
 
 class RewriteRequest(Strict):
@@ -97,6 +99,7 @@ class JobRequest(Strict):
     resolution: Literal["720p", "1080p"] = "1080p"
     music_volume: float = Field(default=0.12, ge=0, le=0.5)
     image_motion: bool = True
+    subtitles: bool | None = None      # burn narration subtitles into the picture (None: the project's choice)
     clip_start: float | None = Field(default=None, ge=0, le=86400)
 
 

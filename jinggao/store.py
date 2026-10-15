@@ -85,12 +85,12 @@ def list_projects() -> list[dict]:
 
 def new_project(title: str, script: str = "", aspect: str = "16:9", *,
                 media_policy: str = "video_preferred", min_video_ratio: float = 0.8,
-                min_video_height: int = 720) -> dict:
+                min_video_height: int = 720, burn_subtitles: bool = True) -> dict:
     now = time.time()
     p = dict(id=uid(), title=title, script=script, aspect=aspect, style="真实资料与清晰解说",
              requirements="", shots=[], assets=[], exports=[], music=None, full_audio=None,
              media_policy=media_policy, min_video_ratio=min_video_ratio, min_video_height=min_video_height,
-             plan_info=None, created=now, updated=now, revision=1)
+             plan_info=None, created=now, updated=now, revision=1, burn_subtitles=burn_subtitles)
     with connection() as con:
         con.execute("INSERT INTO projects VALUES (?,?,?)", (p["id"], json.dumps(p, ensure_ascii=False), now))
     paths.project_dir(p["id"])

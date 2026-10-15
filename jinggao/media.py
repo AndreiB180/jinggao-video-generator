@@ -222,6 +222,8 @@ def deliver(project: dict, result: dict) -> str:
     folder = output_folder()
     folder.mkdir(parents=True, exist_ok=True)
     name = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", project.get("title") or "").strip(" .")[:60] or "成片"
+    if result.get("subtitles") is False:
+        name += "（无字幕）"
     stem, n = name, 2
     while (folder / f"{stem}.mp4").exists():
         stem, n = f"{name}（{n}）", n + 1
@@ -475,6 +477,8 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
     def caption_progress(fraction, message):
         progress(fraction * 4, message)
     timeline, source_list, elapsed, srt_rows = [], [], 0.0, []
+    burn = options.get("subtitles")
+    burn = project.get("burn_subtitles", True) if burn is None else bool(burn)
     prepared = []
     for i, shot in enumerate(shots):
         check()
@@ -507,6 +511,11 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
                                   char_offset=captions.char_offset(shots, i) if full_captions else 0,
                                   line_chars=caption_style["line_chars"]) if track else None
         ass, segments = subtitles(shot["narration"], duration, w, h, label, timed_segments=timed, style=caption_style)
+        drawn = segments
+        if not burn:
+            # No narration on the picture (the SRT keeps the timed lines); a card's name label stays.
+            ass, _ = subtitles("", duration, w, h, label, style=caption_style)
+            drawn = []
         (shot_work / "subtitle.ass").write_text(ass, "utf-8-sig")
         visual = f"scale={w}:{h}:force_original_aspect_ratio="
         # Express crops were measured on one downloaded file (or its privacy-processed copy); a different
@@ -562,7 +571,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         if ass_available:
             args += ["-map", "0:v:0", "-vf", visual+",ass=subtitle.ass:fontsdir=../fonts,format=yuv420p"]
         else:
-            inputs, graph = subtitle_overlays(segments, w, h, shot_work, visual, label)
+            inputs, graph = subtitle_overlays(drawn, w, h, shot_work, visual, label)
             args += inputs + ["-filter_complex_threads", "2", "-filter_complex", graph, "-map", "[captioned]"]
         # Encode full narration only once after concatenating the video. AAC
         # priming/padding on every cut otherwise introduces timing drift.
@@ -633,7 +642,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
     result = {"id": job_id, "path": final.relative_to(root).as_posix(),
               "bundle": (out / "delivery.zip").relative_to(root).as_posix(), "created": time.time(),
               "duration": elapsed, "width": w, "height": h, "encoder": "nvenc" if use_gpu else "cpu",
-              "revision": project["revision"], "silent_preview": bool(options.get("allow_silent"))}
+              "revision": project["revision"], "silent_preview": bool(options.get("allow_silent")), "subtitles": burn}
     result["image_motion"] = bool(options.get("image_motion", True))
     result["composition"] = composition
     result["caption_alignment"] = {"method": full_captions["method"], "coverage": full_captions["coverage"],
