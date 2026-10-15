@@ -131,6 +131,161 @@ def content_rect(frames) -> tuple[float, float, float, float]:
     return x0 / w, y0 / h, x1 / w, y1 / h
 
 
+def _straight(med, border, cols) -> bool:
+    """A canvas border is a straight vertical line: in most rows the strongest horizontal step near it sits
+    in the same column (a bright subject on a dark sky has a ragged edge instead)."""
+    lo, hi = max(1, border - 6), min(cols - 1, border + 6)
+    if hi - lo < 4:
+        return False
+    steps = np.abs(med[:, lo + 1:hi + 1] - med[:, lo - 1:hi - 1])        # (rows, hi-lo), step at column lo..hi-1
+    strong = steps.max(axis=1) > 6
+    if strong.mean() < 0.5:
+        return False
+    where = steps.argmax(axis=1)[strong] + lo
+    centre = np.median(where)
+    return float((np.abs(where - centre) <= 2).mean()) >= 0.7
+
+
+def _picture_run(pixel, cols, med=None):
+    """(a, b) columns of the footage in a frame-in-frame layout, judged by one per-pixel measure, or None."""
+    score = pixel.mean(axis=0)
+    threshold = 0.45 * np.percentile(score, 85)
+    inside = score > threshold
+    runs, start, gap = [], None, 0          # runs of picture columns, gaps of up to 3 columns bridged
+    for k, flag in enumerate(inside):
+        if flag:
+            start = k if start is None else start
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap > 3:
+                runs.append((start, k - gap + 1))
+                start, gap = None, 0
+    if start is not None:
+        runs.append((start, cols - gap))
+    if not runs:
+        return None
+    a, b = max(runs, key=lambda r: r[1] - r[0])
+    if not 0.22 * cols <= b - a <= 0.8 * cols:
+        return None
+    outside = np.concatenate([inside[:max(0, a - 3)], inside[b + 3:]])
+    if len(outside) < 0.15 * cols or outside.mean() > 0.12:
+        return None
+    for border, canvas, footage in ((a, slice(max(0, a - 7), max(0, a - 2)), slice(a + 2, a + 7)),
+                                    (b, slice(b + 2, b + 7), slice(max(0, b - 7), max(0, b - 2)))):
+        if border in (0, cols) or canvas.stop - canvas.start < 3 or canvas.start >= cols:
+            continue
+        plain, sharp = pixel[:, canvas].mean(axis=1), pixel[:, footage].mean(axis=1)
+        if ((plain * 2 + 1) < sharp).mean() < 0.55:
+            return None
+        if med is not None and not _straight(med, border, cols):
+            return None
+    return a, b
+
+
+def inner_picture(frames, content) -> tuple[float, float, float, float] | None:
+    """A picture set inside a larger canvas: a vertical video uploaded as landscape, or a template with the
+    uploader's name and logo beside the footage. Returns its (x0, y0, x1, y1) fractions, or None.
+
+    Every column gets a "picture" score (detail of the median frame plus change over time). The footage is
+    one contiguous run of high-scoring columns covering 22-80% of the width, the canvas outside it scores
+    low, and right at each border the canvas side is plainer than the picture side in most rows (a dark,
+    still or blurred canvas meets sharp footage along a straight line)."""
+    stack = np.stack(frames)
+    n, h, w = stack.shape
+    cx0, cy0 = round(content[0] * w), round(content[1] * h)
+    cx1, cy1 = round(content[2] * w), round(content[3] * h)
+    region = stack[:, cy0:cy1, cx0:cx1]
+    rows, cols = region.shape[1:]
+    if n < 3 or cols < 60 or rows < 40:
+        return None
+    med = np.median(region, axis=0)
+    detail = np.zeros_like(med)
+    detail[1:, :] += np.abs(np.diff(med, axis=0))
+    detail[:, 1:] += np.abs(np.diff(med, axis=1))
+    # A dark or still canvas differs from footage in detail and in change over time; a blurred copy of the
+    # video moves like the footage, so there detail alone tells them apart.
+    change = region.std(axis=0)
+    found = _picture_run(detail + change, cols, med)          # dark, still or text canvas: straight borders
+    if not found:
+        found = _picture_run(detail, cols)                    # blurred canvas: soft borders, but it moves
+        if found:
+            a, b = found
+            inner = change[:, a:b].mean()
+            outer = np.concatenate([change[:, :max(0, a - 3)], change[:, b + 3:]], axis=1)
+            if not outer.size or outer.mean() < 0.5 * inner:
+                found = None
+    if not found:
+        return None
+    a, b = found
+    pad = 2
+    x0 = (cx0 + a + (pad if a else 0)) / w
+    x1 = (cx0 + b - (pad if b < cols else 0)) / w
+    return round(x0, 4), round(cy0 / h, 4), round(x1, 4), round(cy1 / h, 4)
+
+
+def layout_jump(frames, content) -> bool:
+    """The canvas changes during the clip: the source cuts from its intro card (name and logo beside the
+    picture) to the footage, or the picture moves to another place. On screen that is a jump, not a cut."""
+    half = len(frames) // 2
+    if half < 3:
+        return False
+    first, second = inner_picture(frames[:half], content), inner_picture(frames[half:], content)
+    if bool(first) == bool(second) and (not first or (abs(first[0] - second[0]) <= 0.05
+                                                       and abs(first[2] - second[2]) <= 0.05)):
+        return False
+    # The canvas around the picture must really change between the halves (an intro card giving way to the
+    # footage); a scene that only looks like a picture on a canvas for a moment stays the same around it.
+    picture = first or second
+    stack = np.stack(frames)
+    h, w = stack.shape[1:]
+    diff = np.abs(np.median(stack[:half], axis=0) - np.median(stack[half:], axis=0))
+    x0, x1 = int(picture[0] * w), int(picture[2] * w)
+    canvas = np.concatenate([diff[:, :max(0, x0 - 2)], diff[:, x1 + 2:]], axis=1)
+    return canvas.size > 0 and float(canvas.mean()) > 18
+
+
+def static_bands(frames, content) -> list[dict]:
+    """Still bands of text or graphics across the top or bottom of moving footage (a news channel's data bar,
+    a title strip): boxes for the crop to avoid. A band must be still while the picture below or above it
+    moves, carry detail (not sky or a plain bar), and end at a straight horizontal edge."""
+    stack = np.stack(frames)
+    n, h, w = stack.shape
+    cx0, cy0 = round(content[0] * w), round(content[1] * h)
+    cx1, cy1 = round(content[2] * w), round(content[3] * h)
+    region = stack[:, cy0:cy1, cx0:cx1]
+    rows, cols = region.shape[1:]
+    if n < 3 or rows < 40:
+        return []
+    activity = region.std(axis=0).mean(axis=1)                          # per row
+    detail = np.abs(np.diff(np.median(region, axis=0), axis=1)).mean(axis=1)
+    edge = (np.abs(region[:, 2:, :] - region[:, :-2, :]) > 16).mean(axis=2).min(axis=0)   # per row boundary
+    out = []
+    for top in (True, False):
+        limit = int(rows * 0.25)
+        span = range(limit) if top else range(rows - 1, rows - 1 - limit, -1)
+        body = activity[limit:rows - limit].mean()
+        if body < 3:
+            break                                                       # the whole picture is still
+        depth = 0
+        for r in span:
+            if activity[r] < 0.3 * body:
+                depth += 1
+            else:
+                break
+        if depth < 0.04 * rows:
+            continue
+        band = slice(0, depth) if top else slice(rows - depth, rows)
+        boundary = depth - 1 if top else rows - depth - 2
+        near = edge[max(0, boundary - 2):boundary + 3]
+        if detail[band].mean() < 4 or not len(near) or near.max() < 0.6:
+            continue
+        y0 = cy0 + (0 if top else rows - depth)
+        y1 = cy0 + (depth if top else rows)
+        out.append({"kind": "banner", "box": [round(cx0 / w, 4), round(y0 / h, 4), round(cx1 / w, 4), round(y1 / h, 4)]})
+    return out
+
+
 def _components(cells) -> list[tuple[int, int, int, int, int]]:
     """8-connected components of a boolean grid -> (x0, y0, x1, y1, count) in cells."""
     seen = np.zeros_like(cells, dtype=bool)
@@ -580,6 +735,10 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
         return {}
     content = content_rect(frames)
     still = motion(frames)
+    pip = inner_picture(frames, content) if not still["still"] else None
+    jump = not still["still"] and layout_jump(frames, content)
+    if pip:
+        content = pip            # the canvas around the picture (bars, the uploader's name and logo) is not footage
     source_boxes = (source or {}).get("boxes", []) if tuple((source or {}).get("size") or ()) == size else []
     # A fixed camera on one scene (a gym, a studio) keeps its background as steady as any overlay: steady
     # edges in the clip then prove little, so only tight corner marks are taken from them. Marks from the
@@ -601,16 +760,27 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
         if not any(b["box"][0] <= logo[0] + .02 and b["box"][1] <= logo[1] + .02 and b["box"][2] >= logo[2] - .02
                    and b["box"][3] >= logo[3] - .02 for b in edge + corners):
             corners.append({"kind": "logo", "box": logo})
+    if not still["still"]:
+        corners += static_bands(frames, content)
     edge = _merge(edge + corners)
     subs = subtitles(frames, content, source_boxes)
-    if edge or subs:
+    narrow = bool(pip) and (pip[2] - pip[0]) * src_aspect / max(1e-6, pip[3] - pip[1]) < 0.8 * out_aspect
+    if narrow:
+        # A picture much narrower than the film (a vertical video): show it whole; the render's contain fit
+        # fills the sides with a blurred copy of the picture itself. Marks inside it are blurred.
+        x0, y0, x1, y1 = content
+        rect, zoom = [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)], 1.0
+        residual = [o | {"box": [max(o["box"][0], x0), max(o["box"][1], y0), min(o["box"][2], x1), min(o["box"][3], y1)]}
+                    for o in edge + subs if _overlap(o["box"], (x0, y0, x1, y1)) > 1e-9]
+    elif edge or subs:
         rect, zoom, residual = safe_crop(edge + subs, content, src_aspect, out_aspect)
     else:   # nothing to hide: only trim black bars and let the render's fit decide the framing
         x0, y0, x1, y1 = content
         rect, zoom, residual = [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)], 1.0, []
     return {"content": [round(v, 4) for v in content], "overlays": edge + subs, "central": central,
             "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still | {"fixed_camera": fixed},
-            "src_aspect": round(src_aspect, 4)}
+            "src_aspect": round(src_aspect, 4), "inner_picture": list(pip) if pip else None, "narrow": narrow,
+            "layout_jump": jump}
 
 
 def dirty(result: dict) -> bool:

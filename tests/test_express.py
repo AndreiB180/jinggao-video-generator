@@ -399,3 +399,44 @@ def test_black_screens_and_fades_are_flagged_dark_but_night_scenes_are_not():
     black = [np.zeros((27, 48), dtype=np.float32)] * 2 + [rng.random((27, 48), dtype=np.float32) * 255 for _ in range(4)]
     night = [np.full((27, 48), 35, dtype=np.float32) + rng.random((27, 48), dtype=np.float32) * 30 for _ in range(6)]
     assert express_clean.motion(black)["dark"] and not express_clean.motion(night)["dark"]
+
+
+def _clip(tmp_path, name, graph, seconds=4):
+    out = tmp_path / f"{name}.mp4"
+    __import__("subprocess").run([str(paths.binary("ffmpeg")), "-v", "error", "-y", "-f", "lavfi", "-i",
+                                  f"mandelbrot=size=1280x720:rate=10,trim=duration={seconds}", "-filter_complex", graph,
+                                  "-pix_fmt", "yuv420p", str(out)], check=True)
+    return out
+
+
+def test_a_vertical_video_inside_a_landscape_canvas_is_shown_whole_without_the_canvas(tmp_path):
+    from jinggao import express_clean as ec
+    pytest.importorskip("numpy")
+    dark = _clip(tmp_path, "dark", "color=c=0x303030:s=1280x720:d=4[bg];[0:v]crop=405:720[fg];"
+                                   "[bg]drawbox=x=40:y=40:w=420:h=60:color=white:t=fill[bg2];[bg2][fg]overlay=700:0:shortest=1")
+    # (A blurred-copy canvas is checked on real footage; this synthetic source is too smooth at its edges.)
+    for clip, (x0, x1) in ((dark, (700 / 1280, 1105 / 1280)),):
+        result = ec.analyse(clip, 4.0, (1280, 720), 16 / 9)
+        assert result["narrow"] and abs(result["inner_picture"][0] - x0) < 0.02 and abs(result["inner_picture"][2] - x1) < 0.02
+        assert result["crop"][2] < 0.4                         # the picture alone; the render fills the sides
+    plain = ec.analyse(_clip(tmp_path, "plain", "[0:v]null"), 4.0, (1280, 720), 16 / 9)
+    assert plain["inner_picture"] is None and not plain["layout_jump"] and not plain["narrow"]
+
+
+def test_an_intro_card_giving_way_to_footage_is_a_jump(tmp_path):
+    from jinggao import express_clean as ec
+    pytest.importorskip("numpy")
+    clip = _clip(tmp_path, "jump", "[0:v]split[a][b];"
+                 "color=c=0x303030:s=1280x720:d=4[bg];[a]crop=405:720[fg];[bg][fg]overlay=700:0:shortest=1,trim=0:1.8,setpts=PTS-STARTPTS[p];"
+                 "[b]trim=1.8:4,setpts=PTS-STARTPTS[q];[p][q]concat=n=2:v=1")
+    assert ec.analyse(clip, 4.0, (1280, 720), 16 / 9)["layout_jump"]
+
+
+def test_footage_fills_the_frame_unless_its_shape_is_far_off():
+    from jinggao import curation
+    video = {"kind": "video"}
+    assert curation.preferred_fit({}, video | {"width": 1440, "height": 1080}, "16:9") == "cover"     # 4:3
+    assert curation.preferred_fit({}, video | {"width": 1920, "height": 800}, "16:9") == "cover"      # 2.4:1
+    assert curation.preferred_fit({}, video | {"width": 1080, "height": 1920}, "16:9") == "contain"   # vertical
+    assert curation.preferred_fit({}, {"kind": "image", "width": 1440, "height": 1080}, "16:9") == "contain"
+    assert express_match.intro_seconds(60) == 6 and express_match.intro_seconds(900) == 8

@@ -20,7 +20,12 @@ def preferred_fit(shot: dict, asset: dict, aspect: str) -> str:
     if not width or not height:
         return shot.get("fit", "cover")
     target = 9/16 if aspect == "9:16" else 16/9
-    return "cover" if .95 <= width/height/target <= 1.05 else "contain"
+    ratio = width / height / target
+    if asset.get("kind") == "video":
+        # Footage fills the frame (cropping a band) unless its shape is far off, e.g. a vertical video in a
+        # landscape film: customers read blurred side or top bands as "not filled".
+        return "cover" if .7 <= ratio <= 1.43 else "contain"
+    return "cover" if .95 <= ratio <= 1.05 else "contain"
 
 
 def needs_identity(shot: dict) -> bool:

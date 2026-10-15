@@ -107,6 +107,11 @@ class Budget(RuntimeError):
     pass
 
 
+def intro_seconds(length: float) -> float:
+    """How much of a source's start to leave out: uploaders' intro cards run a few seconds."""
+    return min(8.0, 0.1 * max(0.0, length))
+
+
 def _font(size):
     try:
         return ImageFont.truetype(str(paths.font_path()), size)
@@ -372,7 +377,8 @@ class Matcher:
         if not previews:
             return []
         duration = row["duration"] or previews[-1]["t"]
-        inner = [p for p in previews if duration * 0.04 <= p["t"] <= duration * 0.96] or previews
+        # The first seconds are often the uploader's intro card (name, logo, a different layout): skip them.
+        inner = [p for p in previews if max(duration * 0.04, intro_seconds(duration)) <= p["t"] <= duration * 0.96] or previews
         step = max(1, len(inner) / count)
         picked = [inner[min(len(inner) - 1, int(i * step + step / 2))] for i in range(min(count, len(inner)))]
         if row.get("moments") or row.get("avoid"):
@@ -626,7 +632,7 @@ class Matcher:
         t = float(tile["t"])
         key = (source["provider"], source["id"])
         taken = reserved.get(key, [])
-        lo = max(0.0, t - need + 1.0)
+        lo = max(0.0, t - need + 1.0, min(intro_seconds(length), t - 0.5))
         hi = min(length - need - 0.1, t - 1.0 if need > 2.5 else t)
         if hi < lo:
             lo, hi = 0.0, max(0.0, length - need - 0.1)
@@ -933,6 +939,8 @@ class Matcher:
             flags.add("still")
         if (clean.get("motion") or {}).get("dark"):
             flags.add("dark")
+        if clean.get("layout_jump"):
+            flags.add("jump")
         if express_clean.dirty(clean):
             flags.add("wm")
         return flags
@@ -1341,6 +1349,8 @@ class Matcher:
                     continue
                 if job_id not in bad and "dark" in self.flags(job_id):
                     bad[job_id] = "黑屏或淡入黑场"     # found locally, whatever the sampled QA frames showed
+                if job_id not in bad and "jump" in self.flags(job_id):
+                    bad[job_id] = "画面版式中途跳变（片头或画中画切换），看起来像闪了一下"
                 if job_id in bad:
                     rejected.setdefault(sid, []).append((choice | {"job": job_id}, path, bad[job_id]))   # region stays reserved
                     continue
@@ -1471,7 +1481,7 @@ class Matcher:
             for job_id, sid, choice in jobs:
                 if sid in final:
                     continue
-                if job_id in got and job_id not in bad and self.flags(job_id) & {"still", "dark"}:
+                if job_id in got and job_id not in bad and self.flags(job_id) & {"still", "dark", "jump"}:
                     # Reused windows are a last resort: a static one is usually a screenshot or text page.
                     bad[job_id] = "近似静态截图或黑场"
                 if job_id in got and job_id in bad:
