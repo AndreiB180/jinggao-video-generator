@@ -13,7 +13,7 @@ import webbrowser
 import httpx
 import uvicorn
 
-from jinggao import config, instance, paths, source_index
+from jinggao import __version__, config, instance, paths, source_index
 from jinggao.api import create_app
 from jinggao.worker import loop
 
@@ -52,14 +52,13 @@ def main():
             time.sleep(.2)
         raise RuntimeError("已有工作台进程占用此数据目录，请检查原启动窗口")
     port = args.port
-    # Re-open our existing instance instead of spawning duplicate workers.
+    # This folder's data is ours (the lock above), so a 镜稿 already answering on the port is another copy,
+    # usually an older version still running: never open that one; start on the next free port instead.
     try:
         r = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=1, trust_env=False)
         if r.status_code == 200 and r.json().get("app") == "jinggao":
-            if not args.no_browser:
-                webbrowser.open(f"http://127.0.0.1:{port}")
-            print(f"镜稿已在 http://127.0.0.1:{port} 运行")
-            return
+            print(f"注意：端口 {port} 上还有另一个镜稿在运行（版本 {r.json().get('version', '未知')}），"
+                  f"本版本 {__version__} 改用其他端口。旧版本的黑色窗口可以关掉。", flush=True)
     except (httpx.HTTPError, ValueError):
         pass
     for offset in range(20):
@@ -98,7 +97,7 @@ def main():
     (paths.DATA / "instance.json").write_text(json.dumps({"port": port}), "utf-8")
     if not args.no_browser:
         threading.Thread(target=open_when_ready, args=(url,), daemon=True).start()
-    print(f"镜稿已启动：{url}\n关闭浏览器不会停止任务。退出本窗口将停止后台服务。", flush=True)
+    print(f"镜稿 {__version__} 已启动：{url}\n关闭浏览器不会停止任务。退出本窗口将停止后台服务。", flush=True)
     def graceful_term(signum, frame):
         raise KeyboardInterrupt
     previous_term = signal.signal(signal.SIGTERM, graceful_term)
