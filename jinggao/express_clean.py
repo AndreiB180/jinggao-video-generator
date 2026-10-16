@@ -786,8 +786,10 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
 
 
 def dirty(result: dict) -> bool:
-    """Marks that the crop could not remove (blurred instead), or a subtitle line left in view."""
-    return any(r["kind"] in ("center", "subtitle") or (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]) > 0.004
+    """Marks that the crop could not remove (blurred instead), or a subtitle line left in view. Caption lines
+    read by OCR (kind "caption") are blurred when they cannot be cropped: unlike a guessed subtitle band, their
+    extent is known."""
+    return any(r["kind"] in ("center", "subtitle", "caption") or (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]) > 0.004
                for r in (result or {}).get("residual", []))
 
 

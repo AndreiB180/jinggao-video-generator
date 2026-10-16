@@ -22,6 +22,10 @@ function RunFacts({project,job}:{project:Project;job?:Job}){
  if(onCard+onCpu)parts.push(split(onCard,onCpu,'段','画面转码'));
  if(shots.nvenc||shots.cpu)parts.push(split(shots.nvenc||0,shots.cpu||0,'镜','合成'));
  else if(video)parts.push(video.encoder==='nvenc'?'合成用显卡':'合成用 CPU');
+ const text=project.express_report?.text;
+ const cleaned=text?[text.sources_contact?`避开 ${text.sources_contact} 个带联系方式、引流文字的视频`:'',
+  text.caption?`裁掉或模糊原视频字幕 ${text.caption} 处`:''].filter(Boolean):[];
+ if(cleaned.length)parts.push('去字：'+cleaned.join('，'));
  if(!steps.length&&!parts.length)return null;
  return <p className="run-facts"><Gauge size={13}/><span>{total?`总用时 ${span(total)}`:''}{total&&steps.length?'：':''}{steps.join(' · ')}{parts.length?<><br/>{parts.join('；')}</>:null}</span></p>;
 }

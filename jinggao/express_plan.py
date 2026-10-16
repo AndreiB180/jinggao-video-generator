@@ -47,9 +47,11 @@ def _queries(values, limit, ascii_only=False) -> list[str]:
     return result[:2]
 
 
-# A shot shorter than about this many full-width characters can last under 1 s with a fast voice
-# (Baidu 一镜 reads about 5 characters a second); such pieces join a neighbour when the line allows.
-MIN_WIDTH = 6
+# A shot shorter than about this many full-width characters flashes past (about 2 s at 4.5 characters a
+# second; Baidu 一镜 reads about 5); such pieces join a neighbour when the line allows.
+MIN_WIDTH = 9
+# After the real voice is aligned, a shot shorter than this joins a neighbour (before any footage is chosen).
+MIN_SECONDS = 2.0
 
 
 def line_shots(script: str, line_chars: int) -> list[dict]:

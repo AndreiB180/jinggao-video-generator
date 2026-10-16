@@ -124,6 +124,16 @@ def mutate(project_id: str, action: Callable[[dict], None], *, internal: bool = 
     return p
 
 
+def discard_project(project_id: str) -> None:
+    """Remove a project that was never used (an import that failed before any job ran)."""
+    import shutil
+    with connection() as con:
+        if con.execute("SELECT 1 FROM jobs WHERE project_id=?", (project_id,)).fetchone():
+            return
+        con.execute("DELETE FROM projects WHERE id=?", (project_id,))
+    shutil.rmtree(paths.project_dir(project_id), ignore_errors=True)
+
+
 def enqueue(project_id: str, kind: str, payload: dict | None = None) -> dict:
     get_project(project_id)
     now, job_id = time.time(), uid()

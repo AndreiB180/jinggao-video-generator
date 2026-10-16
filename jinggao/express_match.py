@@ -23,7 +23,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
-from . import config, curation, execution, express_clean, express_sources as es, media, paths, planner, store, throttle
+from . import (config, curation, execution, express_clean, express_sources as es, media, paths, planner,
+               screen_text, store, throttle)
 
 VERSION = 1
 BILI_PER_QUERY = 4
@@ -62,7 +63,7 @@ IDENTITY_REJECTION = re.compile(r"演员|扮演|影视|情景|再现|不是|非|
                                 r"葬礼|遗体|遗像|灵堂|灵柩|追悼|悼念|花圈")
 # Rejections that make a clip unusable for any line, even as a last resort before a title card.
 BROKEN_REJECTION = re.compile(r"黑屏|黑场|纯色|模糊|动画|游戏|AI|PPT|文字页|图表|截图|截屏|评论区|聊天|界面|马赛克|主持|博主|嘉宾|访谈|采访|出镜|镜头讲话|对镜|"
-                              r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告")
+                              r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告|联系方式|引流|电话|微信|QQ|私信|号码")
 FUNERAL = re.compile(r"葬礼|遗体|遗容|遗像|灵堂|灵柩|追悼|悼念|花圈|讣告|火化|送别|逝世后|告别仪式")
 DEATH_LINE = re.compile(r"逝世|去世|病逝|离世|悼念|追悼|葬礼|长眠|告别")
 BROADCAST = re.compile(r"CCTV|cctv|央视|中央电视台|卫视|电视台|CGTN|凤凰卫视|凤凰资讯|凤凰网|凤凰视频")   # a channel logo sits top-left
@@ -94,8 +95,8 @@ TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体�
 
 QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
 对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
-bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
-wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
+bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
+wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
 普通镜头只要和口播所讲的主题场景大致相关、看着自然即可：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、地点、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。只有画面题材与口播完全无关才算跑题。
 要求具名人物的镜头：只要画面是此人本人的真实影像或照片就合格，即使与口播所讲的具体事件、场景不一致也不要判不合格。
@@ -184,6 +185,7 @@ class Matcher:
         self.timing = {}
         self.fetch_seconds = []
         self.encoders = {}    # how candidate clips were encoded: full / nvenc / cpu -> count
+        self.text_found = {"contact": 0, "caption": 0, "center": 0, "sources_contact": 0, "sources_captioned": 0}
         self.qa_unchecked = set()
         self.job_choice = {}
         self.subtitled = set()
@@ -411,6 +413,8 @@ class Matcher:
                 continue
             hashes.append(h)
             tiles.append({"source": row, "t": p["t"], "image": image, "hash": h})
+        if tiles and row["provider"] == "bilibili":
+            self.screen_source(row, [t["image"] for t in tiles])
         if express_clean.available():
             try:
                 frames = self.sprite_frames(row, picked[0]["t"] if picked else 0)
@@ -424,6 +428,44 @@ class Matcher:
             except Exception as exc:  # the check is an optimisation only
                 self.notes.append(f"水印预检失败 {row['id']}: {type(exc).__name__}")
         return tiles
+
+    SCREEN_FRAMES = 6
+
+    def screen_source(self, row, images):
+        """Read a few preview frames of a whole video before any download: an uploader's contact overlay
+        (需要视频私信 / 加微信 / QQ) usually runs through all of it, as do burned-in subtitles. Cached per video."""
+        if not screen_text.installed():
+            return
+        cache = es._cache("text") / f"{row['id']}.json"
+        try:
+            found = json.loads(cache.read_text("utf-8"))
+        except (OSError, ValueError):
+            usable = [im for im in images if im.width >= 300][:self.SCREEN_FRAMES]   # 160x90 sheets are too small
+            if not usable:
+                return
+            try:
+                with throttle.slot("frames", self.check):
+                    reads = [screen_text.classify([screen_text.read(im)]) for im in usable]
+            except media.Cancelled:
+                raise
+            except Exception as exc:
+                self.notes.append(f"预览文字识别失败 {row['id']}: {type(exc).__name__}")
+                return
+            found = {"frames": len(reads), "contact": sorted({t for r in reads for t in r["contact"]}),
+                     "caption": sum(1 for r in reads if any(m["kind"] == "caption" for m in r["marks"])),
+                     "center": sum(1 for r in reads if r["dense"] and not r["contact"])}
+            es._write_json(cache, found)
+        if found.get("contact"):
+            row["contact"] = True
+            with self.lock:
+                self.text_found["sources_contact"] += 1
+        elif found.get("frames"):
+            if found.get("caption", 0) * 2 >= found["frames"]:
+                row["captioned"] = True
+                with self.lock:
+                    self.text_found["sources_captioned"] += 1
+            if found.get("center", 0) * 2 >= found["frames"]:
+                row["dirty"] = True
 
     def all_tiles(self, chosen, person_groups=()):
         sources, person = {}, set()
@@ -572,10 +614,36 @@ class Matcher:
                 picks[ids[key]] = [labels[v] for v in dict.fromkeys(values)][:6]
         return picks, {"ctx": [labels[v] for v in dict.fromkeys(ctx)]}
 
+    def borrow(self, shot, final, files):
+        """The nearest accepted clip (never the next one: a clip twice in a row looks like a glitch) that is long
+        enough and shows no other named person; anywhere in the video, as one about the same subject."""
+        position, need = self.position[shot["id"]], float(shot["duration"]) - 0.15
+        for distance in range(2, len(self.timeline)):
+            for other in (position - distance, position + distance):
+                if not 0 <= other < len(self.timeline):
+                    continue
+                sid = self.timeline[other]["id"]
+                choice = final.get(sid)
+                if not choice or choice.get("lane") in ("card", "reuse") or sid not in files:
+                    continue
+                donor_shot = self.shots_by_id_all.get(sid) or {}
+                if shot.get("persons"):
+                    if not (self.names_in_source(shot, choice["tile"]["source"]) or choice.get("lane") in ("ctx", "topic")):
+                        continue
+                elif donor_shot.get("persons") and choice.get("lane") in ("pick", "person", "person_near"):
+                    continue    # that clip shows someone by name
+                try:
+                    if es.probe_duration(files[sid]) < need:
+                        continue
+                except ValueError:
+                    continue
+                return sid
+        return None
+
     def title_card(self, shot, backdrop=None):
         """Neutral image card (counts as image seconds, never as fake footage): a blurred, darkened frame
-        of nearby accepted footage, or a plain gradient. The only text is a required person's name; the
-        narration subtitle is burned in later, and planner notes never appear on screen."""
+        of nearby accepted footage, or a plain gradient, with no text on it; the narration subtitle is burned
+        in later, and planner notes never appear on screen."""
         w, h = (1280, 720) if self.project.get("aspect", "16:9") != "9:16" else (720, 1280)
         image = None
         if backdrop:
@@ -595,10 +663,8 @@ class Matcher:
             for y in range(h):
                 shade = int(18 + 22 * y / h)
                 draw.line([(0, y), (w, y)], fill=(shade, shade + 4, shade + 12))
-        names = "、".join(p["name"] for p in shot.get("persons") or [])
-        if names:
-            ImageDraw.Draw(image).text((w / 2, h / 2), names, font=_font(64 if len(names) <= 10 else 48),
-                                       fill=(235, 235, 235), anchor="mm")
+        # No words on the card: a name in the middle of the picture reads as junk text (customers asked for
+        # nothing but the subtitles); the narration subtitle says who it is.
         root = paths.project_dir(self.pid) / "assets"
         root.mkdir(exist_ok=True)
         path = root / f"express-card-{shot['id'][:8]}.jpg"
@@ -703,8 +769,8 @@ class Matcher:
             best = None
             for rank, (tile, lane) in enumerate(options.get(sid, [])):
                 key = (tile["source"]["provider"], tile["source"]["id"])
-                if (key, round(tile["t"], 1)) in exclude.get(sid, set()):
-                    continue
+                if (key, round(tile["t"], 1)) in exclude.get(sid, set()) or tile["source"].get("contact"):
+                    continue    # an uploader who puts 加微信 / phone numbers on the picture: never
                 start = self.window(tile, float(shot["duration"]), reserved)
                 if start is None:
                     continue
@@ -723,6 +789,8 @@ class Matcher:
                         # A line about a named person should show that person, not generic topic footage.
                         + (5 if lane == "topic" and shot.get("persons") and not self.unfilmed_shot(shot) else 0)
                         + (6 if tile["source"].get("dirty") else 0)
+                        # Burned-in subtitles in most of its previews: cropped or blurred, but cleaner footage first.
+                        + (3 if tile["source"].get("captioned") else 0)
                         # A presenter-led source is a last resort (its windows keep failing QA).
                         + (8 if key in self.host_sources else 0))
                 if best is None or cost < best[0]:
@@ -807,6 +875,7 @@ class Matcher:
                 self.clean[job_id] = clean
             if clean.get("central"):
                 choice["tile"]["source"]["dirty"] = True   # mid-picture watermark: avoid this source
+            self.read_text(job_id, shot, choice, path)
             return job_id, sid, path, None
         except media.Cancelled:
             raise
@@ -946,6 +1015,56 @@ class Matcher:
         except Exception as exc:
             self.notes.append(f"去水印分析失败 {source['id']}: {type(exc).__name__}: {str(exc)[:80]}")
             return {}
+
+    def wants_backup(self, shot, primary, videos: int) -> bool:
+        """A second candidate per shot in the same round saves a round when the first fails the check, at the
+        cost of one more download, encode, analysis and check. With one video alone, time matters most: always.
+        With several videos at once the computer is the limit: only where the first pick is likely to fail
+        (named people, a weak match, a flagged source)."""
+        if primary is None or videos <= 1 or shot.get("persons"):
+            return True
+        source = primary["tile"]["source"]
+        return (primary.get("lane") not in ("pick", "near") or source.get("dirty") or source.get("captioned")
+                or (source["provider"], source["id"]) in self.host_sources)
+
+    def read_text(self, job_id, shot, choice, path):
+        """Words burned into a downloaded window (local OCR, free): contact details reject it (and every other
+        window of that video); captions and titles are cropped away or blurred; text across the middle or
+        scrolling text makes it dirty, so a cleaner clip is preferred."""
+        source = choice["tile"]["source"]
+        if source["provider"] != "bilibili" or not screen_text.installed():
+            return
+        try:
+            with throttle.slot("frames", self.check):
+                frames = screen_text.frames_of(path, float(shot["duration"]))
+                lines = [screen_text.read(frame) for frame in frames]
+        except media.Cancelled:
+            raise
+        except Exception as exc:   # reading is a safeguard: the visual check still runs
+            self.notes.append(f"文字识别失败 {source['id']}: {type(exc).__name__}")
+            return
+        clean = self.clean.get(job_id) or {}
+        found = screen_text.classify(lines, clean.get("content") or (0.0, 0.0, 1.0, 1.0))
+        kinds = {m["kind"] for m in found["marks"]}
+        with self.lock:
+            self.text_found["caption"] += "caption" in kinds
+            self.text_found["center"] += "center" in kinds and not found["contact"]
+        if found["contact"]:
+            with self.lock:
+                self.text_found["contact"] += 1
+                if not source.get("contact"):
+                    self.text_found["sources_contact"] += 1
+            source["contact"] = True
+            raise ValueError("画面里有联系方式或广告文字：" + "、".join(found["contact"])[:40])
+        if not found["marks"]:
+            return
+        if clean.get("crop"):
+            clean = express_clean.recrop(clean, found["marks"], self.out_aspect())
+            with self.lock:
+                self.clean[job_id] = clean
+        elif kinds - {"logo"}:
+            with self.lock:
+                self.soft.setdefault(job_id, set()).add("wm")
 
     def flags(self, job_id) -> set:
         clean = self.clean.get(job_id) or {}
@@ -1158,7 +1277,8 @@ class Matcher:
                                "neighbor": "快速通道：使用相邻镜头同组的相关画面补位",
                                "near": "快速通道：使用已选画面相邻片段补位",
                                "repeat": "快速通道：素材不足，复用已通过抽检的相关画面",
-                               "card": "快速通道：没有可用实拍素材，使用文字卡片"}.get(choice["lane"], "快速通道"),
+                               "reuse": "快速通道：没有新的可用画面，借用附近镜头已通过检查的画面",
+                               "card": "快速通道：没有可用实拍素材，使用模糊背景卡片"}.get(choice["lane"], "快速通道"),
                     "visual_quality": {"representation": "live_action" if choice["lane"] != "card" else "illustration"},
                     "identity_evidence": identity,
                     "express": {"version": VERSION, "lane": choice["lane"], "rank": choice["rank"],
@@ -1226,6 +1346,7 @@ class Matcher:
         def run_pick(group):
             group_tiles = []
             rows = chosen.get(group["id"], [])
+            rows = [r for r in rows if not r.get("contact")]   # 加微信 / phone numbers on the picture: never
             clean_rows = [r for r in rows if not r.get("dirty") and tiles.get((r["provider"], r["id"]))]
             if len(clean_rows) >= 2:
                 rows = clean_rows   # watermarked-across-the-picture sources only when little else exists
@@ -1409,7 +1530,7 @@ class Matcher:
             if not pending:
                 break
             began = time.monotonic()
-            self.progress(50 + round_no * 12, f"第 {round_no+1} 轮：下载并抽检 {len(pending)} 镜（每镜两个候选）")
+            self.progress(50 + round_no * 12, f"第 {round_no+1} 轮：下载并抽检 {len(pending)} 镜")
             # A shot whose clip is still downloading waits for it (a slow link gains nothing from more
             # parallel downloads), except in the last round.
             busy = {sid for _, sid, _ in carried}
@@ -1417,7 +1538,9 @@ class Matcher:
             primary = self.allocate(options, reserved, usage, fresh, exclude=tried)
             for sid, choice in primary.items():
                 tried[sid].add(key_of(choice))
-            backup = self.allocate(options, reserved, usage, fresh, exclude=tried)
+            videos = self.share()
+            backup = self.allocate(options, reserved, usage,
+                                   [s for s in fresh if self.wants_backup(s, primary.get(s["id"]), videos)], exclude=tried)
             for sid, choice in backup.items():
                 tried[sid].add(key_of(choice))
             # Job ids must be unique across rounds: per-job analysis and QA results are keyed by them.
@@ -1548,6 +1671,17 @@ class Matcher:
                 files[sid] = path
         cards = [s for s in self.shots if s["id"] not in final]
         footage = sorted((self.position[sid], path) for sid, path in files.items() if sid in self.position)
+        reused = 0
+        for shot in list(cards):
+            # A real clip already accepted a few lines away beats a blurred card: borrow it as it is.
+            donor = self.borrow(shot, final, files)
+            if donor:
+                final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
+                files[shot["id"]] = files[donor]
+                cards.remove(shot)
+                reused += 1
+        if reused:
+            self.notes.append(f"{reused} 镜没有新的可用画面，借用了附近镜头已通过检查的画面")
         for shot in cards:
             # Background: a frame of the nearest accepted clip (blurred), so the card belongs to the video.
             near = min(footage, key=lambda item: abs(item[0] - self.position[shot["id"]]), default=None)
@@ -1563,7 +1697,7 @@ class Matcher:
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "repeat",
-                                         "card")},
+                                         "reuse", "card")},
                   "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
                   "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),
                             "wm": sum(1 for c in final.values() if "wm" in self.flags(c.get("job"))),
@@ -1580,7 +1714,7 @@ class Matcher:
                                                (self.clean.get(c.get("job")) or {}).get("residual", [])],
                                   "flags": sorted(self.flags(c.get("job")))} for sid, c in final.items()},
                   "bilibili_logged_in": self.bili.logged_in, "notes": self.notes[:40],
-                  "clip_encoders": dict(self.encoders),
+                  "clip_encoders": dict(self.encoders), "text": dict(self.text_found),
                   "fetch_seconds": {"count": len(self.fetch_seconds),
                                     "max": max([x[1] for x in self.fetch_seconds] or [0]),
                                     "mean": round(sum(x[1] for x in self.fetch_seconds) / max(1, len(self.fetch_seconds)), 2)}}

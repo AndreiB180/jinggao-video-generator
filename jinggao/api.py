@@ -293,6 +293,29 @@ def create_app() -> FastAPI:
             result.append({"project_id": p["id"], "title": p["title"], "job_id": job["id"]})
         return {"batch": batch, "projects": result}
 
+    @app.post("/api/batch/audio", status_code=202)
+    def batch_audio(file: UploadFile = File(...), batch: str = Form(""), aspect: str = Form("16:9"),
+                    resolution: str = Form("1080p"), burn_subtitles: str = Form("1"),
+                    media_policy: str = Form("video_preferred")):
+        """音频批量成片: one finished narration (audio, or a video whose sound is the narration) per call; the
+        page sends a folder's files one after another with the batch id of the first answer. Each becomes its
+        own video: the words are recognised locally, then shots, footage and subtitles follow the recording."""
+        if not config.read()["model_api_key"]:
+            raise ValueError("请先在服务与设置中填写模型 API Key，再启动批量制作")
+        if aspect not in ("16:9", "9:16") or resolution not in ("720p", "1080p") or \
+                media_policy not in ("video_preferred", "video_only", "mixed") or len(batch) > 40:
+            raise ValueError("批量设置无效")
+        name = re.sub(r"\.[^.]+$", "", __import__("pathlib").Path(file.filename or "").name).strip()[:100] or "音频成片"
+        project = store.new_project(name, "", aspect, media_policy=media_policy, burn_subtitles=burn_subtitles != "0")
+        try:
+            upload(project["id"], file, "source_audio", "")
+        except Exception:
+            store.discard_project(project["id"])
+            raise
+        batch = batch or store.uid()[:12]
+        job = store.enqueue(project["id"], "produce", {"resolution": resolution, "mode": "model", "batch": batch})
+        return {"batch": batch, "project_id": project["id"], "title": name, "job_id": job["id"]}
+
     @app.post("/api/queue/cancel")
     def cancel_queue(body: QueueAction):
         return store.cancel_all(body.batch)

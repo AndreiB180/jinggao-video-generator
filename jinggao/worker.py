@@ -24,16 +24,24 @@ def ensure_narration_alignment(pid, check=lambda: None, progress=lambda *_: None
     if not project.get("full_audio"):
         return project
     progress(0, "正在用本地语音时间戳对齐镜头，复用已有字幕缓存")
-    for _ in range(4):
+    for attempt in range(8):
         try:
             proposal = media.prepare_narration_alignment(project, check, progress)
-            break
         except captions.ShotLengthOutOfRange as exc:
             # Fast voices (Baidu reads ~5 characters a second) can make a short line last under 1 s.
             # In express projects such a shot joins its neighbour; the narration audio is unchanged.
             if exc.long or not exc.short or not curation.express_project(project):
                 raise
             project = store.mutate(pid, lambda p: express_plan.merge_short(p, exc.short), internal=True)
+            continue
+        # Express shots that the real voice makes shorter than about two seconds flash past: join them to a
+        # neighbour, but only before footage is chosen (re-exports of finished projects keep their cut).
+        flashing = [i for i, d in enumerate((proposal.get("timing") or {}).get("durations") or []) if d < express_plan.MIN_SECONDS]
+        if (flashing and attempt < 7 and len(project["shots"]) > 1 and curation.express_project(project)
+                and not any(s.get("selected_asset") for s in project["shots"])):
+            project = store.mutate(pid, lambda p: express_plan.merge_short(p, flashing), internal=True)
+            continue
+        break
     else:
         raise ValueError("真实语音对应的镜头不足 1 秒，自动合并后仍未对齐，请调整分镜；已保留音频")
     check()

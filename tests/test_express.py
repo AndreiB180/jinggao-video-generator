@@ -344,7 +344,8 @@ def test_shots_hold_one_subtitle_line_each():
     texts = [s["narration"] for s in shots]
     assert "".join(texts) == script.replace("\n", "")
     assert all(subtitle_style.width(t) <= 20 for t in texts)
-    assert texts[1:3] == ["这场胜利不能掩盖长时间", "脱离高强度赛事留下的隐患。"]
+    # A sentence of about two seconds or less does not flash past alone: it joins the next piece of its line.
+    assert texts[:2] == ["第二局只拿到2分。这场胜利不能掩盖长时间", "脱离高强度赛事留下的隐患。"]
     assert not any(t in "。，、" for t in texts)   # no shot is a lone punctuation mark
     assert subtitle_style.line_chars_for("16:9", {"subtitle_size": "84"}) == 20
     assert subtitle_style.line_chars_for("9:16", {"subtitle_size": "84"}) < 20

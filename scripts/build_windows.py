@@ -210,6 +210,24 @@ def bundle_captions(source, model_directory):
     return copied
 
 
+def bundle_ocr(source, model_directory):
+    """The two public text-reading models (PP-OCRv6 small, Apache-2.0), hash-pinned in jinggao/screen_text.py.
+    Without them the app would not find uploaders' contact text and burned-in subtitles, so they are required."""
+    tree = ast.parse((source / "jinggao/screen_text.py").read_text())
+    files = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "FILES" for t in n.targets))
+    copied = {}
+    for name, expected in files.items():
+        if not (model_directory / name).is_file() or digest(model_directory / name) != expected:
+            raise ValueError("Text-reading model missing or changed (run scripts/setup_captions.py): " + name)
+        rel = "data/models/ocr/" + name
+        dst = OUTPUT / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(model_directory / name, dst)
+        copied[rel] = expected
+    return copied
+
+
 def check_private_files(files, public_weights):
     forbidden = {"settings.json", "state.db", ".env", "projects.db", "jinggao.sqlite3",
                  "model-costs.sqlite3", "Cookies", "Login Data"}
@@ -244,6 +262,7 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
         if model_directory:
             # Subtitle alignment works offline from the first start (no model download on the customer's PC).
             model_manifest = bundle_captions(ROOT, model_directory)
+        model_manifest.update(bundle_ocr(ROOT, ROOT / "data" / "models" / "ocr"))
     defaults = OUTPUT / "defaults.json"
     defaults.unlink(missing_ok=True)
     if bundle_pixabay:

@@ -4,8 +4,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from jinggao import screen_text  # noqa: E402
 from jinggao.local_asr import install_model, model_dir  # noqa: E402
 
 if __name__ == "__main__":
     install_model()
     print(f"本地字幕模型已安装并校验：{model_dir()}；不需要 API Key，不上传音轨。")
+    screen_text.install_model()
+    print(f"画面文字识别模型已安装并校验：{screen_text.model_dir()}；本地运行，不上传画面。")
