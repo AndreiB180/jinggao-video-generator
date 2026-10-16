@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 from copy import deepcopy
 import time
+import math
 import multiprocessing
 import os
 import re
@@ -428,6 +429,14 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
                   shot_ids=retry_shots, replace=True, shared_pool=True)
             project = store.mutate(pid, curation.approve_verified, internal=True)
         pending = [i+1 for i, s in enumerate(project["shots"]) if not s.get("selected_asset") or not s.get("approved")]
+        report, note = curation.composition(project), ""
+        if (curation.express_project(project) and not pending and not report["meets_target"]
+                and report["video_ratio"] >= 0.5):
+            # A batch video is better delivered with a few neutral cards than stopped for review: lower this
+            # project's target to what was found and say so on its page.
+            achieved = math.floor(report["video_ratio"] * 100) / 100
+            project = store.mutate(pid, lambda p: p.update(min_video_ratio=achieved), internal=True)
+            note = f"实拍视频占 {report['video_ratio']:.0%}，低于原定 {report['target_video_ratio']:.0%}，已照常导出"
         try:
             curation.validate_export(project)
         except ValueError as exc:
@@ -439,7 +448,7 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             store.job_update(jid, status="needs_review", progress=75, message="配音与本轮匹配已完成，补齐后可继续导出", error=reason)
             return
         stage("render", "4/4 合成画面与字幕", 75, 99)
-        save_workflow(state="completed")
+        save_workflow(state="completed", **({"note": note} if note else {}))
     elif kind == "library":
         from . import library_collect
         report = library_collect.run(pid, options, check, progress)
@@ -963,10 +972,19 @@ def run_once(stop=None, lane="main") -> bool:
     return True
 
 
+_memory_cap = []
+
+
+def _memory_videos() -> int:
+    if not _memory_cap:
+        _memory_cap.append(throttle.memory_videos())
+    return _memory_cap[0]
+
+
 def video_workers() -> int:
     """How many videos are made at the same time (setting video_workers)."""
     try:
-        return max(1, min(throttle.MAX_VIDEOS, int(config.read().get("video_workers") or 1)))
+        return max(1, min(throttle.MAX_VIDEOS, _memory_videos(), int(config.read().get("video_workers") or 1)))
     except (TypeError, ValueError):
         return 1
 

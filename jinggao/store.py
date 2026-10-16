@@ -53,6 +53,10 @@ def init() -> None:
             cancel INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS jobs_project ON jobs(project_id, created);
+        CREATE TABLE IF NOT EXISTS used_footage (
+            source TEXT NOT NULL, project_id TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY (source, project_id)
+        );
+        CREATE INDEX IF NOT EXISTS used_footage_at ON used_footage(at);
         """)
 
 
@@ -215,3 +219,19 @@ def recover(lane: str = "main") -> None:
     with connection() as con:
         con.execute("UPDATE jobs SET status='interrupted',message='程序上次退出时任务被中断，可手动重试',"
                     f"updated=? WHERE status='running' AND {_lane(lane)}", (time.time(),))
+
+
+def footage_used_elsewhere(project_id: str, days: float = 7) -> dict:
+    """{"provider:id": number of other videos that used it lately}: a batch on similar topics should not show
+    the same clips in every video."""
+    with connection() as con:
+        rows = con.execute("SELECT source, COUNT(*) AS n FROM used_footage WHERE project_id<>? AND at>? GROUP BY source",
+                           (project_id, time.time() - days * 86400)).fetchall()
+    return {row["source"]: row["n"] for row in rows}
+
+
+def mark_footage_used(project_id: str, sources) -> None:
+    now = time.time()
+    with connection() as con:
+        con.execute("DELETE FROM used_footage WHERE project_id=?", (project_id,))
+        con.executemany("INSERT OR REPLACE INTO used_footage VALUES (?,?,?)", [(s, project_id, now) for s in set(sources)])

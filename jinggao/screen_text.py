@@ -78,6 +78,8 @@ def _sessions(directory: str):
     # Many clips are read at once by different threads and videos: each run stays on two threads.
     options.intra_op_num_threads = 2
     options.inter_op_num_threads = 1
+    options.enable_cpu_mem_arena = False      # keeps each worker near 300 MB instead of growing with every frame
+    options.enable_mem_pattern = False
     det = ort.InferenceSession(str(Path(directory) / "PP-OCRv6_det_small.onnx"), options,
                                providers=["CPUExecutionProvider"])
     rec = ort.InferenceSession(str(Path(directory) / "PP-OCRv6_rec_small.onnx"), options,
@@ -196,11 +198,13 @@ def recognise(image: Image.Image, boxes) -> list[tuple[str, float]]:
 
 
 def read(image: Image.Image) -> list[dict]:
-    """Lines of text in a picture: [{"text", "score", "box": [x0, y0, x1, y1] as fractions}]."""
+    """Lines of text in a picture: [{"text", "score", "box": [x0, y0, x1, y1] as fractions}]. Callers hold the
+    shared "frames" slot, which bounds how many run at once across every video."""
     boxes = detect(image)
+    recognised = recognise(image, boxes)
     w, h = image.size
     lines = []
-    for box, (text, score) in zip(boxes, recognise(image, boxes), strict=True):
+    for box, (text, score) in zip(boxes, recognised, strict=True):
         text = text.strip()
         if text and score >= MIN_SCORE:
             lines.append({"text": text, "score": round(score, 3),

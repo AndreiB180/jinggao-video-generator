@@ -26,6 +26,7 @@ function RunFacts({project,job}:{project:Project;job?:Job}){
  const cleaned=text?[text.sources_contact?`避开 ${text.sources_contact} 个带联系方式、引流文字的视频`:'',
   text.caption?`裁掉或模糊原视频字幕 ${text.caption} 处`:''].filter(Boolean):[];
  if(cleaned.length)parts.push('去字：'+cleaned.join('，'));
+ if(flow?.note)parts.push(flow.note);
  if(!steps.length&&!parts.length)return null;
  return <p className="run-facts"><Gauge size={13}/><span>{total?`总用时 ${span(total)}`:''}{total&&steps.length?'：':''}{steps.join(' · ')}{parts.length?<><br/>{parts.join('；')}</>:null}</span></p>;
 }

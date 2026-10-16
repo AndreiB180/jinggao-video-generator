@@ -112,7 +112,8 @@ def inspect_asset(project_id: str, path: Path, title: str, **metadata) -> dict:
 def hardware() -> dict:
     """FFmpeg and the NVIDIA card as checked at start (gpu.detect), plus what this computer offers for CPU work."""
     result = {"ffmpeg": False, "system": sys.platform, "cores": os.cpu_count() or 0,
-              "cpu_slots": throttle.LIMITS["cpu"], "gpu_slots": throttle.LIMITS["gpu"]}
+              "cpu_slots": throttle.LIMITS["cpu"], "gpu_slots": throttle.LIMITS["gpu"],
+              "memory_gb": round(throttle.memory_gb(), 1), "memory_videos": throttle.memory_videos()}
     try:
         paths.binary("ffmpeg")
         paths.binary("ffprobe")

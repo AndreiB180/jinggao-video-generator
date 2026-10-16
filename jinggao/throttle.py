@@ -20,6 +20,45 @@ def cpu_slots(cores: int | None = None) -> int:
     return max(2, (cores - 2) // 2)
 
 
+def memory_gb() -> float:
+    """Installed memory (0 when unknown)."""
+    try:
+        import os
+        import sys
+        if sys.platform == "win32":
+            import ctypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
+                            ("free", ctypes.c_ulonglong), ("page_total", ctypes.c_ulonglong),
+                            ("page_free", ctypes.c_ulonglong), ("virtual_total", ctypes.c_ulonglong),
+                            ("virtual_free", ctypes.c_ulonglong), ("extended", ctypes.c_ulonglong)]
+            status = Status()
+            status.length = ctypes.sizeof(Status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return status.total / 2**30
+            return 0.0
+        if sys.platform == "darwin":
+            import subprocess
+            return int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5).stdout) / 2**30
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+    except Exception:
+        return 0.0
+
+
+# Each video being made needs about this much memory at its peak (text reading, speech alignment, frames);
+# the rest is left for Windows, the browser and whatever else the customer runs.
+VIDEO_GB, RESERVED_GB = 1.5, 7.0
+
+
+def memory_videos(total: float | None = None) -> int:
+    """How many videos this computer's memory carries at once (16 GB: 6; 8 GB: 1)."""
+    total = memory_gb() if total is None else total
+    if total <= 0:
+        return 6
+    return max(1, int((total - RESERVED_GB) / VIDEO_GB))
+
+
 LIMITS = {
     "bili_api": 6,         # api.bilibili.com: search, previews (videoshot), play addresses
     "bili_download": 32,   # B站 CDN clip downloads (network only; the re-encode takes a gpu or cpu slot)

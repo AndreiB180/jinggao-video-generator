@@ -76,6 +76,7 @@ def _runtime(directory: str):
     options.intra_op_num_threads = 4
     options.inter_op_num_threads = 1
     options.log_severity_level = 3
+    options.enable_cpu_mem_arena = False
     session = ort.InferenceSession(str(root / "model_quant.onnx"), sess_options=options,
                                    providers=["CPUExecutionProvider"])
     if len(session.get_outputs()) != 4:
@@ -167,4 +168,9 @@ def transcribe(wav_path, check=lambda: None, progress=lambda *_: None):
             progress((index + 1) / len(chunks), "本地识别配音时间戳 · 不调用付费模型")
         return words
     finally:
+        # The model takes about 600 MB and each video needs it once (alignment): with several videos made
+        # at once, keeping it in every worker filled 16 GB computers. Load it again next time instead.
+        _runtime.cache_clear()
+        import gc
+        gc.collect()
         _lock.release()

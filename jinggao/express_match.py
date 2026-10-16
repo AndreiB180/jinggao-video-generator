@@ -19,6 +19,7 @@ import re
 import subprocess
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
@@ -27,10 +28,10 @@ from . import (config, curation, execution, express_clean, express_sources as es
                screen_text, store, throttle)
 
 VERSION = 1
-BILI_PER_QUERY = 4
+BILI_PER_QUERY = 6
 PERSON_PER_QUERY = 5   # named people have little real footage: look a little wider before falling back
-PIXA_PER_QUERY = 2
-LOCAL_PER_QUERY = 3     # videos from the local footage index (footage_index) per query, ahead of live results
+PIXA_PER_QUERY = 6     # licensed stock: clean, no subtitles or contact text; strong for generic and abstract lines
+LOCAL_PER_QUERY = 5     # videos from the local footage index (footage_index) per query, ahead of live results
 TILES_PER_BILI = 8
 PERSON_TILES = 10
 QA_W, QA_H = 320, 180
@@ -42,8 +43,10 @@ WINDOW_GAP = 1.5
 # one source closer than SCENE_SECONDS usually show the same scene; tiles this close in dHash bits are the
 # same picture (the same footage re-uploaded under another id repeats just as visibly).
 SOURCE_SHARE = 0.04
+HARD_SHARE = 0.05      # ...and never more than this share (one long stock take filled a third of a film)
 SCENE_SECONDS = 8.0
-TWIN_BITS = 4
+TWIN_BITS = 8
+SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in grey)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
 NOISE_WORDS = re.compile(
@@ -185,6 +188,10 @@ class Matcher:
         self.timing = {}
         self.fetch_seconds = []
         self.encoders = {}    # how candidate clips were encoded: full / nvenc / cpu -> count
+        try:
+            self.elsewhere = store.footage_used_elsewhere(self.pid)
+        except Exception:
+            self.elsewhere = {}
         self.text_found = {"contact": 0, "caption": 0, "center": 0, "sources_contact": 0, "sources_captioned": 0}
         self.qa_unchecked = set()
         self.job_choice = {}
@@ -195,7 +202,7 @@ class Matcher:
         self.abandon = threading.Event()
         self.soft = {}        # job id -> {"wm", "still"} flags from the visual check
         self.profiles = {}
-        self.sheets = {}
+        self.sheets = OrderedDict()   # (source, sheet) -> grey preview cells, most recently used last
         self.timeline = project["shots"]
         self.shots_by_id_all = {s["id"]: s for s in project["shots"]}
         self.position = {s["id"]: i for i, s in enumerate(self.timeline)}
@@ -414,7 +421,12 @@ class Matcher:
             hashes.append(h)
             tiles.append({"source": row, "t": p["t"], "image": image, "hash": h})
         if tiles and row["provider"] == "bilibili":
-            self.screen_source(row, [t["image"] for t in tiles])
+            # Kept full size for reading the source's text, which happens only if the picker chooses it.
+            row["_screen"] = [t["image"] for t in tiles][:self.SCREEN_FRAMES]
+        for tile in tiles:
+            # Contact sheets paste tiles at TILE size: keep only that (a full 480x270 frame per tile, ten tiles
+            # for each of ~90 sources, was most of a worker's memory with several videos at once).
+            tile["image"] = tile["image"].resize((TILE_W, TILE_H))
         if express_clean.available():
             try:
                 frames = self.sprite_frames(row, picked[0]["t"] if picked else 0)
@@ -429,7 +441,7 @@ class Matcher:
                 self.notes.append(f"水印预检失败 {row['id']}: {type(exc).__name__}")
         return tiles
 
-    SCREEN_FRAMES = 6
+    SCREEN_FRAMES = 3
 
     def screen_source(self, row, images):
         """Read a few preview frames of a whole video before any download: an uploader's contact overlay
@@ -614,6 +626,26 @@ class Matcher:
                 picks[ids[key]] = [labels[v] for v in dict.fromkeys(values)][:6]
         return picks, {"ctx": [labels[v] for v in dict.fromkeys(ctx)]}
 
+    def stock_options(self, shots, groups, results, final) -> dict:
+        """Pixabay clips from each open line's own searches that were not offered yet (relevant by their tags)."""
+        group_of = {sid: g for g in groups for sid in g["shots"]}
+        shown = {c["tile"]["source"]["id"] for c in final.values() if c["tile"]["source"].get("provider") == "pixabay"}
+        options = {}
+        for shot in shots:
+            group = group_of.get(shot["id"])
+            if not group:
+                continue
+            rows = []
+            for q in group.get("en", [])[:3]:
+                for row in results.get(("pixa", q), []):
+                    if (row["id"] not in shown and row not in rows and self.stock_overlap(row, q) > 0
+                            and self.oriented(row) and float(row.get("duration") or 0) >= float(shot["duration"]) + MARGIN):
+                        rows.append(row)
+            if rows:
+                options[shot["id"]] = [({"source": row, "t": float(row.get("duration") or 0) / 2, "hash": None}, "stock")
+                                       for row in rows[:12]]
+        return options
+
     def borrow(self, shot, final, files):
         """The nearest accepted clip (never the next one: a clip twice in a row looks like a glitch) that is long
         enough and shows no other named person; anywhere in the video, as one about the same subject."""
@@ -763,6 +795,7 @@ class Matcher:
         assigned_keys = dict(self.placed)
         looks = dict(self.looks)
         cap = max(3, math.ceil(len(self.timeline) * SOURCE_SHARE))
+        hard_cap = max(3, math.ceil(len(self.timeline) * HARD_SHARE))
         order = sorted(shots, key=lambda s: (len(options.get(s["id"], [])), self.position[s["id"]]))
         for shot in order:
             sid = shot["id"]
@@ -780,10 +813,23 @@ class Matcher:
                 used = usage.get(key, 0)
                 near = min((abs(start - a) for a, _ in reserved.get(key, [])), default=1e9)
                 h = tile.get("hash")
-                twin = h is not None and any(pos != index and bin(h ^ other).count("1") <= TWIN_BITS
-                                             for pos, other in looks.items())
+                close = [pos for pos, other in looks.items()
+                         if h is not None and pos != index and bin(h ^ other).count("1") <= TWIN_BITS]
+                # The same picture further away is a repeat; right next to it from the same video it is the
+                # scene continuing, from another video a re-upload of it.
+                twin = any(abs(pos - index) > 1 for pos in close)
+                reupload = any(abs(pos - index) == 1 and assigned_keys.get(pos) != key for pos in close)
+                if lane not in ("person", "person_near") and not (shot.get("persons") and not self.unfilmed_shot(shot)):
+                    # Hard limits (scores alone let one long stock take fill ten shots in a row): a source at
+                    # most HARD_SHARE of the film, never three shots running, never the same picture again.
+                    run = [assigned_keys.get(i) for i in (index - 2, index - 1, index + 1, index + 2)]
+                    if (used >= hard_cap or twin or (run[1] == key and (run[0] == key or run[2] == key))
+                            or (run[2] == key and run[3] == key)):
+                        continue
                 cost = (rank + 2.0 * used + 6.0 * max(0, used + 1 - cap) + 3.0 * adjacent
-                        + (2.0 if near < SCENE_SECONDS else 0) + (4.0 if twin else 0)
+                        + (4.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
+                        # Footage other recent videos already show (a batch on one topic would repeat itself).
+                        + min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0))
                         + {"pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
                            "near": 6}.get(lane, 6)
                         # A line about a named person should show that person, not generic topic footage.
@@ -969,10 +1015,12 @@ class Matcher:
             key = (source["id"], sheet)
             with self.lock:
                 cached = self.sheets.get(key)
+                if cached is not None:
+                    self.sheets.move_to_end(key)
             if cached is None:
                 cached = []
                 with Image.open(self.bili.sprite(root, meta, sheet)) as im:
-                    im = im.convert("RGB")
+                    im = im.convert("L")      # every use is greyscale; a third of the memory of RGB
                     for p in previews:
                         if p["sheet"] != sheet:
                             continue
@@ -981,6 +1029,8 @@ class Matcher:
                             cached.append((p["t"], im.crop((x, y, x + meta["w"], y + meta["h"]))))
                 with self.lock:
                     self.sheets[key] = cached
+                    while len(self.sheets) > SPRITE_SHEETS_KEPT:
+                        self.sheets.popitem(last=False)
             frames += cached
         return frames
 
@@ -1216,6 +1266,11 @@ class Matcher:
 
     # ------------------------------------------------------------------- save
     def save(self, final, files):
+        try:
+            store.mark_footage_used(self.pid, [f"{c['tile']['source']['provider']}:{c['tile']['source']['id']}"
+                                               for c in final.values() if c["tile"]["source"].get("provider") != "card"])
+        except Exception as exc:
+            self.notes.append(f"记录已用素材失败: {type(exc).__name__}")
         try:   # library videos used in a film rank a little lower next time (less repetition across videos)
             from . import footage_index
             footage_index.mark_used({f"{c['tile']['source']['provider']}:{c['tile']['source']['id']}"
@@ -1278,6 +1333,7 @@ class Matcher:
                                "near": "快速通道：使用已选画面相邻片段补位",
                                "repeat": "快速通道：素材不足，复用已通过抽检的相关画面",
                                "reuse": "快速通道：没有新的可用画面，借用附近镜头已通过检查的画面",
+                               "stock": "快速通道：用正版图库空镜补位",
                                "card": "快速通道：没有可用实拍素材，使用模糊背景卡片"}.get(choice["lane"], "快速通道"),
                     "visual_quality": {"representation": "live_action" if choice["lane"] != "card" else "illustration"},
                     "identity_evidence": identity,
@@ -1383,6 +1439,25 @@ class Matcher:
                 for sid in group["shots"]:
                     ctx_tiles[sid] = extra.get("ctx", [])
         stamp("pick", began)
+        began = time.monotonic()
+        chosen_rows = {}
+        for group_tiles in list(picks.values()) + [topic_tiles] + list(ctx_tiles.values()):
+            for tile in group_tiles or []:
+                row = tile["source"]
+                if row.get("provider") == "bilibili" and row.get("_screen"):
+                    chosen_rows[row["id"]] = row
+        def screen(row):
+            self.check()
+            self.screen_source(row, row.get("_screen") or [])
+        with execution.ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(screen, chosen_rows.values()))
+        for rows in chosen.values():
+            for row in rows:
+                row.pop("_screen", None)
+        stamp("text", began)
+        for rows in tiles.values():      # pictures are only needed for the contact sheets
+            for tile in rows:
+                tile["image"] = None
         # Build ranked options per shot: own picks, then context/topic/neighbour fills.
         group_of = {sid: g for g in groups for sid in g["shots"]}
         options = {}
@@ -1568,6 +1643,24 @@ class Matcher:
                 files[sid] = path
                 self.place(sid, choice, key_of(choice)[0])
         pending = [s for s in pending if s["id"] not in final]
+        stock = self.stock_options(pending, groups, results, final) if pending and self.pixa else {}
+        if stock:
+            # Licensed stock further down the same searches (20 results each, only the best few were offered):
+            # clean footage for the lines still open, before reusing anything already in the film.
+            began = time.monotonic()
+            self.progress(86, f"用正版空镜补 {len(stock)} 镜")
+            picked = self.allocate(stock, reserved, usage, [s for s in pending if s["id"] in stock], exclude=tried)
+            for sid, choice in picked.items():
+                tried[sid].add(key_of(choice))
+            jobs = [(f"{sid}#s", sid, c) for sid, c in picked.items()]
+            self.job_choice.update({job_id: c for job_id, _, c in jobs})
+            got, failed, bad, running = self.download(jobs, streams, qa=checking,
+                                                       deadline=time.monotonic() + (60 + 0.3 * len(jobs)) * self.share())
+            failures.update(failed)
+            qa_bad.update(bad)
+            carried = settle(carried + jobs, got, bad, running, last=True)
+            stamp("stock", began)
+            pending = [s for s in pending if s["id"] not in final]
         if pending:
             # Last resort without unchecked footage: reuse a window that already passed QA,
             # preferring the same search group, then the nearest shot on the timeline.
@@ -1577,6 +1670,10 @@ class Matcher:
             carried = [job for job in carried if job[0] in {j[0] for j in self.inflight.values()}]
             group_of_id = {sid: g["id"] for g in groups for sid in g["shots"]}
             donors = sorted(final.items(), key=lambda item: self.position[item[0]])
+            hard_cap = max(3, math.ceil(len(self.timeline) * HARD_SHARE))
+            shots_from = {}
+            for choice in final.values():
+                shots_from[key_of(choice)[0]] = shots_from.get(key_of(choice)[0], 0) + 1
             jobs = []
             for shot in pending:
                 sid = shot["id"]
@@ -1588,6 +1685,8 @@ class Matcher:
                     if person and not (self.names_in_source(shot, donor["tile"]["source"])
                                        or donor["lane"] in ("ctx", "topic")):
                         continue
+                    if not person and shots_from.get(key_of(donor)[0], 0) >= 2 * hard_cap:
+                        continue    # that video already fills (twice) its share of the film: a card is next
                     if donor_id not in self.position:
                         continue
                     if FUNERAL.search(donor["tile"]["source"].get("title", "")) and not DEATH_LINE.search(shot["narration"]):
@@ -1617,6 +1716,7 @@ class Matcher:
                     jobs.append((f"{sid}#r", sid, donor | {"start": round(start, 2), "lane": "repeat",
                                                            "base_lane": donor.get("base_lane", donor["lane"]),
                                                            "repeat_of": donor_id}))
+                    shots_from[key_of(donor)[0]] = shots_from.get(key_of(donor)[0], 0) + 1
                     break
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
             got, failed, bad, running = self.download(jobs, streams, qa=checking,
@@ -1671,10 +1771,13 @@ class Matcher:
                 files[sid] = path
         cards = [s for s in self.shots if s["id"] not in final]
         footage = sorted((self.position[sid], path) for sid, path in files.items() if sid in self.position)
+        # Once or twice per film; more only where blurred cards would otherwise exceed 8% of the lines.
         reused = 0
+        may_reuse = max(max(1, len(self.timeline) // 40), len(cards) - int(0.08 * len(self.timeline)))
         for shot in list(cards):
-            # A real clip already accepted a few lines away beats a blurred card: borrow it as it is.
-            donor = self.borrow(shot, final, files)
+            # A real clip already accepted elsewhere beats a blurred card, but only once or twice per film:
+            # the same clip again and again is what makes a video look repetitive.
+            donor = self.borrow(shot, final, files) if reused < may_reuse else None
             if donor:
                 final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
                 files[shot["id"]] = files[donor]
@@ -1696,8 +1799,8 @@ class Matcher:
         report = {"selected": len(final), "unmatched": unmatched, "elapsed_seconds": round(time.monotonic() - self.started, 2),
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
-                            for lane in ("pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "repeat",
-                                         "reuse", "card")},
+                            for lane in ("pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock",
+                                         "repeat", "reuse", "card")},
                   "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
                   "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),
                             "wm": sum(1 for c in final.values() if "wm" in self.flags(c.get("job"))),
