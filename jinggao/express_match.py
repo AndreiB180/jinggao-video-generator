@@ -188,6 +188,7 @@ class Matcher:
         self.timing = {}
         self.fetch_seconds = []
         self.encoders = {}    # how candidate clips were encoded: full / nvenc / cpu -> count
+        self.model_seconds = {}   # task -> seconds spent in model calls (summed over parallel calls)
         try:
             self.elsewhere = store.footage_used_elsewhere(self.pid)
         except Exception:
@@ -233,6 +234,7 @@ class Matcher:
         last = None
         for attempt in range(attempts):
             self.check()
+            began = time.monotonic()
             try:
                 return planner.chat(system, content, vision=True, max_tokens=max_tokens, timeout=timeout, task=task)
             except ValueError as exc:
@@ -241,6 +243,9 @@ class Matcher:
                     raise
                 last = exc
                 time.sleep(1.5 * (attempt + 1))
+            finally:
+                with self.lock:
+                    self.model_seconds[task] = self.model_seconds.get(task, 0.0) + time.monotonic() - began
         raise last
 
     # ------------------------------------------------------------------ groups
@@ -1818,6 +1823,8 @@ class Matcher:
                                   "flags": sorted(self.flags(c.get("job")))} for sid, c in final.items()},
                   "bilibili_logged_in": self.bili.logged_in, "notes": self.notes[:40],
                   "clip_encoders": dict(self.encoders), "text": dict(self.text_found),
+                  "waited": {k: round(v, 1) for k, v in throttle.waited.items()},
+                  "model_seconds": {k: round(v, 1) for k, v in self.model_seconds.items()},
                   "fetch_seconds": {"count": len(self.fetch_seconds),
                                     "max": max([x[1] for x in self.fetch_seconds] or [0]),
                                     "mean": round(sum(x[1] for x in self.fetch_seconds) / max(1, len(self.fetch_seconds)), 2)}}

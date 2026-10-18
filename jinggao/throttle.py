@@ -14,9 +14,15 @@ import time
 from contextlib import contextmanager
 
 
-def cpu_slots(cores: int | None = None) -> int:
+def cores() -> int:
+    """Logical processors this process may use (respects an affinity limit; os.cpu_count() does not)."""
+    counter = getattr(os, "process_cpu_count", None)
+    return (counter() if counter else None) or os.cpu_count() or 4
+
+
+def cpu_slots(cores_: int | None = None) -> int:
     """CPU video encodes at once (2 threads each), leaving about two logical cores for everything else."""
-    cores = cores or os.cpu_count() or 4
+    cores = cores_ or globals()["cores"]()
     return max(2, (cores - 2) // 2)
 
 
@@ -57,6 +63,21 @@ def memory_videos(total: float | None = None) -> int:
     if total <= 0:
         return 6
     return max(1, int((total - RESERVED_GB) / VIDEO_GB))
+
+
+# A video being made keeps about this many logical processors busy (frame reading, text reading, watermark
+# analysis, subtitles); more videos than the processors carry only make every one of them slower.
+VIDEO_THREADS = 4
+
+
+def cpu_videos(total: int | None = None) -> int:
+    """How many videos this processor makes at once without slowing all of them (12 threads: 3, i5-13400 with 16: 4)."""
+    return max(1, (total or cores()) // VIDEO_THREADS)
+
+
+def max_videos() -> int:
+    """Videos at once on this computer: the smaller of what its processor and its memory carry."""
+    return max(1, min(MAX_VIDEOS, cpu_videos(), memory_videos()))
 
 
 LIMITS = {
@@ -103,12 +124,26 @@ def install(objects: dict | None) -> None:
         LIMITS.update(objects.get("sizes") or {})
 
 
+# Seconds this process spent waiting for each shared limit (one video per worker process): where a slow video
+# queued, shown in its report and the diagnostics text.
+waited: dict = {}
+_waited_lock = threading.Lock()
+
+
+def _note_wait(name: str, seconds: float) -> None:
+    if seconds > 0.05:
+        with _waited_lock:
+            waited[name] = waited.get(name, 0.0) + seconds
+
+
 @contextmanager
 def slot(name: str, check=None):
     gate = _slots[name]
+    began = time.monotonic()
     while not gate.acquire(timeout=.2):
         if check:
             check()
+    _note_wait(name, time.monotonic() - began)
     try:
         yield
     finally:
@@ -119,7 +154,8 @@ def slot(name: str, check=None):
 def either(check=None, wait_for_gpu: float | None = None):
     """A video encode on the card if a session frees up soon, else on the CPU; yields "gpu" or "cpu"."""
     gpu, cpu = _slots["gpu"], _slots["cpu"]
-    give_up = time.monotonic() + (GPU_WAIT if wait_for_gpu is None else wait_for_gpu)
+    began = time.monotonic()
+    give_up = began + (GPU_WAIT if wait_for_gpu is None else wait_for_gpu)
     while True:
         if gpu.acquire(timeout=.1):
             taken = "gpu"
@@ -129,6 +165,7 @@ def either(check=None, wait_for_gpu: float | None = None):
             break
         if check:
             check()
+    _note_wait("encode", time.monotonic() - began)
     try:
         yield taken
     finally:
@@ -137,6 +174,14 @@ def either(check=None, wait_for_gpu: float | None = None):
 
 def bili_wait(check=None) -> None:
     """Hold off while another video's request was just refused by B站."""
+    began = time.monotonic()
+    try:
+        _bili_wait(check)
+    finally:
+        _note_wait("bili_paused", time.monotonic() - began)
+
+
+def _bili_wait(check=None) -> None:
     while True:
         with _pause.get_lock():
             left = _pause.value - time.time()

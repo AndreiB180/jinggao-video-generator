@@ -255,3 +255,4 @@ img.film-layer{width:100%;height:100%;object-fit:contain}
 /* A 1080p monitor at 100% scaling shows this compact layout very small: enlarge everything there. */
 @media (min-width:1800px){body{zoom:1.15}}
 .batch-step>h3:first-child{margin-top:0!important}.batch-step>*:first-child{margin-top:0}
+.field-hint{display:block;margin-top:6px;color:#8fa0a8;font-size:11px;line-height:1.6}

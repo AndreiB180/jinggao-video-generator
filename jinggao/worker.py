@@ -934,10 +934,15 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
         store.job_update(jid, status="completed", progress=100, message=message)
 
 
+_current = {"job": None, "title": ""}
+
+
 def run_once(stop=None, lane="main") -> bool:
     job = store.claim(lane)
     if not job:
         return False
+    throttle.waited.clear()
+    _current.update(job=job["id"], kind=job["kind"])
     began, wall_began = time.monotonic(), time.time()
     power_info = {}
     try:
@@ -950,6 +955,7 @@ def run_once(stop=None, lane="main") -> bool:
     except Exception as exc:
         store.job_update(job["id"], status="failed", message="任务未完成，可重试", error=str(exc)[:2200])
     finally:
+        _current.update(job=None)
         ended = time.time()
         run = {"job_id": job["id"], "started_at": wall_began, "finished_at": ended,
                "elapsed_wall_seconds": round(ended-wall_began, 3),
@@ -977,8 +983,26 @@ _memory_cap = []
 
 def _memory_videos() -> int:
     if not _memory_cap:
-        _memory_cap.append(throttle.memory_videos())
+        _memory_cap.append(throttle.max_videos())
     return _memory_cap[0]
+
+
+def _report_waits(name: str) -> None:
+    """Every 10 s: what this worker's current video has queued for so far (shared limits, B站 pauses), for the
+    diagnostics text while a video is still being made."""
+    import json
+    target = paths.DATA / "diag" / f"{name}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            temporary = paths.temporary(target)
+            temporary.write_text(json.dumps({"job": _current.get("job"), "pid": os.getpid(), "updated": time.time(),
+                                             "waited": {k: round(v, 1) for k, v in dict(throttle.waited).items()}}),
+                                 "utf-8")
+            paths.publish(temporary, target)
+        except Exception:
+            pass
+        time.sleep(10)
 
 
 def video_workers() -> int:
@@ -997,6 +1021,7 @@ def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
     if parent is not None:
         # A worker process started by the launcher: its encodes must not make the computer sluggish.
         power.lower_priority()
+        threading.Thread(target=_report_waits, args=(f"{lane}-{slot}",), daemon=True).start()
         def watch_parent():
             while parent.is_alive():
                 time.sleep(.5)

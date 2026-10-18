@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from copy import deepcopy
 from urllib.parse import urlparse
 
@@ -70,15 +71,49 @@ def create_app() -> FastAPI:
                  f"CPU：{info.get('cores')} 核 · CPU 转码名额 {info.get('cpu_slots')}",
                  "设置：" + " ".join(f"{k}={cfg.get(k)}" for k in ("encoder", "video_workers", "render_workers",
                                                                  "match_workers", "tts_provider", "pipeline")), ""]
+        lines.insert(5, f"内存：{info.get('memory_gb')} GB · 这台电脑最多同时 {info.get('max_videos')} 条"
+                        f"（按 CPU {info.get('cpu_videos')}、按内存 {info.get('memory_videos')}）"
+                        f" · 读字用显卡 {'是' if info.get('ocr_gpu') else '否'}")
+        live = {}
+        for path in (paths.DATA / "diag").glob("*.json"):
+            try:
+                item = json.loads(path.read_text("utf-8"))
+                if item.get("job") and time.time() - item.get("updated", 0) < 60:
+                    live[item["job"]] = item
+            except (OSError, ValueError):
+                pass
+        with store.connection() as con:
+            jobs = con.execute("SELECT jobs.*, json_extract(projects.body, '$.title') AS title FROM jobs JOIN projects "
+                               "ON projects.id=jobs.project_id WHERE jobs.kind='produce' AND jobs.created>? "
+                               "ORDER BY jobs.created DESC LIMIT 40", (time.time() - 86400,)).fetchall()
+        now = time.time()
+        busy = [j for j in jobs if j["status"] in ("running", "queued")]
+        if busy:
+            lines.append(f"正在做 / 排队（{len(busy)}）：")
+            for j in busy:
+                waits = (live.get(j["id"]) or {}).get("waited") or {}
+                lines.append(f"  {str(j['title'])[:24]} · {j['status']} {j['progress']:.0f}% · 已 {now - j['created']:.0f} 秒 · "
+                             f"{str(j['message'])[:60]}" + (f" · 排队 {waits}" if waits else ""))
+        failed = [j for j in jobs if j["status"] in ("failed", "needs_review", "interrupted")][:6]
+        if failed:
+            lines.append("没做完：")
+            for j in failed:
+                lines.append(f"  {str(j['title'])[:24]} · {j['status']} · {str(j['message'])[:40]} · {str(j['error'])[:120]}")
+        lines.append("")
         rows = [p for p in store.list_projects() if p.get("video")][:12]
         for row in rows:
             p = store.get_project(row["id"])
             video = p["exports"][0]
             wall = (p.get("workflow_info") or {}).get("stage_wall_seconds") or {}
-            clips = (p.get("express_report") or {}).get("clip_encoders") or {}
+            report = p.get("express_report") or {}
+            clips = report.get("clip_encoders") or {}
+            timing = report.get("timing") or {}
             lines.append(f"{p['title'][:30]} · {len(p['shots'])} 镜 · 成片 {video.get('duration', 0):.0f} 秒 · "
-                         + " ".join(f"{k}={v:.0f}s" for k, v in wall.items())
+                         + " ".join(f"{k}={v:.0f}s" for k, v in wall.items() if isinstance(v, (int, float)))
                          + f" · 片段转码 {clips or '-'} · 合成 {video.get('encoders') or video.get('encoder')}")
+            lines.append("    匹配内部 " + " ".join(f"{k}={v:.0f}s" for k, v in timing.items() if isinstance(v, (int, float)))
+                         + f" · 排队 {report.get('waited') or '-'} · 模型 {report.get('model_seconds') or '-'}"
+                         + f" · 下载 {report.get('fetch_seconds') or '-'}")
         return PlainTextResponse("\n".join(lines))
 
     @app.post("/api/system/gpu-check")

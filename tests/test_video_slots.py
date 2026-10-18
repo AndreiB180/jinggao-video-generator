@@ -67,9 +67,21 @@ def test_batch_of_a_hundred_with_workers_cancel_and_retry(tmp_path, monkeypatch)
 
 
 def test_video_workers_setting_is_clamped(monkeypatch):
+    monkeypatch.setattr(worker, "_memory_cap", [throttle.MAX_VIDEOS])     # a big computer
     for value, want in (("1", 1), ("3", 3), ("9", throttle.MAX_VIDEOS), ("", 1), ("x", 1)):
         monkeypatch.setattr(config, "read", lambda value=value: {"video_workers": value})
         assert worker.video_workers() == want
+
+
+def test_a_small_computer_makes_fewer_videos_at_once_whatever_the_setting(monkeypatch):
+    assert throttle.cpu_videos(12) == 3 and throttle.cpu_videos(16) == 4 and throttle.cpu_videos(4) == 1
+    assert throttle.memory_videos(15.8) == 5 and throttle.memory_videos(8) == 1
+    monkeypatch.setattr(throttle, "cores", lambda: 12)
+    monkeypatch.setattr(throttle, "memory_gb", lambda: 15.8)
+    assert throttle.max_videos() == 3
+    monkeypatch.setattr(worker, "_memory_cap", [])
+    monkeypatch.setattr(config, "read", lambda: {"video_workers": "6"})
+    assert worker.video_workers() == 3
 
 
 def test_idle_slot_does_not_claim_when_fewer_videos_are_wanted(tmp_path, monkeypatch):

@@ -109,11 +109,21 @@ def inspect_asset(project_id: str, path: Path, title: str, **metadata) -> dict:
                 provider=metadata.get("provider", "upload"))
 
 
+def _ocr_gpu() -> bool:
+    """Text reading can use the graphics card (DirectML build of onnxruntime, Windows package)."""
+    try:
+        import onnxruntime
+        return "DmlExecutionProvider" in onnxruntime.get_available_providers()
+    except Exception:
+        return False
+
+
 def hardware() -> dict:
     """FFmpeg and the NVIDIA card as checked at start (gpu.detect), plus what this computer offers for CPU work."""
-    result = {"ffmpeg": False, "system": sys.platform, "cores": os.cpu_count() or 0,
+    result = {"ffmpeg": False, "system": sys.platform, "cores": throttle.cores(),
               "cpu_slots": throttle.LIMITS["cpu"], "gpu_slots": throttle.LIMITS["gpu"],
-              "memory_gb": round(throttle.memory_gb(), 1), "memory_videos": throttle.memory_videos()}
+              "memory_gb": round(throttle.memory_gb(), 1), "memory_videos": throttle.memory_videos(),
+              "cpu_videos": throttle.cpu_videos(), "max_videos": throttle.max_videos(), "ocr_gpu": _ocr_gpu()}
     try:
         paths.binary("ffmpeg")
         paths.binary("ffprobe")

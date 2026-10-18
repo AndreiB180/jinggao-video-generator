@@ -38,7 +38,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
  const workers=Number(settings.video_workers||3);
  const [system,setSystem]=useState<Record<string,any>>({});
  // With the NVIDIA card encoding, more videos at once mostly overlap downloads and model calls.
- const recommended=system.nvenc?4:(system.cores||8)>=12?3:2;
+ // What this computer carries at once (processor and memory); more would make every video slower.
+ const limit=Number(system.max_videos||2), recommended=limit;
  const refresh=()=>request('/queue').then((r:Row[])=>{
   // Each project's latest video job; a later retry supersedes the failed run.
   const seen=new Set<string>();setRows(r.filter(j=>j.kind==='produce'&&!seen.has(j.project_id)&&!!seen.add(j.project_id)));setQueueError('')
@@ -146,7 +147,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
   </div>
   <div className="batch-step"><h3><b>2</b>设置<small>一般不用改</small></h3>
   <div className="field-grid">
-   <label>同时制作<select value={String(workers)} onChange={e=>change('video_workers',e.target.value)}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n} 条{n===recommended?'（推荐）':''}</option>)}</select></label>
+   <label>同时制作<select value={String(Math.min(workers,limit))} onChange={e=>change('video_workers',e.target.value)}>{[1,2,3,4,5,6].map(n=><option key={n} value={n} disabled={n>limit}>{n} 条{n===recommended?'（这台电脑最多）':n>limit?'（这台电脑带不动）':''}</option>)}</select>
+    <small className="field-hint">{system.cores?`这台电脑 ${system.cores} 个线程、${Math.round(system.memory_gb||0)} GB 内存，最多同时 ${limit} 条；再多每条都会变慢，第一条要等很久才出来。`:''}</small></label>
    <label>清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p · 更快</option></select></label>
    <label>画面比例<select value={aspect} onChange={e=>setAspect(e.target.value)}><option value="16:9">横屏 16:9</option><option value="9:16">竖屏 9:16</option></select></label>
    <label>素材组合<select value={policy} onChange={e=>setPolicy(e.target.value)}><option value="video_preferred">至少 80% 实拍视频</option><option value="video_only">全部实拍视频</option><option value="mixed">图片与视频混合</option></select></label>
