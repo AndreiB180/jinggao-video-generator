@@ -113,7 +113,7 @@ def _ocr_gpu() -> bool:
     """Text reading can use the graphics card (DirectML build of onnxruntime, Windows package)."""
     try:
         import onnxruntime
-        return "DmlExecutionProvider" in onnxruntime.get_available_providers()
+        return os.environ.get("JINGGAO_OCR_GPU") == "1" and "DmlExecutionProvider" in onnxruntime.get_available_providers()
     except Exception:
         return False
 

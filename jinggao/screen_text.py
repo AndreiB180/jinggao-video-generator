@@ -75,8 +75,7 @@ def install_model(check=lambda: None) -> None:
 
 @lru_cache(maxsize=1)
 def _sessions(directory: str):
-    """Detection and recognition sessions: on the graphics card through DirectML when the Windows package has
-    it (about an eighth of the CPU time, same results), else on the CPU."""
+    """Detection and recognition sessions on the CPU (DirectML only with JINGGAO_OCR_GPU=1)."""
     import onnxruntime as ort
     root = Path(directory)
 
@@ -93,7 +92,9 @@ def _sessions(directory: str):
         return (ort.InferenceSession(str(root / "PP-OCRv6_det_small.onnx"), options, providers=providers),
                 ort.InferenceSession(str(root / "PP-OCRv6_rec_small.onnx"), options, providers=providers))
 
-    gpu = "DmlExecutionProvider" in ort.get_available_providers() and os.environ.get("JINGGAO_OCR_CPU") != "1"
+    # Off unless asked for: DirectML crashed a worker process outright (access violation inside onnxruntime)
+    # in a 4-video batch on Windows, and reading text is not where videos wait anyway.
+    gpu = os.environ.get("JINGGAO_OCR_GPU") == "1" and "DmlExecutionProvider" in ort.get_available_providers()
     try:
         det, rec = make(gpu)
     except Exception:

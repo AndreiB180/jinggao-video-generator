@@ -76,7 +76,7 @@ numpy==2.5.4
     # via
     #   jinggao (pyproject.toml)
     #   onnxruntime
-onnxruntime-directml==1.24.4
+onnxruntime==1.31.0
     # via jinggao (pyproject.toml)
 opentelemetry-api==1.45.0
     # via
@@ -141,7 +141,3 @@ websocket-client==1.9.2
     #   jinggao (pyproject.toml)
 yarl==1.25.1
     # via aiohttp
-mpmath==1.3.0
-    # via sympy
-sympy==1.14.0
-    # via onnxruntime-directml

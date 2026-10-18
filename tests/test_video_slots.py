@@ -193,3 +193,25 @@ def test_matcher_time_limits_stretch_with_videos_running_at_once(tmp_path, monke
         store.enqueue(store.new_project(f"v{i}")["id"], "produce", {})
         store.claim()
     assert express_match.Matcher.share() == 3
+
+
+def test_a_video_whose_worker_died_is_requeued_twice_then_stopped(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    store.init()
+    p = store.new_project("会崩的视频")
+    store.enqueue(p["id"], "produce", {"batch": "b1"})
+    job = store.claim()
+    (tmp_path / "diag").mkdir()
+    def crash(job_id, pid=4242):
+        (tmp_path / "diag" / "main-2.json").write_text(json.dumps({"job": job_id, "pid": pid}), "utf-8")
+        return worker.requeue_after_crash("main-2", 4242)
+    assert worker.requeue_after_crash("main-2", 4242) == ""          # no trace of this worker: nothing to do
+    assert "重新排队" in crash(job["id"])
+    assert store.get_job(job["id"])["status"] == "interrupted"
+    again = store.claim()
+    assert again["project_id"] == p["id"] and again["payload"]["crash_retries"] == 1 and again["payload"]["batch"] == "b1"
+    assert crash(again["id"], pid=1) == ""                             # another process's trace: not this one
+    assert "重新排队" in crash(again["id"])
+    third = store.claim()
+    assert "停止" in crash(third["id"]) and store.claim() is None      # a video that keeps crashing is not looped forever

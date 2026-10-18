@@ -16,7 +16,7 @@ import uvicorn
 
 from jinggao import __version__, config, gpu, instance, paths, source_index, store, throttle
 from jinggao.api import create_app
-from jinggao.worker import loop, video_workers
+from jinggao.worker import loop, requeue_after_crash, video_workers
 
 
 def open_when_ready(url: str):
@@ -178,13 +178,22 @@ def main():
     background = start_slot("background")
     def add_slots():
         # Raising 同时制作 in the app takes effect within a few seconds; lowering it lets running videos finish.
+        # A worker that died (a native crash leaves its video "running" forever) is replaced and its video requeued.
+        nonlocal background
         while not stop.wait(2):
             try:
+                for i, process in enumerate(slots):
+                    if not process.is_alive() and not stop.is_set():
+                        note = requeue_after_crash(f"main-{i}", process.pid)
+                        print(note or "一个制作进程意外退出，已重新启动", flush=True)
+                        slots[i] = start_slot(slot=i)
+                if not background.is_alive() and not stop.is_set():
+                    requeue_after_crash("background-0", background.pid)
+                    background = start_slot("background")
                 while len(slots) < video_workers():
                     slots.append(start_slot(slot=len(slots)))
             except Exception as exc:
                 print(f"无法启动更多制作进程：{exc}", flush=True)
-                return
     threading.Thread(target=add_slots, name="video-slots", daemon=True).start()
     url = f"http://127.0.0.1:{port}"
     (paths.DATA / "instance.json").write_text(json.dumps({"port": port}), "utf-8")

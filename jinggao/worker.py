@@ -943,6 +943,11 @@ def run_once(stop=None, lane="main") -> bool:
         return False
     throttle.waited.clear()
     _current.update(job=job["id"], kind=job["kind"])
+    if _current.get("name"):
+        try:
+            _write_diag(_current["name"])     # at once: a crash in the first seconds is still traced to this job
+        except Exception:
+            pass
     began, wall_began = time.monotonic(), time.time()
     power_info = {}
     try:
@@ -987,22 +992,55 @@ def _memory_videos() -> int:
     return _memory_cap[0]
 
 
-def _report_waits(name: str) -> None:
-    """Every 10 s: what this worker's current video has queued for so far (shared limits, B站 pauses), for the
-    diagnostics text while a video is still being made."""
+def _write_diag(name: str) -> None:
     import json
     target = paths.DATA / "diag" / f"{name}.json"
     target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = paths.temporary(target)
+    temporary.write_text(json.dumps({"job": _current.get("job"), "pid": os.getpid(), "updated": time.time(),
+                                     "waited": {k: round(v, 1) for k, v in dict(throttle.waited).items()}}), "utf-8")
+    paths.publish(temporary, target)
+
+
+def _report_waits(name: str) -> None:
+    """Every 10 s: which job this worker is on and what it has queued for so far (shared limits, B站 pauses),
+    for the diagnostics text and for requeueing the job if this process dies."""
+    _current["name"] = name
     while True:
         try:
-            temporary = paths.temporary(target)
-            temporary.write_text(json.dumps({"job": _current.get("job"), "pid": os.getpid(), "updated": time.time(),
-                                             "waited": {k: round(v, 1) for k, v in dict(throttle.waited).items()}}),
-                                 "utf-8")
-            paths.publish(temporary, target)
+            _write_diag(name)
         except Exception:
             pass
         time.sleep(10)
+
+
+CRASH_RETRIES = 2
+
+
+def requeue_after_crash(name: str, pid: int) -> str:
+    """A worker process ended while making a video (a native crash leaves no Python error behind): mark the job
+    interrupted and queue it again, at most CRASH_RETRIES times. Returns a line for the launcher window."""
+    import json
+    try:
+        item = json.loads((paths.DATA / "diag" / f"{name}.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if item.get("pid") != pid or not item.get("job"):
+        return ""
+    try:
+        job = store.get_job(item["job"])
+    except KeyError:
+        return ""
+    if job["status"] != "running":
+        return ""
+    tries = int((job.get("payload") or {}).get("crash_retries", 0))
+    if tries >= CRASH_RETRIES:
+        store.job_update(job["id"], status="interrupted", message="制作进程连续意外退出，请稍后手动重试",
+                         error="制作进程意外退出")
+        return f"制作进程意外退出（第 {tries + 1} 次），这条视频已停止，可稍后重试"
+    store.job_update(job["id"], status="interrupted", message="制作进程意外退出，已自动重新排队", error="制作进程意外退出")
+    store.enqueue(job["project_id"], job["kind"], (job.get("payload") or {}) | {"crash_retries": tries + 1})
+    return "制作进程意外退出，这条视频已自动重新排队"
 
 
 def video_workers() -> int:
