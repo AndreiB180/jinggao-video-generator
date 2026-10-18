@@ -4,6 +4,10 @@ Several videos run in separate worker processes. The launcher creates these limi
 worker installs them, so however many videos run, B站 sees one polite client, the NVIDIA card never gets more
 encode sessions than its driver allows, CPU video encodes never outnumber the cores (the computer stays usable)
 and the 千问 speech account stays within its 3 concurrent requests.
+First come, first served: when the video that started earlier has a thread waiting for a limit, a later video
+leaves the free slot to it. Several videos at once then finish one after another, each about as fast as alone
+(the later ones meanwhile make their narration and judge pictures), instead of all sharing B站 and the network
+and none finishing for a long time.
 Without install() (tests, scripts, a single worker) they are plain in-process limits of the same size.
 """
 from __future__ import annotations
@@ -82,7 +86,8 @@ def max_videos() -> int:
 
 LIMITS = {
     "bili_api": 6,         # api.bilibili.com: search, previews (videoshot), play addresses
-    "bili_download": 32,   # B站 CDN clip downloads (network only; the re-encode takes a gpu or cpu slot)
+    "bili_download": 16,   # B站 CDN clip downloads (network only; the re-encode takes a gpu or cpu slot); one
+                           # video's 16 download threads fill it, so the earliest video gets the whole line
     "gpu": 3,              # NVENC sessions; the launcher sizes it from the driver (gpu.detect)
     "cpu": cpu_slots(),    # CPU video encodes (libx264, 2 threads each)
     "frames": cpu_slots() + 1,   # short FFmpeg decodes for watermark analysis and QA stills
@@ -108,20 +113,74 @@ class _Pause:
 _pause = _Pause()
 
 
+# Worker seats for first come, first served: main slots 0..MAX_VIDEOS-1, the background lane after them.
+SEATS = MAX_VIDEOS + 1
+_NAMES = list(LIMITS)
+_started = None    # per seat: when its current video started (0: idle); the background lane counts as latest
+_wanting = None    # per seat and limit: threads waiting for that limit
+_seat = None       # this process's seat
+
+
 def shared(context, sizes: dict | None = None) -> dict:
     """Cross-process versions, made by the launcher (context: a multiprocessing context); sizes overrides
     LIMITS, e.g. the card's encode sessions."""
     limits = LIMITS | (sizes or {})
     return {"slots": {name: context.BoundedSemaphore(n) for name, n in limits.items()},
-            "bili_pause": context.Value("d", 0.0), "sizes": limits}
+            "bili_pause": context.Value("d", 0.0), "sizes": limits,
+            "started": context.Array("d", SEATS), "wanting": context.Array("i", SEATS * len(_NAMES))}
 
 
-def install(objects: dict | None) -> None:
-    global _slots, _pause
+def install(objects: dict | None, seat: int | None = None) -> None:
+    global _slots, _pause, _started, _wanting, _seat
     if objects:
         _slots = dict(objects["slots"])
         _pause = objects["bili_pause"]
         LIMITS.update(objects.get("sizes") or {})
+        _started, _wanting, _seat = objects.get("started"), objects.get("wanting"), None
+        if seat is not None and _started is not None and 0 <= seat < SEATS:
+            _seat = seat
+            vacate(objects, seat)
+
+
+def vacate(objects: dict, seat: int) -> None:
+    """Clear a seat: a worker process starting in it, or the launcher after that process died (its waiting
+    threads must not hold later videos back)."""
+    started, wanting = objects.get("started"), objects.get("wanting")
+    if started is None or not 0 <= seat < SEATS:
+        return
+    with wanting.get_lock():
+        for i in range(len(_NAMES)):
+            wanting[seat * len(_NAMES) + i] = 0
+    started[seat] = 0.0
+
+
+def video_started(last: bool = False) -> None:
+    """This worker began a video: it queues behind videos that began earlier (last: behind every video)."""
+    if _seat is not None:
+        _started[_seat] = time.time() + (1e9 if last else 0)
+
+
+def video_ended() -> None:
+    if _seat is not None:
+        _started[_seat] = 0.0
+
+
+def _want(name: str, change: int) -> None:
+    if _seat is not None and name in _NAMES:
+        with _wanting.get_lock():
+            _wanting[_seat * len(_NAMES) + _NAMES.index(name)] += change
+
+
+def _behind(name: str) -> bool:
+    """A video that started earlier than this one has a thread waiting for this limit."""
+    if _seat is None or name not in _NAMES:
+        return False
+    mine = _started[_seat]
+    if not mine:
+        return False
+    column, width = _NAMES.index(name), len(_NAMES)
+    return any(seat != _seat and 0 < _started[seat] < mine and _wanting[seat * width + column] > 0
+               for seat in range(SEATS))
 
 
 # Seconds this process spent waiting for each shared limit (one video per worker process): where a slow video
@@ -140,9 +199,19 @@ def _note_wait(name: str, seconds: float) -> None:
 def slot(name: str, check=None):
     gate = _slots[name]
     began = time.monotonic()
-    while not gate.acquire(timeout=.2):
-        if check:
-            check()
+    checked = began
+    _want(name, 1)
+    try:
+        while True:
+            if _behind(name):
+                time.sleep(.05)
+            elif gate.acquire(timeout=.05):
+                break
+            if check and time.monotonic() - checked >= .5:   # check() reads the job from the database
+                check()
+                checked = time.monotonic()
+    finally:
+        _want(name, -1)
     _note_wait(name, time.monotonic() - began)
     try:
         yield
@@ -156,15 +225,22 @@ def either(check=None, wait_for_gpu: float | None = None):
     gpu, cpu = _slots["gpu"], _slots["cpu"]
     began = time.monotonic()
     give_up = began + (GPU_WAIT if wait_for_gpu is None else wait_for_gpu)
-    while True:
-        if gpu.acquire(timeout=.1):
-            taken = "gpu"
-            break
-        if time.monotonic() >= give_up and cpu.acquire(False):
-            taken = "cpu"
-            break
-        if check:
-            check()
+    checked = began
+    _want("gpu", 1)
+    try:
+        while True:
+            if not _behind("gpu") and gpu.acquire(timeout=.05):
+                taken = "gpu"
+                break
+            if time.monotonic() >= give_up and not _behind("cpu") and cpu.acquire(False):
+                taken = "cpu"
+                break
+            time.sleep(.05)
+            if check and time.monotonic() - checked >= .5:
+                check()
+                checked = time.monotonic()
+    finally:
+        _want("gpu", -1)
     _note_wait("encode", time.monotonic() - began)
     try:
         yield taken

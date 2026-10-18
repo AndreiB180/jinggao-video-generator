@@ -184,10 +184,12 @@ def main():
             try:
                 for i, process in enumerate(slots):
                     if not process.is_alive() and not stop.is_set():
+                        throttle.vacate(limits, i)
                         note = requeue_after_crash(f"main-{i}", process.pid)
                         print(note or "一个制作进程意外退出，已重新启动", flush=True)
                         slots[i] = start_slot(slot=i)
                 if not background.is_alive() and not stop.is_set():
+                    throttle.vacate(limits, throttle.MAX_VIDEOS)
                     requeue_after_crash("background-0", background.pid)
                     background = start_slot("background")
                 while len(slots) < video_workers():

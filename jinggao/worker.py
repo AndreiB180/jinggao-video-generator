@@ -942,6 +942,7 @@ def run_once(stop=None, lane="main") -> bool:
     if not job:
         return False
     throttle.waited.clear()
+    throttle.video_started(last=lane == "background")
     _current.update(job=job["id"], kind=job["kind"])
     if _current.get("name"):
         try:
@@ -960,6 +961,7 @@ def run_once(stop=None, lane="main") -> bool:
     except Exception as exc:
         store.job_update(job["id"], status="failed", message="任务未完成，可重试", error=str(exc)[:2200])
     finally:
+        throttle.video_ended()
         _current.update(job=None)
         ended = time.time()
         run = {"job_id": job["id"], "started_at": wall_began, "finished_at": ended,
@@ -1054,7 +1056,7 @@ def video_workers() -> int:
 def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
     """One worker. The main lane runs one process per video made at the same time (slot 0, 1, ...); a slot
     above the video_workers setting stays idle. The launcher recovers the queue before starting any slot."""
-    throttle.install(shared)
+    throttle.install(shared, throttle.MAX_VIDEOS if lane == "background" else slot)
     parent = multiprocessing.parent_process()
     if parent is not None:
         # A worker process started by the launcher: its encodes must not make the computer sluggish.

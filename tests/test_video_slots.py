@@ -124,6 +124,39 @@ def test_shared_slots_bound_every_worker_together():
                           "bili_pause": throttle._Pause()})
 
 
+def test_a_later_video_leaves_free_slots_to_the_video_that_started_first():
+    objects = throttle.shared(multiprocessing.get_context("spawn"))
+    width, column = len(throttle._NAMES), throttle._NAMES.index("bili_api")
+    try:
+        throttle.install(objects, seat=1)
+        objects["started"][0] = time.time() - 60     # another worker process, on its video for a minute
+        throttle.video_started()
+        objects["wanting"][0 * width + column] = 2   # ... with two threads waiting for a B站 request
+        got = threading.Event()
+        def later():
+            with throttle.bili_call():
+                got.set()
+        threading.Thread(target=later, daemon=True).start()
+        assert not got.wait(.6)                      # free slots, but the earlier video goes first
+        assert objects["wanting"][1 * width + column] == 1
+        objects["wanting"][0 * width + column] = 0
+        assert got.wait(2)
+        assert objects["wanting"][1 * width + column] == 0
+        objects["wanting"][0 * width + column] = 3
+        throttle.vacate(objects, 0)                  # that process died: it holds nobody back
+        with throttle.slot("bili_api"):
+            pass
+        throttle.video_ended()
+        objects["wanting"][0 * width + column] = 3
+        objects["started"][0] = time.time()
+        with throttle.slot("bili_api"):              # an idle worker queues behind nobody
+            pass
+    finally:
+        throttle.install({"slots": {n: threading.BoundedSemaphore(v) for n, v in throttle.LIMITS.items()},
+                          "bili_pause": throttle._Pause()})
+    assert throttle._seat is None
+
+
 def test_a_refused_bilibili_request_pauses_every_caller():
     throttle.bili_refused(.6)
     began = time.monotonic()
