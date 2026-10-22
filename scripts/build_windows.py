@@ -238,7 +238,26 @@ def check_private_files(files, public_weights):
                 raise RuntimeError("Private data found in distribution: " + str(path))
 
 
-def package(release_path=None, model_directory=None, requirements=ROOT / "requirements.lock", bundle_pixabay=False):
+def bundle_assist_tool(settings_dir: Path) -> None:
+    """远程协助 (jinggao/assist.py): build tools/assist for Windows and add its relay settings (assist.json from a
+    folder outside the repository: relay address, ports, user, host key; no secret: each computer makes its
+    own key on first use and the developer allows it on the relay)."""
+    import os
+    tools = OUTPUT / "tools"
+    if tools.exists():
+        shutil.rmtree(tools)
+    tools.mkdir()
+    env = os.environ | {"GOOS": "windows", "GOARCH": "amd64", "CGO_ENABLED": "0"}
+    subprocess.run(["go", "build", "-trimpath", "-ldflags", "-s -w", "-o", str(tools / "jinggao-assist.exe"), "."],
+                   cwd=ROOT / "tools" / "assist", env=env, check=True)
+    settings = json.loads((settings_dir / "assist.json").read_text("utf-8"))
+    settings = {k: settings[k] for k in ("relay", "ports", "user", "host_key", "listen")}
+    (tools / "assist.json").write_text(json.dumps(settings, indent=1), "utf-8")
+    print("Bundled 远程协助 (tools/jinggao-assist.exe)", flush=True)
+
+
+def package(release_path=None, model_directory=None, requirements=ROOT / "requirements.lock", bundle_pixabay=False,
+            bundle_assist: Path | None = None):
     app_manifest, model_manifest = {}, {}
     if release_path:
         source, manifest = load_release(release_path)
@@ -275,6 +294,8 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
             raise RuntimeError("--bundle-pixabay-key: this machine has no Pixabay key in its settings")
         defaults.write_text(json.dumps({"pixabay_api_key": key}), "utf-8")
         print("Bundled the Pixabay key (defaults.json)", flush=True)
+    if bundle_assist:
+        bundle_assist_tool(bundle_assist)
     for name in ("README.md", "THIRD_PARTY_NOTICES.md", "先看这里.txt"):
         shutil.copy2(ROOT / name, OUTPUT / name)
     shutil.copy2(requirements, OUTPUT / "requirements.lock")
@@ -335,6 +356,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-name", help="A new folder name under build/, also used for the test archive")
     parser.add_argument("--bundle-pixabay-key", action="store_true",
                         help="Ship this machine's Pixabay key as the package default (defaults.json)")
+    parser.add_argument("--bundle-assist", type=Path, metavar="DIR",
+                        help="Add 远程协助: DIR holds assist.json, the relay settings (kept out of the repository)")
     args = parser.parse_args()
     if args.release:
         load_release(args.release)
@@ -349,4 +372,5 @@ if __name__ == "__main__":
     requirements = args.requirements or ROOT / ("requirements-windows.lock" if args.release else "requirements.lock")
     prepare(requirements)
     if not args.prepare_only:
-        package(args.release, args.model_directory, requirements, bundle_pixabay=args.bundle_pixabay_key)
+        package(args.release, args.model_directory, requirements, bundle_pixabay=args.bundle_pixabay_key,
+                bundle_assist=args.bundle_assist)

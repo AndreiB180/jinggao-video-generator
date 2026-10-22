@@ -116,6 +116,27 @@ def create_app() -> FastAPI:
                          + f" · 下载 {report.get('fetch_seconds') or '-'}")
         return PlainTextResponse("\n".join(lines))
 
+    @app.get("/api/assist")
+    def assist_status():
+        from . import assist
+        return assist.status()
+
+    @app.post("/api/assist/start")
+    def assist_start(request: Request):
+        from . import assist
+        if not assist.available():
+            raise HTTPException(404, "这个版本没有带远程协助")
+        try:   # the app's own port: a request through the relay arrives on the developer's forwarded port
+            port = int(json.loads((paths.DATA / "instance.json").read_text("utf-8"))["port"])
+        except (OSError, ValueError, KeyError, TypeError):
+            port = request.url.port or 8770
+        return assist.start(port)
+
+    @app.post("/api/assist/stop")
+    def assist_stop():
+        from . import assist
+        return assist.stop()
+
     @app.post("/api/system/gpu-check")
     def gpu_check():
         """Run the card check again (after a driver update or closing a screen recorder)."""

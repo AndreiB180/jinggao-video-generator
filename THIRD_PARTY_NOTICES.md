@@ -12,6 +12,7 @@
 - 公开视频元数据提取：[yt-dlp 2026.08.19](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19) 官方 Windows 可执行程序，包含 EJS；主项目及捆绑依赖的许可证位于 `runtime/yt-dlp`。不修改二进制，SHA256 与官方校验文件一并核对。
 - JavaScript 运行时：[Deno v2.9.7](https://github.com/denoland/deno/releases/tag/v2.9.7) 官方 Windows x64，MIT 许可位于 `runtime/deno`。只供公开视频播放器解析，无需客户安装 Node；Windows 需满足 Deno 当前支持的系统版本。
 
+- 远程协助小程序 `tools/jinggao-assist.exe`：源码在仓库 `tools/assist`，用 Go 编译，依赖 [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) 与 golang.org/x/sys（BSD-3-Clause，Copyright The Go Authors）及 Go 标准库（BSD-3-Clause）。只在用户点「开始远程协助」后运行。
 - 画面文字识别模型 PP-OCRv6 small（PaddleOCR，Apache-2.0），取自 RapidOCR 3.10.0（Apache-2.0）发行包，位于 `data/models/ocr`，在本机运行，不上传画面。
 
 FFmpeg 通过独立进程调用。自动匹配结果的来源信息会写入导出清单，软件不改变原始素材的权利归属。
