@@ -64,7 +64,7 @@ def test_allocation_never_overlaps_windows_in_one_source(data):
     options = {s["id"]: [(tile, "pick") for tile in tiles] for s in m.shots}
     assigned = m.allocate(options, {}, {}, m.shots)
     windows = sorted((c["start"], c["start"] + 8.0 + express_match.MARGIN) for c in assigned.values())
-    assert len(windows) >= 3
+    assert len(windows) == express_match.HARD_MIN     # one source fills at most this many shots of a short film
     # Every window contains the frame the model actually judged.
     assert all(c["start"] <= c["tile"]["t"] <= c["start"] + 8.0 for c in assigned.values())
     assert all(b[0] >= a[1] + express_match.WINDOW_GAP - 1e-6 for a, b in zip(windows, windows[1:], strict=False))
@@ -305,6 +305,15 @@ def test_portrait_stock_clips_are_skipped_in_landscape_projects(data):
     assert m.oriented({"rendition": {"width": 1920, "height": 1080}})
     assert not m.oriented({"rendition": {"width": 720, "height": 1280}})
     assert m.oriented({"provider": "pixabay"})   # unknown size: keep
+
+
+def test_stock_needs_two_words_of_a_longer_query(data):
+    m = _matcher(data, [planner.new_shot("红海。") | {"duration": 6.0}])
+    yacht = {"provider": "pixabay", "tags": "monaco, wealth, yachts, sea, harbour"}
+    warship = {"provider": "pixabay", "tags": "warship, navy, sea, military"}
+    assert not m.stock_fits(yacht, "warship sailing sea")     # one word in common: off-topic
+    assert m.stock_fits(warship, "warship sailing sea")
+    assert m.stock_fits({"provider": "pixabay", "tags": "office, desk"}, "office")   # one-word query: one word
 
 
 def test_slow_downloads_carry_over_to_the_next_round(data, tmp_path):

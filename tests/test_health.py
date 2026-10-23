@@ -23,6 +23,12 @@ def test_a_healthy_computer_gets_one_line_of_verdict():
     assert text[0] == "电脑体检：没发现明显问题" and any("平衡" in line for line in text)
 
 
+def test_reading_files_at_start_up_is_not_a_memory_shortage():
+    reading = {"checked": 1, "mem_total_mb": 16200, "mem_free_mb": 8900, "hard_faults": 364, "cpu_name": "x",
+               "power_plan": "381b4222-f694-41f0-9685-ff5bb260df2e", "app_disk": {"drive": "D", "media": "SSD"}}
+    assert not any("内存不够" in line for line in health.lines(reading))
+
+
 def test_other_systems_get_a_note():
     assert health.lines({"note": "电脑体检只在 Windows 上做"}) == ["电脑体检：电脑体检只在 Windows 上做"]
 

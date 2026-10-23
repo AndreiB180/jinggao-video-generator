@@ -42,9 +42,14 @@ WINDOW_GAP = 1.5
 # Repetition: one source may fill at most this share of the timeline before it costs extra; two windows of
 # one source closer than SCENE_SECONDS usually show the same scene; tiles this close in dHash bits are the
 # same picture (the same footage re-uploaded under another id repeats just as visibly).
-SOURCE_SHARE = 0.04
-HARD_SHARE = 0.05      # ...and never more than this share (one long stock take filled a third of a film)
-SCENE_SECONDS = 8.0
+SOURCE_SHARE = 0.03
+HARD_SHARE = 0.04      # ...and never more than this share (one long stock take filled a third of a film)
+HARD_MIN = 2           # ...nor more than twice in a short film: viewers called three windows of one video "翻来覆去"
+SCENE_SECONDS = 20.0   # two windows of one video closer than this show the same scene
+LOW_HEIGHT = 480       # without a B站 login many drama and short-play clips stop at 480p: usable after the sharp
+                       # ones (a social story otherwise loses most of its footage and repeats the rest)
+STOCK_SHARE = 0.15     # foreign stock (Pixabay) at most this share of a film: for a Chinese story its foreign
+                       # couples and weddings read as filler ("都是空镜头"), whatever the planner asked for
 TWIN_BITS = 8
 SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in grey)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
@@ -74,9 +79,9 @@ ARCHIVE_TITLE = re.compile(r"珍贵|影像|纪录片|央视|新闻|原声|档案
 
 PICK_SYSTEM = """你在为营销号视频挑选实拍素材。图片是若干视频的缩略图联系表，每格左上角有黄色编号。
 请为每个镜头挑出合适的格子编号（最好的在前，最多6个），只输出 JSON：{"S1":["12","7"],"S2":[]}。
-普通镜头标准：画面与口播所讲的主题场景大致相关、看起来自然即可（画面建议只是参考），不要求型号、年份、地点、动作逐一一致。
+普通镜头标准：画面主体要和口播讲的对象一致（画面建议只是参考），不要求型号、年份、地点、动作逐一一致：讲人和人之间的事（夫妻、家人、同事、官员、民众、士兵），画面要有相应的人和场景，不选风景、空镜、物品；讲某个国家、组织的事，画面要是那个国家、组织的，不选别国的同类画面（讲也门战事不选中国火箭军、中国海军）；讲中国国内的人和事，不选明显是外国人或外国街景的画面。情感、家庭、社会故事可以选影视剧、短剧里情节相符的片段（有人物、有情绪）。
 必须排除：主持人或博主对镜头口播、PPT/文字页/图表/排行榜截图为主、手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面）、大面积马赛克、片头片尾和转场、频道订阅页、黑屏或严重模糊、大面积硬字幕/弹幕/贴纸/台标遮挡画面、游戏/动画/CG（除非口播就是讲这些）、与口播明显无关的内容、广告。
-画面中出现具体人物脸部特写时，除非该镜头要求此人物，否则尽量不选。
+新闻、纪录片里真实存在的人物的脸部特写，除非该镜头要求此人物，否则尽量不选（容易被当成口播里讲的人）；影视剧、短剧里的演员不受此限。
 优先选有明显动作或镜头运动的视频画面；静态插画、照片、幻灯片式的画面尽量不选（口播在讲这幅画、这件文物时除外）。"""
 
 PERSON_RULES = """
@@ -101,7 +106,7 @@ QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一�
 bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
 wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
-普通镜头只要和口播所讲的主题场景大致相关、看着自然即可：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、地点、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。只有画面题材与口播完全无关才算跑题。
+普通镜头：画面主体和口播讲的对象一致即可，细节不必一致：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。以下算跑题（不合格，原因写“跑题”）：口播讲人和人之间的事（夫妻、家人、同事、官员、民众），画面却是风景、空镜、物品、动物，看不出相关的人；口播讲中国国内的人和事，画面明显是外国人或外国街景；口播讲某个国家、组织，画面明显是另一个国家的（如讲也门战事却是中国火箭军发射、中国海军演习）；科普讲解、课堂课件、带货、游戏解说之类与口播无关的视频画面；画面题材与口播完全无关。
 要求具名人物的镜头：只要画面是此人本人的真实影像或照片就合格，即使与口播所讲的具体事件、场景不一致也不要判不合格。
 标为“古代人物”的镜头：此人没有真实影像，画像、雕像、影视剧/纪录片/动画/插画里表现此人的形象都合格，不要因演员扮演、动画或插画判不合格；只有现代场景、明显是其他具名人物、主持人对镜头讲解才不合格。
 任何镜头：口播没讲到逝世、悼念时，葬礼、遗体、遗像、灵堂、花圈、追悼会画面不合格。"""
@@ -361,7 +366,7 @@ class Matcher:
                         score = self.score(row, g, shots_by_id)
                         if score is None:
                             continue
-                        if kind == "pixa" and (self.stock_overlap(row, q) == 0 or not self.oriented(row)):
+                        if kind == "pixa" and (not self.stock_fits(row, q) or not self.oriented(row)):
                             continue
                         ranked.append((score - rank * 0.04, row))
                     ranked.sort(key=lambda item: -item[0])
@@ -385,6 +390,12 @@ class Matcher:
         if not (r.get("width") and r.get("height")) or self.project.get("aspect", "16:9") == "9:16":
             return True
         return r["width"] >= r["height"]
+
+    def stock_fits(self, row, query) -> bool:
+        """A stock clip whose tags share one word with a three-word query ("warship sailing sea" and a Monaco
+        yacht tagged "sea") is off-topic: a query of two or more words needs two of them in the tags."""
+        words = len(re.findall(r"[A-Za-z]{3,}", query))
+        return self.stock_overlap(row, query) >= min(2, max(1, words))
 
     @staticmethod
     def stock_overlap(row, query) -> int:
@@ -643,7 +654,7 @@ class Matcher:
             rows = []
             for q in group.get("en", [])[:3]:
                 for row in results.get(("pixa", q), []):
-                    if (row["id"] not in shown and row not in rows and self.stock_overlap(row, q) > 0
+                    if (row["id"] not in shown and row not in rows and self.stock_fits(row, q)
                             and self.oriented(row) and float(row.get("duration") or 0) >= float(shot["duration"]) + MARGIN):
                         rows.append(row)
             if rows:
@@ -651,10 +662,15 @@ class Matcher:
                                        for row in rows[:12]]
         return options
 
-    def borrow(self, shot, final, files):
+    def borrow(self, shot, final, files, limit=None):
         """The nearest accepted clip (never the next one: a clip twice in a row looks like a glitch) that is long
-        enough and shows no other named person; anywhere in the video, as one about the same subject."""
+        enough and shows no other named person; anywhere in the video, as one about the same subject. limit: skip
+        clips whose video already fills this many shots (borrow from the less used ones first)."""
         position, need = self.position[shot["id"]], float(shot["duration"]) - 0.15
+        counts = {}
+        for choice in final.values():
+            key = (choice["tile"]["source"].get("provider"), choice["tile"]["source"].get("id"))
+            counts[key] = counts.get(key, 0) + 1
         for distance in range(2, len(self.timeline)):
             for other in (position - distance, position + distance):
                 if not 0 <= other < len(self.timeline):
@@ -662,6 +678,9 @@ class Matcher:
                 sid = self.timeline[other]["id"]
                 choice = final.get(sid)
                 if not choice or choice.get("lane") in ("card", "reuse") or sid not in files:
+                    continue
+                source = choice["tile"]["source"]
+                if limit and counts.get((source.get("provider"), source.get("id")), 0) >= limit:
                     continue
                 donor_shot = self.shots_by_id_all.get(sid) or {}
                 if shot.get("persons"):
@@ -799,9 +818,11 @@ class Matcher:
         assigned = {}
         assigned_keys = dict(self.placed)
         looks = dict(self.looks)
-        cap = max(3, math.ceil(len(self.timeline) * SOURCE_SHARE))
-        hard_cap = max(3, math.ceil(len(self.timeline) * HARD_SHARE))
+        cap = max(HARD_MIN, math.ceil(len(self.timeline) * SOURCE_SHARE))
+        hard_cap = max(HARD_MIN, math.ceil(len(self.timeline) * HARD_SHARE))
         order = sorted(shots, key=lambda s: (len(options.get(s["id"], [])), self.position[s["id"]]))
+        stock_cap = max(2, int(len(self.timeline) * STOCK_SHARE))
+        stock_used = sum(1 for key in assigned_keys.values() if key and key[0] == "pixabay")
         for shot in order:
             sid = shot["id"]
             best = None
@@ -824,6 +845,8 @@ class Matcher:
                 # scene continuing, from another video a re-upload of it.
                 twin = any(abs(pos - index) > 1 for pos in close)
                 reupload = any(abs(pos - index) == 1 and assigned_keys.get(pos) != key for pos in close)
+                if key[0] == "pixabay" and stock_used >= stock_cap:
+                    continue
                 if lane not in ("person", "person_near") and not (shot.get("persons") and not self.unfilmed_shot(shot)):
                     # Hard limits (scores alone let one long stock take fill ten shots in a row): a source at
                     # most HARD_SHARE of the film, never three shots running, never the same picture again.
@@ -832,7 +855,7 @@ class Matcher:
                             or (run[2] == key and run[3] == key)):
                         continue
                 cost = (rank + 2.0 * used + 6.0 * max(0, used + 1 - cap) + 3.0 * adjacent
-                        + (4.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
+                        + (8.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
                         # Footage other recent videos already show (a batch on one topic would repeat itself).
                         + min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0))
                         + {"pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
@@ -842,6 +865,7 @@ class Matcher:
                         + (6 if tile["source"].get("dirty") else 0)
                         # Burned-in subtitles in most of its previews: cropped or blurred, but cleaner footage first.
                         + (3 if tile["source"].get("captioned") else 0)
+                        + (4 if tile["source"].get("low_res") else 0)
                         # A presenter-led source is a last resort (its windows keep failing QA).
                         + (8 if key in self.host_sources else 0))
                 if best is None or cost < best[0]:
@@ -855,6 +879,7 @@ class Matcher:
                 usage[key] = usage.get(key, 0) + 1
                 assigned[sid] = {"tile": tile, "start": start, "lane": lane, "rank": rank}
                 assigned_keys[self.position[sid]] = key
+                stock_used += key[0] == "pixabay"
                 if tile.get("hash") is not None:
                     looks[self.position[sid]] = tile["hash"]
         return assigned
@@ -896,7 +921,14 @@ class Matcher:
             bvid, source = item
             self.check()
             try:
-                return bvid, self.bili.stream(bvid, self.min_height)
+                stream = self.bili.stream(bvid, self.min_height)
+                if (stream and not stream.get("available")
+                        and LOW_HEIGHT <= int(stream.get("best_short_edge") or 0) < self.min_height):
+                    lower = self.bili.stream(bvid, LOW_HEIGHT)
+                    if lower and lower.get("available"):
+                        source["low_res"] = True
+                        stream = lower
+                return bvid, stream
             except media.Cancelled:
                 raise
             except Exception as exc:
@@ -1517,6 +1549,10 @@ class Matcher:
             # A portrait re-upload of landscape footage is a small picture between caption bars.
             return bool(stream.get("available")) and (not (w and h) or (w >= h) == landscape)
         low = sum(1 for st in streams.values() if st and not st.get("available"))
+        soft = sum(1 for bvid in streams if referenced[bvid].get("low_res"))
+        if soft:
+            self.notes.append(f"{soft} 个B站来源只有 {LOW_HEIGHT}p，排在高清画面之后使用" +
+                              ("（登录B站可获得 720p/1080p）" if not self.bili.logged_in else ""))
         if low:
             self.notes.append(f"{low} 个B站来源最高清晰度低于 {self.min_height}p，已跳过" +
                               ("（登录B站可获得 720p/1080p）" if not self.bili.logged_in else ""))
@@ -1675,7 +1711,7 @@ class Matcher:
             carried = [job for job in carried if job[0] in {j[0] for j in self.inflight.values()}]
             group_of_id = {sid: g["id"] for g in groups for sid in g["shots"]}
             donors = sorted(final.items(), key=lambda item: self.position[item[0]])
-            hard_cap = max(3, math.ceil(len(self.timeline) * HARD_SHARE))
+            hard_cap = max(HARD_MIN, math.ceil(len(self.timeline) * HARD_SHARE))
             shots_from = {}
             for choice in final.values():
                 shots_from[key_of(choice)[0]] = shots_from.get(key_of(choice)[0], 0) + 1
@@ -1690,8 +1726,8 @@ class Matcher:
                     if person and not (self.names_in_source(shot, donor["tile"]["source"])
                                        or donor["lane"] in ("ctx", "topic")):
                         continue
-                    if not person and shots_from.get(key_of(donor)[0], 0) >= 2 * hard_cap:
-                        continue    # that video already fills (twice) its share of the film: a card is next
+                    if not person and shots_from.get(key_of(donor)[0], 0) >= hard_cap + 1:
+                        continue    # that video already fills its share of the film (plus one): try another
                     if donor_id not in self.position:
                         continue
                     if FUNERAL.search(donor["tile"]["source"].get("title", "")) and not DEATH_LINE.search(shot["narration"]):
@@ -1776,13 +1812,12 @@ class Matcher:
                 files[sid] = path
         cards = [s for s in self.shots if s["id"] not in final]
         footage = sorted((self.position[sid], path) for sid, path in files.items() if sid in self.position)
-        # Once or twice per film; more only where blurred cards would otherwise exceed 8% of the lines.
+        # A real clip already accepted elsewhere (never the neighbouring one) beats a blurred card every time:
+        # viewers took the dark blurred frame for a broken video, which is worse than seeing a clip twice.
         reused = 0
-        may_reuse = max(max(1, len(self.timeline) // 40), len(cards) - int(0.08 * len(self.timeline)))
         for shot in list(cards):
-            # A real clip already accepted elsewhere beats a blurred card, but only once or twice per film:
-            # the same clip again and again is what makes a video look repetitive.
-            donor = self.borrow(shot, final, files) if reused < may_reuse else None
+            donor = (self.borrow(shot, final, files, limit=HARD_MIN + 2)
+                     or self.borrow(shot, final, files))
             if donor:
                 final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
                 files[shot["id"]] = files[donor]

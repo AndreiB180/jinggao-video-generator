@@ -91,7 +91,7 @@ def lines(r: dict) -> list[str]:
         out.append(f"内存：已用 {used:.0f}%（空闲 {free / 1024:.1f} GB / 共 {total / 1024:.1f} GB）· 提交 "
                    f"{(r.get('commit_mb') or 0) / 1024:.1f}/{(r.get('commit_limit_mb') or 0) / 1024:.1f} GB · "
                    f"换页 {r.get('pages_per_sec', 0)}/秒（读盘 {r.get('hard_faults', 0)}/秒）")
-        if free < 1500 or (r.get("hard_faults") or 0) > 200:
+        if free < 1500 or (free < 3000 and (r.get("hard_faults") or 0) > 200):   # reads at start-up alone are normal
             warn.append("内存不够：系统在把内存挪到硬盘上，所有步骤都会慢几十倍。少开别的软件，或把同时制作调低")
     if r.get("cpu_name"):
         out.append(f"CPU：{r['cpu_name'].strip()} · 占用 {r.get('cpu_load')}% · 频率 {r.get('cpu_mhz')}/{r.get('cpu_max_mhz')} MHz"
