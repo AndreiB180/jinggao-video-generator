@@ -65,7 +65,7 @@ def _file():
 
 
 def _schema(con):
-    con.execute("PRAGMA journal_mode=WAL")
+    paths.wal(con)
     con.executescript("""
         CREATE TABLE IF NOT EXISTS sources (
             key TEXT PRIMARY KEY, provider TEXT NOT NULL, id TEXT NOT NULL, row TEXT NOT NULL,

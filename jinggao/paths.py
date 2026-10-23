@@ -70,3 +70,18 @@ def publish(temporary_file: Path, target: Path) -> None:
                     return
                 raise
             time.sleep(.1 * (attempt + 1))
+
+
+def wal(con) -> None:
+    """Put a SQLite file in WAL mode. Switching a new file does not wait for the busy timeout: another
+    process doing the same at that moment gets "database is locked" at once, so try again briefly."""
+    import sqlite3
+    import time
+    for attempt in range(50):
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or attempt == 49:
+                raise
+            time.sleep(0.1)

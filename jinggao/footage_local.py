@@ -14,7 +14,7 @@ import httpx
 from .footage_index import _kind
 
 PROMPT = """这些图片是同一个 B 站视频按时间顺序截的预览帧，依次是图1、图2……。逐张独立地看，每张给三项：
-1. 描述：最多16个字，写主体、动作、场景。人物写清几个人、男女老少、表情；能看出时代（古代/民国/现代）、地方（中国/外国、城市/农村、医院/法庭/客厅/办公室……）、事物的写上。
+1. 描述：最多16个字，写主体、动作、场景。人物写清几个人、男女老少、表情，看得出是外国人的写“外国”；能看出时代（古代/民国/现代）、地方（中国/外国、城市/农村、医院/法庭/客厅/办公室……）、事物的写上。
 2. 类型，只能是：实拍、影视剧、动画、图表文字、主持人出镜、黑屏或模糊。
    影视剧=电视剧、电影、短剧画面；主持人出镜=有人正对镜头讲话（主播、演播室、UP主口播）；图表文字=画面以文字、图表、截图、地图为主；动画=动画、CG、游戏画面。
 3. 关键词：3到5个检索词，空格隔开，带常见的同义说法（例如：吵架 争执 夫妻矛盾 愤怒）。
@@ -33,32 +33,54 @@ def _jpeg(image, quality=85) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
+def _frames_of(data, count) -> dict:
+    """{frame number: answer} from the shapes the model writes: {"1": […], …}, {"1": {"描述": …}, …},
+    [[…], …], [{"描述": …}, …], or one of these under a single key ({"frames": [...]})."""
+    if isinstance(data, dict) and len(data) == 1 and count > 1:
+        inner = next(iter(data.values()))
+        if isinstance(inner, (list, dict)) and len(inner) >= 2 and all(isinstance(v, (list, dict)) for v in
+                                                                        (inner.values() if isinstance(inner, dict) else inner)):
+            data = inner
+    if isinstance(data, list):
+        return {n: value for n, value in enumerate(data, 1)}
+    out = {}
+    for key, value in data.items() if isinstance(data, dict) else []:
+        number = re.sub(r"\D", "", str(key))
+        if number:
+            out[int(number)] = value
+    return out
+
+
 def parse(answer: str, count: int) -> dict:
     """The model's JSON answer -> {frame index (from 0): (text, kind)}; text is the line and its search
     words ("描述｜关键词"), both searchable. Unusable entries are left out."""
     text = re.sub(r"<think>.*?</think>", "", answer or "", flags=re.S)
-    start, end = text.find("{"), text.rfind("}")
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    start, end = (min(starts) if starts else -1), max(text.rfind("}"), text.rfind("]"))
     try:
         data = json.loads(text[start:end + 1]) if 0 <= start < end else None
     except ValueError:
         data = None
-    if not isinstance(data, dict):
+    if not isinstance(data, (dict, list)):
         # Cut off at the length limit or otherwise broken: keep the entries that are whole.
         data = {m[0]: [m[1], m[2], m[3]] for m in ENTRY.findall(text)}
     out = {}
-    for key, value in data.items() if isinstance(data, dict) else []:
-        number = re.sub(r"\D", "", str(key))
-        if not number or not 1 <= int(number) <= count or not value:
+    for number, value in _frames_of(data, count).items():
+        if not 1 <= number <= count or not value:
             continue
+        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
+            value = value[0]
         if isinstance(value, dict):      # {"描述": …, "类型": …, "关键词": …}
             value = [value.get(k, "") for k in ("描述", "类型", "关键词")]
         value = value if isinstance(value, list) else [str(value)]
-        value = [LABEL.sub("", " ".join(v) if isinstance(v, list) else str(v)) for v in value]
-        line = re.sub(r"[“”\"\[\]|｜]", "", value[0]).strip(" ，,。")[:24]
+        if any(isinstance(v, dict) for v in value):
+            continue
+        value = [LABEL.sub("", " ".join(map(str, v)) if isinstance(v, list) else str(v)) for v in value]
+        line = re.sub(r"[“”\"\[\]|｜{}':]", "", value[0]).strip(" ，,。")[:24]
         kind = _kind(value[1]) if len(value) > 1 else ""
         words = " ".join(re.split(r"[\s,，、;；/]+", value[2].strip()))[:MAX_TEXT] if len(value) > 2 else ""
         if line:
-            out[int(number) - 1] = ((f"{line}｜{words}" if words else line)[:MAX_TEXT], kind)
+            out[number - 1] = ((f"{line}｜{words}" if words else line)[:MAX_TEXT], kind)
     return out
 
 
@@ -70,7 +92,7 @@ def describer(url: str, model: str = "local", timeout: float = 240):
         for n, image in enumerate(images, 1):
             content += [{"type": "text", "text": f"图{n}"}, {"type": "image_url", "image_url": {"url": _jpeg(image)}}]
         body = {"model": model, "temperature": 0.2, "max_tokens": 120 + 70 * len(images),
-                "chat_template_kwargs": {"enable_thinking": False}, "response_format": {"type": "json_object"},
+                "chat_template_kwargs": {"enable_thinking": False},
                 "messages": [{"role": "system", "content": PROMPT}, {"role": "user", "content": content}]}
         response = client.post(url.rstrip("/") + "/chat/completions", json=body)
         response.raise_for_status()

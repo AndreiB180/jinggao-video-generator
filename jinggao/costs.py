@@ -91,7 +91,7 @@ def request_hash(endpoint, payload):
 
 
 def _schema(con):
-    con.execute("PRAGMA journal_mode=WAL")
+    paths.wal(con)
     con.executescript("""
     CREATE TABLE IF NOT EXISTS charges (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, job_id TEXT NOT NULL,
@@ -104,6 +104,9 @@ def _schema(con):
     CREATE INDEX IF NOT EXISTS charges_project ON charges(project_id);
     CREATE INDEX IF NOT EXISTS charges_day ON charges(day);
     """)
+    # Several worker processes start together on a new data folder: the check and the ALTERs happen in one
+    # write transaction, so the second process sees the first one's columns instead of adding them again.
+    con.execute("BEGIN IMMEDIATE")
     columns = {r[1] for r in con.execute("PRAGMA table_info(charges)")}
     additions = {
         "provider": "TEXT NOT NULL DEFAULT ''",

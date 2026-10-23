@@ -26,7 +26,7 @@ def connection():
     con = sqlite3.connect(path, timeout=30)
     con.row_factory = sqlite3.Row
     if str(path) not in _wal:
-        con.execute("PRAGMA journal_mode=WAL")
+        paths.wal(con)
         _wal.add(str(path))
     con.execute("PRAGMA foreign_keys=ON")
     try:

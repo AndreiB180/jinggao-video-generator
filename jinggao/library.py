@@ -42,7 +42,7 @@ def file_path(relative):
 def connection():
     con = sqlite3.connect(root() / "index.sqlite3", timeout=30)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
+    paths.wal(con)
     con.executescript("""
         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, url TEXT UNIQUE NOT NULL,
             body TEXT NOT NULL, updated REAL NOT NULL);

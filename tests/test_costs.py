@@ -308,3 +308,25 @@ def test_valid_settings_persist_and_zero_pauses_requests(tmp_path, monkeypatch):
     with costs.scope("test"), pytest.raises(costs.BudgetExceeded):
         with costs.request(config.read() | DEEPSEEK, payload(), "text"):
             pytest.fail("zero budget must pause requests")
+
+
+def _open_ledger(folder, start):
+    import os
+    import time
+    os.environ["JINGGAO_DATA"] = folder
+    from jinggao import costs as ledger, paths as where
+    where.DATA = __import__("pathlib").Path(folder)
+    while time.time() < start:
+        time.sleep(0.001)
+    with ledger._db() as con:
+        return sorted(r[1] for r in con.execute("PRAGMA table_info(charges)"))
+
+
+def test_worker_processes_starting_together_on_a_new_folder_all_open_the_ledger(tmp_path):
+    import multiprocessing
+    import time
+    context = multiprocessing.get_context("spawn")
+    start = time.time() + 1.5
+    with context.Pool(4) as pool:
+        columns = pool.starmap(_open_ledger, [(str(tmp_path / "data"), start)] * 4)
+    assert all(c == columns[0] for c in columns) and "cost_basis" in columns[0]
