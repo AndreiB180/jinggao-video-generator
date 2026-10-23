@@ -52,12 +52,25 @@ def _queries(values, limit, ascii_only=False) -> list[str]:
 MIN_WIDTH = 9
 # After the real voice is aligned, a shot shorter than this joins a neighbour (before any footage is chosen).
 MIN_SECONDS = 2.0
+# Setting shot_length: how much narration one shot covers, as full-width characters (about 4.8 a second with
+# the default voice): a shot takes subtitle lines until it reaches the first number and never passes the
+# second. Similar channels cut every 6-7 s; one line per shot (about 2.5 s) needs 2-3 times the clips,
+# so a long script takes that much longer to match and repeats more.
+SHOT_WIDTHS = {"long": (28, 44), "medium": (19, 30), "line": None}
 
 
-def line_shots(script: str, line_chars: int) -> list[dict]:
-    """One subtitle line per shot: sentences, split at clauses (then words) when wider than a line.
+def shot_widths(values: dict | None = None):
+    from . import config
+    choice = str((values if values is not None else config.read()).get("shot_length") or "long")
+    return SHOT_WIDTHS.get(choice, SHOT_WIDTHS["long"])
+
+
+def line_shots(script: str, line_chars: int, widths: tuple[int, int] | None = None) -> list[dict]:
+    """Subtitle lines (sentences, split at clauses, then words, when wider than a line), grouped into shots.
     A piece too short to speak for about a second joins its narrower neighbour in the same paragraph
-    (lines up to a blank line), as long as the result still fits one subtitle line."""
+    (lines up to a blank line), as long as the result still fits one subtitle line. With widths
+    (target, most) neighbouring lines of a paragraph then share a shot until it is about target characters
+    wide; the subtitles still show one line at a time. Without, one line per shot."""
     pieces, paragraph = [], 0
     for line in script.splitlines():
         if not line.strip():
@@ -81,6 +94,15 @@ def line_shots(script: str, line_chars: int) -> list[dict]:
                 del pieces[b]
                 merged = True
                 break
+    if widths:
+        target, most = widths
+        shots = []
+        for n, text in pieces:
+            if shots and shots[-1][0] == n and width(shots[-1][1]) < target and width(shots[-1][1]) + width(text) <= most:
+                shots[-1][1] += text
+            else:
+                shots.append([n, text])
+        pieces = shots
     if len(pieces) > MAX_SHOTS:
         raise ValueError(f"稿件按字幕行拆分后超过 {MAX_SHOTS} 个镜头，请分成多个项目")
     if planner.normalized("".join(p for _, p in pieces)) != planner.normalized(script):
@@ -216,12 +238,13 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
 
 def plan(project: dict, check=None) -> tuple[list[dict], dict]:
     """Normalise the script (script_norm: punctuation, spoken numbering, obvious typos, one sentence per
-    line), then one subtitle line per shot. info["script"] is the standard text narration will read."""
+    line), then subtitle lines grouped into shots (setting shot_length). info["script"] is the standard text
+    narration will read."""
     from . import script_norm
     script = project.get("script", "").strip()
     if not script:
         raise ValueError("请先输入文稿")
     script, normalized = script_norm.normalize(script, check)
-    shots = line_shots(script, subtitle_style.line_chars_for(project.get("aspect", "16:9")))
+    shots = line_shots(script, subtitle_style.line_chars_for(project.get("aspect", "16:9")), shot_widths())
     info = annotate(shots, script, project.get("requirements", ""), check)
     return shots, info | {"script": script, "normalize": normalized}

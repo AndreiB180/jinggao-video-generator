@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import re
 import time
 from copy import deepcopy
@@ -74,6 +75,10 @@ def create_app() -> FastAPI:
         lines.insert(5, f"内存：{info.get('memory_gb')} GB · 这台电脑最多同时 {info.get('max_videos')} 条"
                         f"（按 CPU {info.get('cpu_videos')}、按内存 {info.get('memory_videos')}）"
                         f" · 读字用显卡 {'是' if info.get('ocr_gpu') else '否'}")
+        from . import health, power
+        lines[-1:-1] = health.lines(health.run()) + ([
+            "  节能限速：" + ("已关闭（制作进程可用全部大核）" if power.throttling_off else "没能关闭（建议电源计划选「高性能」）")]
+            if sys.platform == "win32" else [])
         live = {}
         for path in (paths.DATA / "diag").glob("*.json"):
             try:
@@ -85,11 +90,13 @@ def create_app() -> FastAPI:
         with store.connection() as con:
             jobs = con.execute("SELECT jobs.*, json_extract(projects.body, '$.title') AS title FROM jobs JOIN projects "
                                "ON projects.id=jobs.project_id WHERE jobs.kind='produce' AND jobs.created>? "
-                               "ORDER BY jobs.created DESC LIMIT 40", (time.time() - 86400,)).fetchall()
+                               "AND jobs.status!='queued' ORDER BY jobs.status='running' DESC, jobs.created DESC "
+                               "LIMIT 40", (time.time() - 86400,)).fetchall()
+            queued = con.execute("SELECT COUNT(*) FROM jobs WHERE kind='produce' AND status='queued'").fetchone()[0]
         now = time.time()
-        busy = [j for j in jobs if j["status"] in ("running", "queued")]
-        if busy:
-            lines.append(f"正在做 / 排队（{len(busy)}）：")
+        busy = [j for j in jobs if j["status"] == "running"]
+        if busy or queued:
+            lines.append(f"正在做（{len(busy)}）· 排队 {queued} 条：")
             for j in busy:
                 waits = (live.get(j["id"]) or {}).get("waited") or {}
                 lines.append(f"  {str(j['title'])[:24]} · {j['status']} {j['progress']:.0f}% · 已 {now - j['created']:.0f} 秒 · "
@@ -115,6 +122,12 @@ def create_app() -> FastAPI:
                          + f" · 排队 {report.get('waited') or '-'} · 模型 {report.get('model_seconds') or '-'}"
                          + f" · 下载 {report.get('fetch_seconds') or '-'}")
         return PlainTextResponse("\n".join(lines))
+
+    @app.get("/api/system/health")
+    def system_health():
+        """电脑体检 readings (memory, CPU load and clock, busiest processes, power plan, antivirus, disk)."""
+        from . import health
+        return health.run(max_age=5)
 
     @app.get("/api/assist")
     def assist_status():
@@ -378,7 +391,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/queue/retry", status_code=202)
     def retry_queue(body: QueueAction):
-        """Start again every failed or interrupted video (of one batch), from where each stopped."""
+        """Start again every failed or interrupted video (of one batch), from where each stopped; with
+        cancelled, also the ones that were cancelled (after 全部取消, without importing them again)."""
         with store.connection() as con:
             rows = con.execute("SELECT * FROM jobs WHERE kind='produce' ORDER BY created DESC LIMIT 1000").fetchall()
         latest = {}
@@ -387,7 +401,8 @@ def create_app() -> FastAPI:
         retried = 0
         for row in latest.values():
             payload = json.loads(row["payload"])
-            if row["status"] in ("failed", "interrupted") and (not body.batch or payload.get("batch") == body.batch):
+            wanted = ("failed", "interrupted") + (("cancelled",) if body.cancelled else ())
+            if row["status"] in wanted and (not body.batch or payload.get("batch") == body.batch):
                 try:
                     store.enqueue(row["project_id"], "produce", payload)
                     retried += 1

@@ -109,10 +109,12 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
  });
  const live=rows.filter(r=>r.status==='running'||r.status==='queued');
  const failed=rows.filter(r=>r.status==='failed'||r.status==='interrupted');
+ const cancelled=rows.filter(r=>r.status==='cancelled');
  const count=(s:string)=>rows.filter(r=>r.status===s).length;
  const sorted=[...rows].sort((a,b)=>(order[a.status]??6)-(order[b.status]??6)||(a.status==='queued'?a.created-b.created:b.updated-a.updated)).slice(0,MAX);
  const cancelAll=()=>{if(confirm(`取消全部 ${live.length} 个排队和制作中的视频？已经做好的不受影响。`))act(async()=>{const r=await request('/queue/cancel',{});await refresh();setNote(`已取消：排队 ${r.queued} 个，正在制作的 ${r.running} 个会在当前步骤结束后停下。`)})};
  const retryAll=()=>act(async()=>{const r=await request('/queue/retry',{});await refresh();setNote(`已重新排队 ${r.retried} 个，会从各自中断的地方继续。`)});
+ const restartCancelled=()=>act(async()=>{const r=await request('/queue/retry',{cancelled:true});await refresh();setNote(`已重新排队 ${r.retried} 个，会从各自停下的地方继续。`)});
  return <div className="modal-backdrop"><section className="modal batch-modal" role="dialog" aria-modal="true" aria-label="批量制作"><div className="modal-heading"><div><h2>批量制作</h2></div><button className="icon-button" aria-label="关闭批量制作" onClick={close}><X/></button></div><div className="modal-content">
   <div className="batch-mode">
    <button className={mode==='text'?'on':''} onClick={()=>setMode('text')}><FileText size={22}/><strong>文稿批量</strong><small>一篇文稿做一条视频，自动配音</small></button>
@@ -173,6 +175,7 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
   <div className="queue-head"><h3>制作队列</h3>
    {rows.length>0&&<span>制作中 {count('running')} · 排队 {count('queued')} · 已完成 {count('completed')}{failed.length?` · 失败 ${failed.length}`:''}</span>}
    <div>{failed.length>0&&<button className="secondary small" disabled={busy} onClick={retryAll}><RotateCcw size={14}/>失败的全部重试</button>}
+   {cancelled.length>0&&<button className="secondary small" disabled={busy} onClick={restartCancelled}><RotateCcw size={14}/>取消的全部重新开始</button>}
    {live.length>0&&<button className="secondary small danger" disabled={busy} onClick={cancelAll}><Square size={13}/>全部取消</button>}</div>
   </div>
   <FolderBar label="做好的视频自动保存在（每条一个 MP4，文件名就是标题）"/>

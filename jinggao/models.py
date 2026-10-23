@@ -123,6 +123,7 @@ class BatchRequest(Strict):
 
 class QueueAction(Strict):
     batch: str | None = Field(default=None, max_length=40)
+    cancelled: bool = False     # retry: also start again the videos that were cancelled
 
 
 class AssetPatch(Strict):

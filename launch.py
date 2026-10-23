@@ -168,6 +168,9 @@ def main():
     store.recover("background")
     checking.join(90)
     print(gpu.summary(card) if card.get("checked") else "显卡检测未完成，先用 CPU 合成", flush=True)
+    from jinggao import power
+    power.full_speed()            # this process also runs FFmpeg (previews, the 精修 page)
+    power.unthrottle_children()
     limits = throttle.shared(multiprocessing, {"gpu": card.get("sessions") or 3})
     throttle.install(limits)      # this process too, so the settings page reports the real slot sizes
     def start_slot(lane="main", slot=0):

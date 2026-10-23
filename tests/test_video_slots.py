@@ -64,6 +64,8 @@ def test_batch_of_a_hundred_with_workers_cancel_and_retry(tmp_path, monkeypatch)
         assert client.post("/api/queue/retry", json={"batch": batch}).json() == {"retried": 1}
         again = [row for row in client.get("/api/queue").json() if row["status"] == "queued"]
         assert len(again) == 1 and again[0]["batch"] == batch
+        # 全部取消 by mistake: one button brings the cancelled ones back, each from where it stopped.
+        assert client.post("/api/queue/retry", json={"cancelled": True}).json() == {"retried": 99}
 
 
 def test_video_workers_setting_is_clamped(monkeypatch):

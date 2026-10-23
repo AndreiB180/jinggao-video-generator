@@ -1059,8 +1059,11 @@ def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
     throttle.install(shared, throttle.MAX_VIDEOS if lane == "background" else slot)
     parent = multiprocessing.parent_process()
     if parent is not None:
-        # A worker process started by the launcher: its encodes must not make the computer sluggish.
+        # A worker process started by the launcher: its encodes must not make the computer sluggish, but
+        # Windows must not throttle it to the efficiency cores either (it has no window of its own).
         power.lower_priority()
+        power.full_speed()
+        power.unthrottle_children()
         threading.Thread(target=_report_waits, args=(f"{lane}-{slot}",), daemon=True).start()
         def watch_parent():
             while parent.is_alive():

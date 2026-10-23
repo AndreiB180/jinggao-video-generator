@@ -351,6 +351,23 @@ def test_shots_hold_one_subtitle_line_each():
     assert subtitle_style.line_chars_for("9:16", {"subtitle_size": "84"}) < 20
 
 
+def test_long_shots_take_neighbouring_lines_of_a_paragraph():
+    from jinggao import subtitle_style
+    script = ("中东局势突然升级，多国紧急撤侨。航母编队已经进入相关海域，周边国家进入戒备状态。"
+              "分析人士认为，这次冲突短期内难以平息，油价应声上涨。\n\n"
+              "另一边，外交斡旋仍在继续。")
+    lines = express_plan.line_shots(script, 20)
+    shots = express_plan.line_shots(script, 20, express_plan.SHOT_WIDTHS["long"])
+    texts = [s["narration"] for s in shots]
+    assert "".join(texts) == script.replace("\n", "")
+    assert len(shots) < len(lines)
+    target, most = express_plan.SHOT_WIDTHS["long"]
+    assert all(subtitle_style.width(t) <= most for t in texts)
+    assert texts[-1] == "另一边，外交斡旋仍在继续。"     # a new paragraph starts a new shot
+    assert express_plan.shot_widths({"shot_length": "line"}) is None
+    assert express_plan.shot_widths({}) == express_plan.SHOT_WIDTHS["long"]   # the default
+
+
 def test_shot_lines_are_timed_by_their_own_characters():
     # Uneven speech: the first five characters of the second sentence take 2.0 s, the rest 0.5 s.
     # A proportional (cue-only) split would cut at 1.25 s; a wrong char_offset would read the first sentence.
