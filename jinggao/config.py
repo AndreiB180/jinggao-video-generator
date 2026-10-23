@@ -19,7 +19,7 @@ DEFAULTS = {
     "tts_api_key": "", "tts_model": "", "tts_voice": "alloy",
     "tts_pricing_json": "",
     "encoder": "auto", "search_provider": "mixed",
-    "baidu_voice_name": "磁性专业很灵动",
+    "baidu_voice_name": "磁性专业很灵动", "baidu_browser": "auto",
     "plan_workers": "3", "match_workers": "3", "render_workers": "3", "video_workers": "3",
     "plan_retries": "1",
     "source_plan_mode": "unified", "pixel_observer_mode": "joint",
@@ -67,8 +67,9 @@ def read() -> dict:
 
 
 def migrate() -> None:
-    """Once per change of the default voice: a saved Baidu 一镜 choice (retired) and then a saved 千问配音
-    (paid per character) move to the free voice; a choice made after that is kept."""
+    """Once per change of the default voice: a Baidu 一镜 choice saved before 2026-10-14 (when it could not be
+    used on Windows) and then a saved 千问配音 (paid per character) move to the free voice. Settings saved by this
+    version carry both flags (update()), so a choice made afterwards, 百度一镜 included, is kept."""
     p = paths.DATA / "settings.json"
     if not p.exists():
         return
@@ -109,6 +110,10 @@ def update(values: dict) -> dict:
         raise ValueError("编码方式无效")
     if values.get("tts_provider", "system") not in ("system", "edge_tts", "qwen_tts", "compatible", "import", "baidu_web", "baidu_http"):
         raise ValueError("配音方式无效")
+    if values.get("baidu_browser", "auto") not in ("auto", "edge", "chrome"):
+        raise ValueError("一镜专用浏览器须为 auto、edge 或 chrome")
+    if len(values.get("baidu_voice_name", "").strip()) > 60:
+        raise ValueError("一镜音色名称太长")
     from . import edge_voice, qwen_tts
     if values.get("edge_tts_voice", edge_voice.DEFAULT_VOICE) not in edge_voice.NAMES:
         raise ValueError("免费配音音色无效")
@@ -149,6 +154,9 @@ def update(values: dict) -> dict:
     paths.prepare()
     with _lock:
         data = read() | values
+        # Whatever is saved now is the user's current choice: the one-time migration must never undo it
+        # (without the flags, a 百度一镜 or 千问 choice saved before the next start would be moved to the free voice).
+        data["tts_migrated"] = data["tts_migrated_edge"] = "1"
         from .tts_costs import validate_pricing
         validate_pricing(data["tts_pricing_json"])
         for key in ("model_project_budget_cny", "model_daily_budget_cny", "model_provider_budget_cny", "model_job_budget_cny",

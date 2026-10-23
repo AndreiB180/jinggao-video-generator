@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react';
 import {AudioLines,CheckCircle2,FileText,FolderOpen,Plus,RotateCcw,Square,Trash2,Upload,X} from 'lucide-react';
 import {useVoices} from './VoicePicker';
+import {BaiduVoiceSelect} from './BaiduVoice';
 import {FolderBar,VideoFileActions,fileName} from './FileActions';
 
 type Item={title:string;script:string};
@@ -154,7 +155,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
    <label>清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p · 更快</option></select></label>
    <label>画面比例<select value={aspect} onChange={e=>setAspect(e.target.value)}><option value="16:9">横屏 16:9</option><option value="9:16">竖屏 9:16</option></select></label>
    <label>素材组合<select value={policy} onChange={e=>setPolicy(e.target.value)}><option value="video_preferred">至少 80% 实拍视频</option><option value="video_only">全部实拍视频</option><option value="mixed">图片与视频混合</option></select></label>
-   {mode==='text'&&voices&&voices.voices.length>0&&<label>配音音色<select value={settings[voices.voice_key]||voices.voice} onChange={e=>change(voices.voice_key,e.target.value)}>{voices.voices.map(v=><option key={v.id} value={v.id}>{v.name} · {v.note}</option>)}</select></label>}
+   {mode==='text'&&provider==='baidu_web'&&<BaiduVoiceSelect value={settings.baidu_voice_name||''} change={name=>change('baidu_voice_name',name)}/>}
+   {mode==='text'&&['edge_tts','qwen_tts'].includes(provider)&&voices&&voices.voices.length>0&&<label>配音音色<select value={settings[voices.voice_key]||voices.voice} onChange={e=>change(voices.voice_key,e.target.value)}>{voices.voices.map(v=><option key={v.id} value={v.id}>{v.name} · {v.note}</option>)}</select></label>}
    <label className="checkbox burn-toggle"><input type="checkbox" checked={burn} onChange={e=>setBurn(e.target.checked)}/>画面上显示字幕<small>{burn?'直接出片带字幕':'不带字幕，另附 SRT（进剪映用）'}</small></label>
   </div>
   </div>

@@ -93,6 +93,7 @@ LIMITS = {
     "frames": cpu_slots() + 1,   # short FFmpeg decodes for watermark analysis and QA stills
     "qwen_tts": 3,         # 千问配音: 3 concurrent requests per Alibaba Cloud account
     "edge_tts": 4,         # free Edge voices: one IP, keep it modest
+    "baidu_web": 1,        # 百度一镜: one dedicated browser and download folder, one narration at a time
 }
 MAX_VIDEOS = 6             # videos made at the same time (setting video_workers)
 GPU_WAIT = 3.0             # seconds a clip waits for the card before a free CPU slot may take it

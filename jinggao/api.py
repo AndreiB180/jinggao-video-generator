@@ -317,8 +317,26 @@ def create_app() -> FastAPI:
 
     @app.get("/api/baidu/status")
     def baidu_status():
-        from .baidu_http import status
+        # Browser and login state only: opens nothing and sends no request to Baidu.
+        from .baidu_web import status
         return status()
+
+    @app.get("/api/baidu/voices")
+    def baidu_voices():
+        from .baidu_web import cached_voices
+        return cached_voices() | {"voice": config.read()["baidu_voice_name"].strip()}
+
+    @app.post("/api/baidu/voices/refresh")
+    def baidu_voices_refresh():
+        from .baidu_web import refresh_voices
+        return refresh_voices() | {"voice": config.read()["baidu_voice_name"].strip()}
+
+    @app.get("/api/baidu/voices/sample")
+    def baidu_voice_sample(name: str):
+        from .baidu_web import sample
+        path = sample(name)
+        kinds = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg"}
+        return FileResponse(path, media_type=kinds.get(path.suffix, "audio/mpeg"))
 
     @app.post("/api/bilibili/qr")
     def bilibili_qr():

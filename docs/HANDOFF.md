@@ -8,7 +8,7 @@
 
 最新质量标准优先于历史提示和旧测试：**普通画面只要大致相关、看着自然、没有明显错配即可；具体具名人物须确认。** 普通设备型号、年份、地点、动作、流程阶段不逐字追求完全一致。明确人工指定的画面要求保留。人物身份靠来源文字和画面姓名等依据核对，不靠脸部相似度。继续处理明显跑题、严重遮挡、广告、黑屏以及字幕同步问题。
 
-默认 720p 以上、真实视频时长至少 80%，横竖屏支持。**2026-10-14 客户放弃百度一镜（Windows 上打不开一镜专用浏览器），配音改为千问配音 qwen3-tts-flash**，见下文“v0.3”一节。主要模型渠道为阿里云 Qwen，一个模型 API Key 即可配置核心模型流程；素材站 Key 可选。
+默认 720p 以上、真实视频时长至少 80%，横竖屏支持。**2026-10-14 客户放弃百度一镜（Windows 上打不开一镜专用浏览器），配音改为千问配音 qwen3-tts-flash**，见下文“v0.3”一节；2026-10-23 修好后百度一镜重新作为可选配音（见“百度一镜重新启用”一节），默认仍是免费配音。主要模型渠道为阿里云 Qwen，一个模型 API Key 即可配置核心模型流程；素材站 Key 可选。
 
 ## 这份代码是什么
 
@@ -171,7 +171,7 @@
 - 单次最多 600 计费字符（汉字算 2），按句切成 ≤480 计费字符的段，3 路并发（8 路会 429），429/5xx 退避重试。qwen-tts / qwen-tts-latest 返回 404。
 - 计费：0.8 元 / 万计费字符（≈0.16 元 / 千汉字），`tts_costs.speech_request` 内置这条公开价，按响应 `usage.characters` 结算。**配音单独预算**：`costs._reserve` 里 `category='tts'` 只受 `tts_daily_budget_cny`（默认 5 元）限制，模型的任务 / 项目 / 每日预算只算模型请求；`costs.summary` 新增 `model` / `speech` 两组数字，项目页费用条分开显示。
 - 音色：`qwen_tts.VOICES` 37 个（解说 / 故事 / 方言 / 角色四组），默认 `Ethan`（晨煦，本地 ASR 复核 100% 一致，约 4.2 字/秒）。试听样音已生成并随源码放在 `assets/voices/*.mp3`（.gitignore 已放行），所以试听不花钱；缺失时 `POST /api/tts/preview` 生成一次并缓存在 data/voice-samples。
-- `config.migrate()`（launch.py 启动时调用一次）把已保存的 `baidu_http` / `baidu_web` 改为 `qwen_tts`，并写 `tts_migrated=1`，之后用户再改不会被覆盖。百度代码仍在，界面已去掉一镜按钮和选项。
+- `config.migrate()`（launch.py 启动时调用一次）把已保存的 `baidu_http` / `baidu_web` 改为 `qwen_tts`，并写 `tts_migrated=1`，之后用户再改不会被覆盖。百度代码仍在，界面已去掉一镜按钮和选项。（2026-10-23：`config.update()` 保存时也写这两个标记，新装用户在第二次启动前选的配音不会再被迁移改掉；一镜选项已恢复。）
 
 **音频成片**：上传角色 `source_audio`（`/api/projects/{id}/upload`，3 秒到 60 分钟，项目须无分镜）。produce 先跑 `transcribe` 阶段：本地 paraformer 识别 → `script_norm.normalize` 补标点 → 写入 `script`（原始识别文本存 `script_original`，标题取第一句）；规划后把上传的音频作为 `full_audio` 对齐，不再配音。
 
@@ -334,6 +334,24 @@
 - 客户稿子长（1100–2100 字、3–8 分钟），一行字幕一镜要 63–140 镜。新设置 `shot_length`（默认 long）：`express_plan.line_shots` 把同段相邻字幕行合成一镜到约 28 字（最多 44），2077 字 140→61 镜、中位约 6 秒（同行 6.4–6.9 秒）；字幕仍按每字时间一行行显示。宿舍机用他 3 篇真稿子同时 3 条 471 秒全部做完。
 - `health.py` 电脑体检（一次 PowerShell/WMI，约 10 秒，60 秒缓存）：内存与换页、CPU 占用与实际性能、最占 CPU/内存的进程、电源计划、杀毒软件、镜稿所在硬盘；进诊断信息，`GET /api/system/health` 远程直接看。
 - 诊断信息不再逐条列排队的视频（44 条排队会把正在做的挤出前 40 条）；`/api/queue/retry` 加 `cancelled`，批量窗口「取消的全部重新开始」。
+
+## 百度一镜重新启用（2026-10-23，分支 baidu-voice）
+
+**客户当时“打不开一镜专用浏览器”的原因**（在宿舍机 Win11 桌面会话里复现排查；旧代码在干净环境下其实能打开 Edge）：
+1. 后台进程（镜稿服务）打开的窗口受 Windows 前台锁限制，会出现在镜稿网页后面；再点一次按钮只回复“已开启”，从不把窗口调到前面。
+2. Edge 关掉窗口后默认在后台继续运行，CDP 端口还在但没有窗口，于是之后每次点按钮都“已开启”却看不到任何窗口。
+3. 浏览器只在三个固定目录里找，不查注册表 App Paths（Chrome/Edge 装到别处就报“没找到”）；只等 10 秒。
+4. 全新配置的 Edge 会自动登录 Windows 的微软账号，并弹出“正在同步你的浏览数据”，挡住百度登录框，还会把用户自己 Edge 的数据同步进专用配置。
+
+**修法**（`jinggao/baidu_web.py`）：按设置 `baidu_browser`（auto/edge/chrome，自动＝先 Edge 后 Chrome）从注册表 App Paths 和常见目录找浏览器；启动参数加 `--disable-sync --disable-features=msImplicitSignin`（Edge），以及防后台降速的三个参数；在 Local State 里关掉后台模式；不用 CREATE_NO_WINDOW，显式 SW_SHOWNORMAL、普通优先级；最多等 30 秒，失败换另一个浏览器。已开着时用 CDP 找到/新开一镜页面，取消最小化，再用 Win32 把窗口置顶一下（TOPMOST→NOTOPMOST）并尝试前台，不行就闪任务栏。配置目录被一个没开 CDP、或卡死的副本占着时，只结束命令行里正好是这个 `--user-data-dir` 的进程，然后重开。配置目录：Windows 上 Edge 用 `data/baidu-browser`（沿用旧目录），Chrome 用 `data/baidu-browser-chrome`。
+
+**登录与状态**：`GET /api/baidu/status` 只看专用浏览器有没有 BDUSS cookie（不读值，不向百度发请求）。生成前先查登录：没登录就把窗口调到前面，立刻报“一镜还没有登录……扫码登录”，不再等控件超时。
+
+**音色**：`POST /api/baidu/voices/refresh` 在后台标签页打开 `clone-voice?platform=video&voice_tab=public`，从网页自己加载的 `tts_list` 响应里读公共音色（名称、描述、`category_list`、`show_url` 样音，只保留 status=1），并和页面卡片名称核对，缓存到 `data/baidu-voices.json`；`GET /api/baidu/voices` 读缓存，`GET /api/baidu/voices/sample?name=` 下载并缓存样音（只允许百度 CDN 域名）。2026-10-23 实测「视频音色 → 公共库」85 个（女 66、男 19），全部带样音；「直播音色」公共库 400+ 个，但配音流程走 platform=video（网页单次 5000 字），所以只列视频音色。生成时按设置 `baidu_voice_name` 搜索；搜索结果稳定后没有这个名字就报“公共音色库里找不到「…」，请刷新音色列表重新选”（约 10 秒，不点下载）。后台标签页用 `Emulation.setFocusEmulationEnabled` 才能输入文字。网页的新手引导气泡（`.huibo-novice-guide-pop`）只点 × 关掉。跨视频进程一次只做一条一镜配音（`throttle` 的 `baidu_web` 名额）。
+
+**界面**：设置 → 配音 → 百度一镜：说明、打开专用浏览器按钮、登录状态（未登录时每 3 秒刷新，登录后自动读一次音色）、音色卡片（女声/男声/搜索、试听）、刷新音色列表、专用浏览器选择。首页和批量面板显示一镜音色下拉框。
+
+**实测（宿舍机 Win11，Edge 155，2026-10-23）**：桌面会话里中文+空格路径的全新配置 1.7 秒打开、窗口在最前；最小化后再点会恢复到最前；关掉所有标签后浏览器自动退出，再点 4 秒重开；没登录时生成 0.6 秒报错。登录后（用户短信登录）：85 个音色；选第 4 页的「稳重成熟男主播」，3 句 70 字稿完整成片，配音 12.8 秒（基频 147 Hz，跟它的样音 158 Hz 一致，默认女声样音是 222 Hz），本地识别对齐成功，成片 12.8 秒；换「自然爽朗低沉女」重配 11 秒完成（193 Hz）；不存在的音色 10 秒报“找不到”。Chrome 路径在宿舍机上没测（没装 Chrome）。
 
 ## 代码入口
 
