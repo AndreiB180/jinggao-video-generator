@@ -82,3 +82,20 @@ def test_windows_move_onto_the_scene_and_presenter_only_windows_are_dropped(monk
             raise ValueError("B站预览接口暂时限制访问（风控）")
     kept = real(Blocked(), {"a": [(report, 20.0, 0.3)]}, notes=notes)
     assert kept == {"a": [(report, 20.0, 0.3)]}                # unreadable previews: unchecked, kept
+
+
+def test_news_mode_is_turned_on_once_for_settings_saved_while_it_was_an_experiment(tmp_path, monkeypatch):
+    import json
+    from jinggao import config, paths
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    paths.DATA.mkdir(parents=True)
+    saved = dict(config.DEFAULTS, news_mode="0", tts_migrated="1", tts_migrated_edge="1")
+    saved.pop("news_migrated")
+    (paths.DATA / "settings.json").write_text(json.dumps(saved), "utf-8")      # as 0.4.3 saved it
+    config.migrate()
+    assert config.read()["news_mode"] == "1"
+    config.update({"news_mode": "0"})                                           # switched off afterwards: stays off
+    config.migrate()
+    assert config.read()["news_mode"] == "0"
+    monkeypatch.setattr(paths, "DATA", tmp_path / "new")
+    assert config.read()["news_mode"] == "1"                                    # a new install has it on

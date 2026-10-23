@@ -28,7 +28,7 @@ DEFAULTS = {
     "model_provider_budget_cny": "",
     "cost_input_per_million": "", "cost_cached_per_million": "", "cost_output_per_million": "",
     "cost_image_tokens": "0",
-    "pipeline": "express", "express_final_check": "1", "shot_length": "long", "news_mode": "0",
+    "pipeline": "express", "express_final_check": "1", "shot_length": "long", "news_mode": "1", "news_migrated": "",
     "subtitle_font": "black", "subtitle_size": "84", "subtitle_color": "white",
     "news_crawler_dir": "", "news_crawler_command": "", "news_crawler_output": "",
     "news_crawler_limit": "5", "news_crawler_platforms": "",
@@ -67,21 +67,24 @@ def read() -> dict:
 
 
 def migrate() -> None:
-    """Once per change of the default voice: a Baidu 一镜 choice saved before 2026-10-14 (when it could not be
-    used on Windows) and then a saved 千问配音 (paid per character) move to the free voice. Settings saved by this
-    version carry both flags (update()), so a choice made afterwards, 百度一镜 included, is kept."""
+    """Once per change of a default: a Baidu 一镜 choice saved before 2026-10-14 (when it could not be used on
+    Windows) and then a saved 千问配音 (paid per character) move to the free voice; 新闻模式, off while it was an
+    experiment (0.4.3), is turned on once (0.4.4). Settings saved by this version carry the flags (update()),
+    so a choice made afterwards, 百度一镜 or 新闻模式 off included, is kept."""
     p = paths.DATA / "settings.json"
     if not p.exists():
         return
     with _lock:
         data = json.loads(p.read_text("utf-8"))
-        if data.get("tts_migrated") and data.get("tts_migrated_edge"):
+        if data.get("tts_migrated") and data.get("tts_migrated_edge") and data.get("news_migrated"):
             return
         if not data.get("tts_migrated") and data.get("tts_provider") in ("baidu_web", "baidu_http"):
             data["tts_provider"] = "qwen_tts"
         if not data.get("tts_migrated_edge") and data.get("tts_provider") == "qwen_tts":
             data["tts_provider"] = "edge_tts"
-        data["tts_migrated"] = data["tts_migrated_edge"] = "1"
+        if not data.get("news_migrated"):
+            data["news_mode"] = "1"
+        data["tts_migrated"] = data["tts_migrated_edge"] = data["news_migrated"] = "1"
         temporary = p.with_suffix(".tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
         os.chmod(temporary, 0o600)
@@ -158,7 +161,7 @@ def update(values: dict) -> dict:
         data = read() | values
         # Whatever is saved now is the user's current choice: the one-time migration must never undo it
         # (without the flags, a 百度一镜 or 千问 choice saved before the next start would be moved to the free voice).
-        data["tts_migrated"] = data["tts_migrated_edge"] = "1"
+        data["tts_migrated"] = data["tts_migrated_edge"] = data["news_migrated"] = "1"
         from .tts_costs import validate_pricing
         validate_pricing(data["tts_pricing_json"])
         for key in ("model_project_budget_cny", "model_daily_budget_cny", "model_provider_budget_cny", "model_job_budget_cny",
