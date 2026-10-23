@@ -339,6 +339,35 @@ class Bilibili:
                                  "index": segment.get("indexRange") or segment.get("index_range")}}
 
 
+    def audio(self, bvid: str) -> dict | None:
+        """The smallest audio-only DASH stream of a video ({urls, headers, duration}), for transcribing what a
+        news report says (news_pool); None when the video has none."""
+        view = self._api("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid})
+        if view.get("code") != 0:
+            raise ValueError(f"B站视频信息不可用：{view.get('message', '')}")
+        data = view["data"]
+        params = {"bvid": bvid, "cid": data["cid"], "qn": 16, "fnval": 16, **self._dm()}
+        if not self.logged_in:
+            params["try_look"] = 1
+        tracks = []
+        for attempt in range(3):
+            play = self._api("https://api.bilibili.com/x/player/wbi/playurl", params)
+            tracks = ((play.get("data") or {}).get("dash") or {}).get("audio") or []
+            if play.get("code") == 0 and tracks:
+                break
+            # Under load B站 answers code 0 with a v_voucher and no streams: back off and ask again.
+            throttle.bili_refused(3.0 * (attempt + 1))
+            time.sleep(3.0 * (attempt + 1))
+        else:
+            raise ValueError(f"B站没有给出音频流（code {play.get('code')}{'，风控' if (play.get('data') or {}).get('v_voucher') else ''}）")
+        track = min(tracks, key=lambda a: a.get("bandwidth") or 1e12)
+        urls = [track.get("baseUrl") or track.get("base_url")] + list(track.get("backupUrl") or track.get("backup_url") or [])
+        urls = sorted((u for u in urls if u), key=lambda u: 0 if any(m in u for m in MIRRORS) else 1)
+        part = (data.get("pages") or [{}])[0]
+        return {"urls": urls, "headers": {"User-Agent": UA, "Referer": BILI_REFERER},
+                "duration": float(part.get("duration") or data.get("duration") or 0)}
+
+
 def qr_login_start() -> dict:
     """Start a Bilibili app QR login. Returns {url, key, png}; scan within ~3 minutes."""
     import qrcode

@@ -17,7 +17,7 @@ BATCH = 100
 
 SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的镜头，请为找“实拍视频素材”做检索规划。
 只输出 JSON：
-{"domain":"..","ancient":[],"topic":{"zh":["..",".."],"en":["..",".."]},
+{"domain":"..","ancient":[],"event":[],"topic":{"zh":["..",".."],"en":["..",".."]},
  "groups":[{"id":"G1","zh":["..",".."],"en":["..",".."],"person":""}],
  "shots":[{"id":"S1","g":"G1","v":"..","p":[]}]}
 规则：
@@ -30,7 +30,8 @@ SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的�
 7. 若有“用户画面要求”，必须体现在检索词和画面建议中。
 9. ancient：口播里出现的、生活在照相术出现（约1840年）以前的具名古人姓名（如范仲淹、包拯、李白），没有就空数组；这些人不可能有真实影像。
 8. domain：整篇所属的宽泛领域，2-6字（如“乒乓球”“集装箱港口”“兰州牛肉面”“宋朝历史”“人工智能”）。不要用文章标题、具体事件或人物（讲范仲淹救灾写“宋朝历史”，不能写“范仲淹荒政”）。时事新闻写事件所在的国家或地区（如“也门”“俄乌”“台海”“日本”），不要写“局势”“形势”“问题”“风云”这类抽象词（搜不到画面）。除带具体人名的检索词外，每个 zh 检索词都要包含这个领域词，避免搜到同名的其他领域（例如讲乒乓球世界排名，要写“乒乓球 世界排名”，不能只写“世界排名”）。
-10. 古人（ancient 里的人）：他们没有真实影像，组的 zh 检索词写能搜到影视剧、纪录片片段的词，如“范仲淹 电视剧 片段”“范仲淹 纪录片”；普通历史画面的组写朝代场景，如“宋朝 市井 影视剧”“古代 粮仓 纪录片”“宋代 西湖 画舫”，尽量是有动作的视频画面，少用静态插画。"""
+10. 古人（ancient 里的人）：他们没有真实影像，组的 zh 检索词写能搜到影视剧、纪录片片段的词，如“范仲淹 电视剧 片段”“范仲淹 纪录片”；普通历史画面的组写朝代场景，如“宋朝 市井 影视剧”“古代 粮仓 纪录片”“宋代 西湖 画舫”，尽量是有动作的视频画面，少用静态插画。
+11. event：若整篇讲的是一件具体的新闻事件（有明确的当事方、地点或时间，例如某次袭击、某场会谈、某起案件），给 2-3 个能在 B 站搜到这件事新闻报道视频的检索词，每个 3-5 个短词，写当事方 + 地点 + 事件（如“胡塞 导弹 袭击 亚丁 总统府”“也门 内阁 会议 遇袭”“沙特 联军 空袭 萨那”）；讲的是泛泛的话题、个人故事、历史或科普，给空数组。"""
 
 
 def _text(value, limit) -> str:
@@ -170,6 +171,8 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
         answers = [_ask(shots, requirements, check)]
     # One domain word for the whole script (the first batch that names one).
     domain = next((_text(r.get("domain"), 8) for r, _ in answers if isinstance(r, dict) and _text(r.get("domain"), 8)), "")
+    # A concrete news event: queries for news reports about it (news_pool cuts their footage where they say the same).
+    event = next((_queries(r.get("event"), 40) for r, _ in answers if isinstance(r, dict) and _queries(r.get("event"), 40)), [])
     # People from before photography: no real footage can exist, so portraits and dramatisations stand in.
     ancient = sorted({name for r, _ in answers if isinstance(r, dict) and isinstance(r.get("ancient"), list)
                       for name in (_text(n, 40) for n in r["ancient"]) if len(name) >= 2 and name in script})
@@ -236,7 +239,7 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
     if domain:
         topic["zh"] = [q if domain in q.replace(" ", "") else f"{domain} {q}" for q in topic["zh"]]
     return {"mode": "express", "groups": list(groups.values()), "topic": topic, "domain": domain, "ancient": ancient,
-            "model": model, "usage": usage, "batches": len(batches)}
+            "event": event, "model": model, "usage": usage, "batches": len(batches)}
 
 
 def plan(project: dict, check=None) -> tuple[list[dict], dict]:

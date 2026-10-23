@@ -24,7 +24,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
-from . import (config, curation, execution, express_clean, express_sources as es, media, paths, planner,
+from . import (config, curation, execution, express_clean, express_sources as es, media, news_pool, paths, planner,
                screen_text, store, throttle)
 
 VERSION = 1
@@ -46,6 +46,9 @@ SOURCE_SHARE = 0.03
 HARD_SHARE = 0.04      # ...and never more than this share (one long stock take filled a third of a film)
 HARD_MIN = 2           # ...nor more than twice in a short film: viewers called three windows of one video "翻来覆去"
 SCENE_SECONDS = 20.0   # two windows of one video closer than this show the same scene
+NEWS_CAP = 6           # windows of one news report about the event (news_pool) per film
+NEWS_LATER = (0.0, 5.0, 10.0)
+NEWS_WAIT = 150.0      # seconds the matching waits, after picking, for the news reports to be transcribed
 LOW_HEIGHT = 480       # without a B站 login many drama and short-play clips stop at 480p: usable after the sharp
                        # ones (a social story otherwise loses most of its footage and repeats the rest)
 STOCK_SHARE = 0.15     # foreign stock (Pixabay) at most this share of a film: for a Chinese story its foreign
@@ -851,14 +854,16 @@ class Matcher:
                     # Hard limits (scores alone let one long stock take fill ten shots in a row): a source at
                     # most HARD_SHARE of the film, never three shots running, never the same picture again.
                     run = [assigned_keys.get(i) for i in (index - 2, index - 1, index + 1, index + 2)]
-                    if (used >= hard_cap or twin or (run[1] == key and (run[0] == key or run[2] == key))
+                    # A news report's windows show different scenes: it may fill more lines (20 s apart).
+                    if (used >= (NEWS_CAP if lane == "news" else hard_cap) or twin
+                            or (run[1] == key and (run[0] == key or run[2] == key))
                             or (run[2] == key and run[3] == key)):
                         continue
                 cost = (rank + 2.0 * used + 6.0 * max(0, used + 1 - cap) + 3.0 * adjacent
                         + (8.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
                         # Footage other recent videos already show (a batch on one topic would repeat itself).
                         + min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0))
-                        + {"pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
+                        + {"news": 0, "pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
                            "near": 6}.get(lane, 6)
                         # A line about a named person should show that person, not generic topic footage.
                         + (5 if lane == "topic" and shot.get("persons") and not self.unfilmed_shot(shot) else 0)
@@ -1416,6 +1421,20 @@ class Matcher:
         began = time.monotonic()
         self.progress(3, f"检索素材：{len(groups)} 组")
         results = self.search(groups)
+        # 新闻模式: reports about the same event, transcribed while the searched footage is previewed and picked.
+        news, news_thread = {}, None
+        event = [q for q in (self.plan.get("event") or []) if q][:2]
+        if event and self.bili and config.read().get("news_mode") == "1":
+            searched = [row for (kind, _), rows in results.items() if kind == "bili" for row in rows]
+            def news_job():
+                try:
+                    news.update(news_pool.build(self.bili, event, self.shots, self.check, self.notes,
+                                                extra_queries=[q for g in groups for q in g.get("zh", [])],
+                                                searched=searched))
+                except Exception as exc:  # noqa: BLE001 — an extra; the searched footage still works
+                    self.notes.append(f"新闻模式未完成：{type(exc).__name__}")
+            news_thread = threading.Thread(target=news_job, name="news-pool", daemon=True)
+            news_thread.start()
         chosen = self.candidates(groups, results)
         def carries(row, name):
             return name in " ".join(str(row.get(k, "")) for k in ("title", "tags", "description"))
@@ -1495,14 +1514,27 @@ class Matcher:
         for rows in tiles.values():      # pictures are only needed for the contact sheets
             for tile in rows:
                 tile["image"] = None
-        # Build ranked options per shot: own picks, then context/topic/neighbour fills.
+        if news_thread is not None:
+            news_began = time.monotonic()
+            self.progress(40, "新闻模式：对照同一事件的新闻报道")
+            news_thread.join(timeout=NEWS_WAIT)
+            self.timing["news_wait"] = round(time.monotonic() - news_began, 2)
+            if news:
+                self.timing["news"] = news.get("seconds")
+                self.notes.append(f"新闻模式：{news.get('sources', 0)} 条同一事件的报道，{len(news.get('matched') or {})} 镜对上了报道原话")
+        # The words are often said by the presenter on camera and the report cuts to the scene after: offer
+        # the moment they are said and 5 and 10 s later (QA rejects the presenter, the next one is tried).
+        news_tiles = {sid: [({"source": row, "t": float(t) + later, "hash": None}, "news") for row, t, _ in found
+                            for later in NEWS_LATER if float(t) + later < float(row.get("duration") or 1e9) - 2]
+                      for sid, found in (news.get("matched") or {}).items()}
+        # Build ranked options per shot: the matching news report first, own picks, then context/topic/neighbour fills.
         group_of = {sid: g for g in groups for sid in g["shots"]}
         options = {}
         for shot in self.shots:
             sid = shot["id"]
             index = self.position[sid]
             person = bool(shot.get("persons")) and not self.unfilmed_shot(shot)
-            own = [(t, "pick") for t in picks.get(sid, [])]
+            own = news_tiles.get(sid, []) + [(t, "pick") for t in picks.get(sid, [])]
             fill = []
             if person:
                 # Other footage of the same person (picked for other lines) before any people-free filler.
@@ -1839,7 +1871,7 @@ class Matcher:
         report = {"selected": len(final), "unmatched": unmatched, "elapsed_seconds": round(time.monotonic() - self.started, 2),
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
-                            for lane in ("pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock",
+                            for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock",
                                          "repeat", "reuse", "card")},
                   "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
                   "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),
