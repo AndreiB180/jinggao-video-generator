@@ -38,3 +38,47 @@ def test_only_report_length_videos_are_used():
                     {"id": "ok2", "duration": 600}]
     assert [r["id"] for r in news_pool.find_sources(Bili(), ["也门 袭击"])] == ["ok", "ok2"]
     assert [r["id"] for r in news_pool.find_sources(Bili(), ["也门 袭击"], used={"ok"})] == ["ok2"]
+
+
+def test_names_the_speech_model_misspells_still_match_by_sound():
+    report = {"id": "BV1", "provider": "bilibili", "duration": 300}
+    spoken = {"BV1": (report, news_pool.segments(words("今天凌晨胡赛武装向亚丁发射导弹", 30)))}
+    shots = [{"id": "a", "narration": "胡塞武装凌晨朝亚丁打了导弹。", "duration": 6}]
+    found = news_pool.match(shots, spoken, ["胡塞", "亚丁"])
+    assert found["a"][0][0]["id"] == "BV1" and 30 <= found["a"][0][1] <= 40
+    assert news_pool._named("胡赛来了", ["胡塞"]) == set()                  # by characters alone: not found
+    assert news_pool._named("胡赛来了", ["胡塞"], news_pool._sounds("胡赛来了")) == {"胡塞"}
+    assert news_pool._named("葫芦赛跑", ["胡塞"], news_pool._sounds("葫芦赛跑")) == set()   # syllables must be adjacent
+
+
+def test_windows_move_onto_the_scene_and_presenter_only_windows_are_dropped(monkeypatch):
+    from PIL import Image
+    from jinggao import express_sources as es, planner
+    report = {"id": "BV1", "provider": "bilibili", "duration": 300}
+    class Bili:
+        def previews(self, bvid, duration):
+            return [{"t": float(t)} for t in range(0, 300, 3)]
+    monkeypatch.setattr(es, "bilibili_tile", lambda bili, p: Image.new("RGB", (160, 90), (int(p["t"]) % 255, 0, 0)))
+    studio = set(range(18, 29)) | set(range(99, 120))           # the presenter talks here; the rest is on site
+    sheets = []
+    def chat(system, content, **kw):
+        sheets.append(content[0]["text"])
+        return {str(i + 1): ("主播" if t in studio else "现场") for i, t in enumerate(chat.times)}, {}
+    real = news_pool.onsite
+    def spy_sheet(frames, cols):
+        chat.times = [int(f["t"]) for f in frames]
+        return Image.new("RGB", (10, 10))
+    from jinggao import footage_index
+    monkeypatch.setattr(footage_index, "_sheet", spy_sheet)
+    monkeypatch.setattr(planner, "chat", chat)
+    notes = []
+    out = real(Bili(), {"a": [(report, 20.0, 0.3)], "b": [(report, 100.0, 0.2)], "c": [(report, 200.0, 0.2)]},
+               notes=notes)
+    assert out["a"][0][1] == 30.0 and out["c"][0][1] == 201.0      # from the first on-site frame
+    assert "b" not in out                                    # only the presenter in the 14 s after the words
+    assert len(sheets) == 1 and "1 个挪到现场画面" in notes[-1] and "1 个只有主播" in notes[-1]
+    class Blocked(Bili):
+        def previews(self, bvid, duration):
+            raise ValueError("B站预览接口暂时限制访问（风控）")
+    kept = real(Blocked(), {"a": [(report, 20.0, 0.3)]}, notes=notes)
+    assert kept == {"a": [(report, 20.0, 0.3)]}                # unreadable previews: unchecked, kept

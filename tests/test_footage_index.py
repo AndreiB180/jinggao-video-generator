@@ -83,6 +83,8 @@ def test_build_searches_describes_and_skips_known_videos(data, monkeypatch):
         counts = __import__("threading").Lock()
         def search(self, q, page=1):
             return found.get(q, [])
+        def cached(self, q, page=1):
+            return False
         def close(self):
             pass
     monkeypatch.setattr(es, "Bilibili", Bili)
@@ -296,6 +298,8 @@ def test_videos_whose_sheets_keep_failing_are_left_out(data, monkeypatch):
         counts = __import__("threading").Lock()
         def search(self, q, page=1):
             return [row("BV1stubborn0", "码头")]
+        def cached(self, q, page=1):
+            return False
         def close(self):
             pass
     monkeypatch.setattr(es, "Bilibili", Bili)
@@ -386,6 +390,8 @@ def test_refused_searches_fall_back_to_todays_cached_results(data, monkeypatch):
             calls["live"] += 1
             self.search_refused += 1
             return []
+        def cached(self, q, page=1):
+            return False
         def close(self):
             pass
     monkeypatch.setattr(es, "Bilibili", Bili)
@@ -397,3 +403,49 @@ def test_refused_searches_fall_back_to_todays_cached_results(data, monkeypatch):
     queries = [("城市", f"新词{n}") for n in range(100)] + [("城市", "已缓存")]
     report = fi.build(queries, lambda: None, lambda *a: None, widen=0)
     assert report["search_offline"] and report["indexed"] == 1 and calls["live"] < 70
+
+
+def test_a_local_model_describes_one_video_per_request(data, monkeypatch):
+    from jinggao import footage_local
+    answer = ('<think></think>{"1":["夫妻在客厅激烈争吵","影视剧","吵架 争执 夫妻矛盾"],'
+              '"图2":["男主播在演播室播报","主持人出镜","新闻 主播"],"3":"", "9":["多余","实拍"]}')
+    parsed = footage_local.parse(answer, 3)
+    assert parsed == {0: ("夫妻在客厅激烈争吵｜吵架 争执 夫妻矛盾", "影视剧"), 1: ("男主播在演播室播报｜新闻 主播", "主持人出镜")}
+    assert footage_local.parse("说不清", 3) == {}
+    frames = [{"t": float(t), "image": Image.new("RGB", (160, 90), (90, 120, 150)), "hash": t} for t in (10, 60, 120)]
+    monkeypatch.setattr(fi, "_frames", lambda bili, r, count=10: frames)
+    seen = []
+    def local(r, images):
+        seen.append((r["id"], len(images)))
+        if r["id"] == "BV1bad":
+            raise ValueError("本地模型没有给出可用的描述")
+        return footage_local.parse(answer, len(images))
+    report = {"indexed": 0, "described_frames": 0, "failed": 0}
+    fi._build_chunk(None, [("家庭", row("BV1fight", "电视剧 吵架")), ("家庭", row("BV1bad", "x"))],
+                    lambda: None, lambda *a: None, report, True, local)
+    assert sorted(seen) == [("BV1bad", 3), ("BV1fight", 3)] and report["indexed"] == 1
+    hit = fi.search("夫妻 争执")[0]
+    assert hit["id"] == "BV1fight" and hit["moments"] == [10.0] and hit["avoid"] == [60.0]
+    with fi._conn() as con:
+        assert con.execute("SELECT tries, described FROM sources WHERE id='BV1bad'").fetchone()[:] == (1, 0)
+    def down(r, images):
+        raise OSError("connection refused")
+    many = [("家庭", row(f"BV1down{n}", "x")) for n in range(9)]
+    with pytest.raises(RuntimeError, match="连续 8 个视频"):
+        fi._build_chunk(None, many, lambda: None, lambda *a: None, report, True, down)
+
+
+def test_a_new_seed_brings_frame_by_frame_descriptions_of_known_videos(data, tmp_path, monkeypatch):
+    fi.add(row("BV1rich00001", "夫妻 吵架"), [{"t": 5.0, "text": "夫妻在客厅争吵｜吵架 争执 夫妻矛盾", "kind": "影视剧"}],
+           described=True)
+    fi.add(row("BV1rich00002", "老街"), [{"t": 5.0, "text": "老街｜胡同 街巷", "kind": "实拍"}], described=True)
+    seed = tmp_path / "seed"
+    fi.export_seed(seed)
+    monkeypatch.setattr(paths, "DATA", tmp_path / "client")
+    fi.add(row("BV1rich00001", "夫妻 吵架"), [{"t": 5.0, "text": "两人在屋里说话", "kind": "影视剧"}], described=True)
+    fi.add(row("BV1rich00002", "老街"), [{"t": 5.0, "text": "本机的描述｜本机", "kind": "实拍"}], described=True)
+    fi.mark_used(["bilibili:BV1rich00001"])
+    assert fi.install_seed(seed) == 1
+    hit = fi.search("夫妻矛盾")[0]
+    assert hit["id"] == "BV1rich00001" and hit["index_used"] == 1      # better lines, its use count kept
+    assert fi.search("本机")[0]["id"] == "BV1rich00002"                 # already frame by frame: stays

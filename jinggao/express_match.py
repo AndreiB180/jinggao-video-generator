@@ -48,6 +48,7 @@ HARD_MIN = 2           # ...nor more than twice in a short film: viewers called 
 SCENE_SECONDS = 20.0   # two windows of one video closer than this show the same scene
 NEWS_CAP = 6           # windows of one news report about the event (news_pool) per film
 NEWS_LATER = (0.0, 5.0, 10.0)
+NEWS_LATER_ONSITE = (0.0, 4.0)   # windows already moved onto on-site footage by its preview frames
 NEWS_WAIT = 150.0      # seconds the matching waits, after picking, for the news reports to be transcribed
 LOW_HEIGHT = 480       # without a B站 login many drama and short-play clips stop at 480p: usable after the sharp
                        # ones (a social story otherwise loses most of its footage and repeats the rest)
@@ -1523,9 +1524,11 @@ class Matcher:
                 self.timing["news"] = news.get("seconds")
                 self.notes.append(f"新闻模式：{news.get('sources', 0)} 条同一事件的报道，{len(news.get('matched') or {})} 镜对上了报道原话")
         # The words are often said by the presenter on camera and the report cuts to the scene after: offer
-        # the moment they are said and 5 and 10 s later (QA rejects the presenter, the next one is tried).
+        # the moment they are said and 5 and 10 s later (QA rejects the presenter, the next one is tried),
+        # or, when the preview frames already moved the window onto the scene, that moment and a little later.
+        later_times = NEWS_LATER_ONSITE if news.get("onsite") else NEWS_LATER
         news_tiles = {sid: [({"source": row, "t": float(t) + later, "hash": None}, "news") for row, t, _ in found
-                            for later in NEWS_LATER if float(t) + later < float(row.get("duration") or 1e9) - 2]
+                            for later in later_times if float(t) + later < float(row.get("duration") or 1e9) - 2]
                       for sid, found in (news.get("matched") or {}).items()}
         # Build ranked options per shot: the matching news report first, own picks, then context/topic/neighbour fills.
         group_of = {sid: g for g in groups for sid in g["shots"]}

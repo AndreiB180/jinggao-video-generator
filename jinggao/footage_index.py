@@ -31,6 +31,7 @@ from .footage_topics import PACKS   # topic -> Bilibili searches
 MOMENTS = 10            # preview frames kept (and described) per video when the length is unknown
 SHEET = (6, 4)          # describe sheet: columns x rows of frames
 SEARCH_WORKERS = 3      # Bilibili's search API answers bursts with 412 risk control
+SEARCH_GAP = 0.4        # seconds between one search's result pages
 SHOT_WORKERS = 8        # videoshot metadata (same API gateway as search) and its CDN sprites
 DESCRIBE_WORKERS = 10   # the background worker allows 10 model calls at a time (execution.MODEL_SLOTS)
 MAX_TRIES = 2           # a video whose sheets failed this often is left out of later builds
@@ -334,9 +335,15 @@ def export_seed(folder=SEED, part_bytes: int = SEED_PART_BYTES) -> list:
     return parts
 
 
+def _rich(moments) -> bool:
+    """Described frame by frame by the local model, with search words ("描述｜关键词", footage_local)."""
+    return any("｜" in str(m.get("text") or "") for m in moments)
+
+
 def install_seed(folder=SEED, progress=lambda *_: None) -> int:
-    """Take in the index shipped with the app once per seed version: videos this machine lacks (its own
-    described videos stay). Written in batches, so closing the app part-way loses little and the next
+    """Take in the index shipped with the app once per seed version: videos this machine lacks, and better
+    descriptions (frame by frame, with search words) of videos it only has contact-sheet lines for; its
+    own videos stay otherwise. Written in batches, so closing the app part-way loses little and the next
     start continues; the installed version is recorded inside the index, so a new or reset index file
     is seeded again."""
     import gzip
@@ -354,6 +361,7 @@ def install_seed(folder=SEED, progress=lambda *_: None) -> int:
                 "SELECT 1 FROM sources WHERE described=1 LIMIT 1").fetchone():
             return 0
         described = {r["key"] for r in con.execute("SELECT key FROM sources WHERE described=1")}
+        rich = {r["source"] for r in con.execute("SELECT DISTINCT source FROM moments WHERE text LIKE '%｜%'")}
     added, batch, broken = 0, [], []
     for index, part in enumerate(parts):
         try:
@@ -364,9 +372,11 @@ def install_seed(folder=SEED, progress=lambda *_: None) -> int:
                     except ValueError:
                         continue
                     row = item.get("row") if isinstance(item, dict) else None
-                    if not _valid(row) or _key(row) in described:
+                    if not _valid(row):
                         continue
                     moments = [m for m in item.get("moments") or [] if isinstance(m, dict) and "t" in m]
+                    if _key(row) in described and (_key(row) in rich or not _rich(moments)):
+                        continue
                     batch.append((row, moments, str(item.get("topic", ""))[:30], True))
                     if len(batch) >= BATCH:
                         added += _write_batch(batch)
@@ -568,10 +578,12 @@ def _risk_paused(bili, check, progress, report, pauses, message):
 
 
 def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, describe: bool = True,
-          limit: int = 100000, widen: int = 8) -> dict:
+          limit: int = 100000, widen: int = 8, describer=None) -> dict:
     """Index the Bilibili results of [(topic, query)]: search, preview frames, descriptions. Each sheet's
     videos are saved as soon as it is described; videos already described (or failed twice on their own)
-    are skipped, so a stopped or failed build continues where it was."""
+    are skipped, so a stopped or failed build continues where it was. describer(row, images) -> {frame
+    index: (text, kind)} replaces the contact-sheet model with one that looks at a video at a time (a local
+    model, scripts/footage_local.py)."""
     from . import express_sources as es
     bili = es.Bilibili()
     report = {"queries": len(queries), "found": 0, "new": 0, "indexed": 0, "described_frames": 0, "failed": 0,
@@ -587,14 +599,15 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
                 if bili.search_refused >= 3 and not bili.offline_search:
                     break                  # risk control: stop paging (the build pauses after this batch)
                 try:
+                    asked = not bili.cached(query, page)
                     got = bili.search(query, page)
                 except Exception:
                     break
                 found += got
                 if not got:
                     break
-                if not bili.offline_search:
-                    time.sleep(0.4)    # stay under the search API's burst limit
+                if asked and not bili.offline_search:
+                    time.sleep(SEARCH_GAP)    # stay under the search API's burst limit
             with lock:
                 for row in found:
                     if 20 <= row.get("duration", 0) <= 3 * 3600 and not SKIP_TITLE.search(row.get("title", "")):
@@ -643,7 +656,7 @@ def build(queries: list[tuple[str, str]], check, progress, *, pages: int = 1, de
             label = f"第 {index + 1}/{len(chunks)} 批（共 {len(todo)} 个视频）"
             refused = _build_chunk(bili, chunks[index], check,
                                    lambda share, message: progress(lo + (hi - lo) * share, f"{label} · {message}"),
-                                   report, describe)
+                                   report, describe, describer)
             if bili.shots_blocked >= 3:
                 # Videos whose previews were refused go round again after the pause.
                 pauses = _risk_paused(bili, check, lambda m: progress(hi, m), report, pauses, label)
@@ -659,7 +672,7 @@ class _Halted(Exception):
     """Another sheet stopped the build: do not start more model requests."""
 
 
-def _build_chunk(bili, chunk, check, progress, report, describe) -> list:
+def _build_chunk(bili, chunk, check, progress, report, describe, describer=None) -> list:
     """Frames and descriptions for up to CHUNK videos. Returns the videos whose previews were refused by
     risk control (to retry after a pause)."""
     from concurrent.futures import as_completed, wait
@@ -675,7 +688,22 @@ def _build_chunk(bili, chunk, check, progress, report, describe) -> list:
             raise
         except Exception as exc:
             return topic, row, None, "风控" in str(exc)      # this video only
-    framed, refused = [], []
+    refused = []
+    if describer:
+        # Each video goes to the model as soon as its frames are in, so the model is not left waiting
+        # for the whole chunk's previews.
+        def stream():
+            with execution.ThreadPoolExecutor(max_workers=SHOT_WORKERS) as pool:
+                for topic, row, got, blocked in pool.map(frames, chunk):
+                    if got:
+                        yield topic, row, got
+                    elif blocked:
+                        refused.append((topic, row))
+                    else:
+                        report["failed"] += 1
+        _describe_videos(stream(), describer, check, progress, report, len(chunk))
+        return refused
+    framed = []
     with execution.ThreadPoolExecutor(max_workers=SHOT_WORKERS) as pool:
         for n, (topic, row, got, blocked) in enumerate(pool.map(frames, chunk), 1):
             if got:
@@ -806,3 +834,62 @@ def _build_chunk(bili, chunk, check, progress, report, describe) -> list:
             raise
     progress(1.0, "已保存")
     return refused
+
+
+def _describe_videos(framed, describer, check, progress, report, total: int) -> None:
+    """(topic, row, frames) items, as they come, described one video per request and each saved as it
+    returns. A video the describer could not answer counts a try; eight failures in a row mean the model
+    itself is down."""
+    from concurrent.futures import as_completed, wait
+    from . import media
+    halt = threading.Event()
+    def run(item):
+        check()
+        if halt.is_set():
+            raise _Halted()
+        try:
+            return item, describer(item[1], [frame["image"] for frame in item[2]])
+        except media.Cancelled:
+            raise
+        except Exception as exc:
+            return item, exc
+    state = {"streak": 0, "done": 0}
+    def save(future):
+        (topic, row, got), answer = future.result()
+        moments = []
+        if isinstance(answer, dict):
+            for k, frame in enumerate(got):
+                text, kind = answer.get(k, ("", ""))
+                moments.append({"t": frame["t"], "hash": format(frame["hash"], "x"), "text": text, "kind": kind})
+        if any(m["text"] for m in moments):
+            state["streak"] = 0
+            _write_batch([(row, moments, topic, True)])
+            report["indexed"] += 1
+            report["described_frames"] += sum(1 for m in moments if m["text"])
+        else:
+            state["streak"] += 1
+            _note_failed([(topic, row, got)])
+            if state["streak"] >= 8:
+                raise RuntimeError(f"连续 8 个视频描述失败（{str(answer)[:80]}），已停止扩库")
+        state["done"] += 1
+        if state["done"] % 10 == 0:
+            progress(0.99 * state["done"] / max(1, total), f"描述画面 {state['done']}/{total} 个视频")
+    futures, pending = [], set()
+    with execution.ThreadPoolExecutor(max_workers=DESCRIBE_WORKERS) as pool:
+        try:
+            for item in framed:
+                future = pool.submit(run, item)
+                futures.append(future)
+                pending.add(future)
+                for finished in [f for f in pending if f.done()]:
+                    pending.discard(finished)
+                    save(finished)
+            for finished in as_completed(pending):
+                save(finished)
+        except BaseException:
+            halt.set()
+            for future in futures:
+                future.cancel()
+            wait(futures)
+            raise
+    progress(1.0, "已保存")

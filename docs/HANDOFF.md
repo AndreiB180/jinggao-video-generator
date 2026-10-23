@@ -370,6 +370,16 @@
 - 下一步：用 videoshot 预览帧先避开主播画面（或交给 pick 模型从报道窗口附近的预览帧里挑），按拼音比对名字（"仁爱礁"被识别成"任爱交"；需要加 pypinyin）。
 - 合并 baidu-voice（1c2fcb1）：见上一节"百度一镜重新启用"。宿舍机 dorm 上测试用登录配置在 D:\jinggao-test\baidu\…\data\baidu-browser（账号众一科技），Edge 开着 CDP 9334。
 
+## 夜间建库：宿舍机 5080 + 本地看图模型（2026-10-24）
+
+- 目的：素材库从 2.84 万个视频往上扩，补客户最常写的社会故事、法治、新闻现场；看图用本地模型，不花模型费，每个视频每一帧都单独描述。
+- `scripts/footage_local.py`（开发工具，不在客户电脑上跑）：依次按题材包检索（`FIRST` 里客户常用的题材在前，每轮页数和按标签扩展更多，每 60 个检索词为一段：搜完这一段就描述，不让显卡等全部检索），每个视频取预览帧（`footage_index._frames`），一个视频一个请求交给本地模型；描述完立刻写库，停掉不丢。到点（`--until`）或有 `STOP` 文件就停，每小时和结束时导出种子（`export_seed`）。轮次跑完还有时间，就把种子里旧的联系表描述重新逐帧描述（用得多的先做）。B 站搜索在夜里放慢（1 路、两页之间 1.5 秒），一个 IP 连续突发更容易被 412。
+- `jinggao/footage_local.py`：请求 llama.cpp `llama-server`（OpenAI 兼容，`response_format=json_object`、关掉思考），每帧回答「描述、类型、关键词」，存成 `描述｜关键词`（两部分都进 FTS 检索；类型沿用 `BAD_KINDS`，主持人、文字、黑屏不进检索，出片时作为 avoid）。答案被截断时用正则把完整的条目留下。
+- `footage_index.build(describer=)`：传入 describer 时走 `_describe_videos`（每视频一个请求，8 个连续失败就停）；不传仍是原来的云端联系表。`install_seed`：新种子里带「｜」的逐帧描述会替换本机只有联系表描述的同一视频（保留用过次数），本机已有逐帧描述的不动。
+- 新题材包 8 个（共 842 个检索词）：影视·家庭伦理、影视·都市职场、短剧、纪实·法治案件、纪实·档案人物、新闻·国际现场、新闻·国内现场、人物·社会生活。
+- 宿舍机部署（`D:\jinggao-test\library\`）：`llama\`（llama.cpp b11838，CUDA 13.4 版，驱动 610.88 可用），`models\`（Qwen3.5-9B-Q6_K + mmproj-BF16，lmstudio-community，从 ModelScope 分段下载；hf-mirror 会跳到 xethub 美国节点，很慢），`server.ps1`（127.0.0.1:8790，`-np 16 -c 65536 -fa on`，显存约 13.5/16 GB），`run.ps1`（JINGGAO_DATA=library\data，借 pkg039b 的 Python），`status.ps1`、`stop_run.ps1`、`stop_server.ps1`。都用 WMI 起（`launch.ps1`），断开 ssh 不停。
+- 模型对比（24 个种子视频、204 帧，同一套提示词）：Gemma-4-E4B（LM Studio 里现成的）7.8 帧/秒，但会照着标题和字幕编剧情（张骞片子里写“张骞带领超过百人”“怀念过去”）；Qwen3.5-9B 写的是画面里看得见的东西（“五口之家围坐在餐桌旁包饺子”“夜间帐篷内一人坐在左侧”），类型判断也更准，所以用 Qwen。
+
 ## 代码入口
 
 | 路径 | 用途 |

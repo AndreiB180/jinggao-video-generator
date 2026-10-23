@@ -185,6 +185,10 @@ class Bilibili:
         self.blocked += 1
         raise ValueError("B站接口暂时限制访问（风控），请稍后重试或扫码登录B站")
 
+    def cached(self, keyword: str, page: int = 1) -> bool:
+        """This search was made today and its answer is on disk (no request needed)."""
+        return _read_json(_cache("bili-search") / f"{_key(keyword, page)}.json", SEARCH_TTL) is not None
+
     def search(self, keyword: str, page: int = 1) -> list[dict]:
         path = _cache("bili-search") / f"{_key(keyword, page)}.json"
         cached = _read_json(path, SEARCH_TTL)
