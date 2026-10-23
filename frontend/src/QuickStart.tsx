@@ -2,6 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {AudioLines, FileText, FolderOpen, Loader2, RotateCcw, Upload, WandSparkles, X} from 'lucide-react';
 import {useOutputFolder} from './FileActions';
 import {VoicePicker, useVoices} from './VoicePicker';
+import {BaiduVoiceSelect} from './BaiduVoice';
 import {SubtitleSettings} from './SubtitleSettings';
 
 type Settings = Record<string,any>;
@@ -96,7 +97,9 @@ export function QuickStart({started,openNews}:{started:(projectId:string)=>void;
     <div className="aspect-pick">{([['16:9','横屏','西瓜 / B 站 / 头条'],['9:16','竖屏','抖音 / 快手 / 视频号']] as const).map(([value,name,where])=><button key={value} className={aspect===value?'on':''} onClick={()=>setAspect(value)}><i className={value==='16:9'?'wide':'tall'}/><span><strong>{name} {value}</strong><small>{where}</small></span></button>)}</div>
    </section>
    {mode==='text'&&<section className="card"><h3>配音</h3>
-    {!['edge_tts','qwen_tts'].includes(provider)?<p className="muted-note">当前在设置里选择了其他配音方式。</p>:<>
+    {provider==='baidu_web'?<><BaiduVoiceSelect value={settings.baidu_voice_name||''} change={name=>change('baidu_voice_name',name)}/>
+     <p className="muted-note">百度一镜配音（用你登录的百度账号，在设置 → 配音里登录和刷新音色）。可在设置里切换。</p></>
+    :!['edge_tts','qwen_tts'].includes(provider)?<p className="muted-note">当前在设置里选择了其他配音方式。</p>:<>
      <VoicePicker compact provider={provider} values={settings} change={change}/>
      <p className="muted-note">{provider==='edge_tts'?'免费配音（微软神经网络音色），不收费。':'千问配音，约 ¥0.16 / 千字。'}可在设置里切换。</p></>}
    </section>}

@@ -257,3 +257,7 @@ img.film-layer{width:100%;height:100%;object-fit:contain}
 @media (min-width:1800px){body{zoom:1.15}}
 .batch-step>h3:first-child{margin-top:0!important}.batch-step>*:first-child{margin-top:0}
 .field-hint{display:block;margin-top:6px;color:#8fa0a8;font-size:11px;line-height:1.6}
+.baidu-settings{margin-top:4px}.baidu-login{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}.baidu-state{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#9aa6ad}.baidu-state.ok{color:#94c4ad}
+.baidu-voice-head{display:flex;align-items:center;gap:12px;margin:6px 0 10px;font-size:12px;color:#cdd4d6}.baidu-voice-head span{color:#8698a4;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.baidu-filter{display:flex;align-items:center;gap:10px;margin-bottom:10px}.baidu-filter .segmented{margin:0}.baidu-filter input{flex:1;min-width:0;padding:6px 9px;font-size:11px}
+.baidu-settings .voice-picker .voice-grid{max-height:320px;overflow-y:auto}.baidu-settings .voice-picker>small{display:block;margin:8px 0 16px}
