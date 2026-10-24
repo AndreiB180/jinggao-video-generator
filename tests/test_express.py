@@ -136,6 +136,24 @@ def test_plan_cross_checks_known_names_and_drops_invented_ones(data, monkeypatch
     assert info["groups"][0]["zh"] == ["钱学森 历史影像"] and info["groups"][0]["en"] == []
 
 
+def test_story_nicknames_are_ordinary_people_not_names_to_search(data, monkeypatch):
+    shots = [planner.new_shot(t) for t in ("张女士和老周结婚十六年。", "老周天天抱着手机聊天。", "两人去老挝旅游。")]
+    reply = {"domain": "婚姻家庭", "topic": {"zh": ["夫妻 生活"], "en": []},
+             "groups": [{"id": "G1", "zh": ["张女士 老周 夫妻 吵架 电视剧片段"], "en": [], "person": "张女士"},
+                        {"id": "G2", "zh": ["老周 丈夫 玩手机 短剧"], "en": [], "person": "老周"},
+                        {"id": "G3", "zh": ["老挝 旅游 街头"], "en": [], "person": ""}],
+             "shots": [{"id": "S1", "g": "G1", "v": "夫妻", "p": ["张女士", "老周"]},
+                       {"id": "S2", "g": "G2", "v": "玩手机", "p": ["老周"]},
+                       {"id": "S3", "g": "G3", "v": "旅游", "p": []}]}
+    monkeypatch.setattr(planner, "chat", lambda *a, **k: (reply, {"usage": {}}))
+    info = express_plan.annotate(shots, "".join(s["narration"] for s in shots))
+    assert all(shot["persons"] == [] and shot["evidence_mode"] == "generic" for shot in shots)
+    zh = {g["id"]: g["zh"] for g in info["groups"]}
+    assert zh["G1"] == ["婚姻家庭 夫妻 吵架 电视剧片段"] and zh["G2"] == ["婚姻家庭 丈夫 玩手机 短剧"]
+    assert "老挝" in zh["G3"][0]                                           # a place, kept
+    assert shots[1]["search_queries"] == zh["G2"] and shots[1]["express"]["zh"] == zh["G2"]
+
+
 def test_pipeline_setting_is_validated(data):
     assert config.update({"pipeline": "classic"})["pipeline"] == "classic"
     with pytest.raises(ValueError):

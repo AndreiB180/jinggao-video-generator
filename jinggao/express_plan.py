@@ -25,7 +25,7 @@ SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的�
 2. zh：2个B站检索词，每个2-4个短词、用空格分隔。必须带上这组口播里出现的具体名称（国家、地区、城市、组织、人名、品牌、型号之一），再写具体可见的画面主体，例如“也门 胡塞 导弹 袭击”“沙特 联军 空袭”“红海 驱逐舰”“集装箱码头 岸桥 吊装”。时事新闻（战争冲突、外交、政治、社会事件）加“新闻”或“现场”；历史题材可加“纪录片/历史影像”；只有泛泛的场景（城市、自然、生活）才用“航拍/空镜/素材”。讲人的镜头（官员、领导人、民众、士兵、当事人、开会、讲话、抗议）检索词写人物和场景（如“也门 总理 讲话”“萨那 街头 民众”“沙特 王储 会见”），不要写武器装备；同一篇里各组的检索词要互相错开，不要几组都搜同一类画面。情感、婚姻、家庭、职场、社会故事（没有真实新闻画面的个人经历）的镜头，检索词写情节加“电视剧片段”或“短剧”，如“夫妻 吵架 电视剧片段”“妻子 查看 丈夫手机 短剧”“婆媳 争执 电视剧”，这类片段有真人有情绪，比空镜好。不要写抽象概念、观点或整句，也不要只写“导弹”“军舰”“港口”这种不带名称的泛词（会搜到别国别处的画面）。
 3. en：2个Pixabay英文检索词，2-4个英文单词，写通用可见画面，如“container port aerial”。外国图库只有通用的风景、城市、生活、行业画面：若该组讲的是具体国家地区正在发生的新闻事件（战争冲突、外交、政治、灾难、社会新闻）、中国特定历史事件、具名人物或特定中国文化物件，en 给空数组（图库里只会是不相干的游艇、海景、街道）；画面主体是中国人的生活场景（家庭、夫妻、父母孩子、职场、街坊邻里、农村）时也给空数组（图库里是外国人，观众一看就不对）。
 4. person：只有当该组镜头的口播在讲某个具体真实人物、画面理应出现此人时，填写原文中的完整姓名，否则填空字符串。有人物的组只放讲这个人的镜头，zh 检索词必须包含这个姓名（如“某某 历史影像”）。
-5. shots：每个镜头都要出现且顺序不变。g=所属组；v=6-14字的通用画面建议（场景+主体，容易在实拍素材中找到，不写细节动作、特写或文字内容；不要写截图、网页、评论区、弹幕、聊天记录这类屏幕画面，讲网传视频或网友热议时写与事件相关的实拍场景），普通画面只需大致相关；p=画面必须出现的真实具名人物姓名（必须与口播原文逐字一致），没有就空数组。
+5. shots：每个镜头都要出现且顺序不变。g=所属组；v=6-14字的通用画面建议（场景+主体，容易在实拍素材中找到，不写细节动作、特写或文字内容；不要写截图、网页、评论区、弹幕、聊天记录这类屏幕画面，讲网传视频或网友热议时写与事件相关的实拍场景），普通画面只需大致相关；p=画面必须出现的真实具名人物姓名（必须与口播原文逐字一致），没有就空数组；社会故事、情感故事里的化名和代称（张女士、李先生、老周、小李、王某、刘阿姨）不是具名人物，不写进 p，检索词里也不要写这些名字。
 6. topic：整篇文稿的通用画面检索词（zh 2个、en 2个），用于补位，要选不出现具体人物也能用的环境/场景画面。
 7. 若有“用户画面要求”，必须体现在检索词和画面建议中。
 9. ancient：口播里出现的、生活在照相术出现（约1840年）以前的具名古人姓名（如范仲淹、包拯、李白），没有就空数组；这些人不可能有真实影像。
@@ -36,6 +36,17 @@ SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的�
 
 def _text(value, limit) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+# A story's stand-in for an ordinary person (张女士, 老周, 小李, 王某): no one to find footage of, and as a
+# search word it finds strangers' vlogs with the same nickname.
+# 老X/小X/阿X is one only when the plan names it as a person (老挝, 小米 and 阿里 are not people).
+TITLED = re.compile(r"[\u4e00-\u9fff](?:女士|先生|小姐|某某|某|阿姨|大爷|大妈|大娘|大姐|大哥|师傅|奶奶|爷爷|叔|婶)")
+NICKNAME = re.compile(r"(?:老|小|阿)[\u4e00-\u9fff]")
+
+
+def placeholder(name: str, person: bool = True) -> bool:
+    return bool(TITLED.fullmatch(name or "") or (person and NICKNAME.fullmatch(name or "")))
 
 
 def _queries(values, limit, ascii_only=False) -> list[str]:
@@ -163,6 +174,7 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
         batches.append((start, end))
         start = end
     rows, groups, topic, usage, model, domain = {}, {}, {"zh": [], "en": []}, {}, None, ""
+    stand_ins = set()
     if len(batches) > 1:   # independent requests: ask them together
         from .execution import ThreadPoolExecutor   # keeps the job's cost scope in the threads
         with ThreadPoolExecutor(max_workers=min(4, len(batches))) as pool:
@@ -192,7 +204,9 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
                 continue
             gid = prefix + str(row["id"]).strip()[:12]
             person = _text(row.get("person"), 40)
-            if person and person not in script:
+            if placeholder(person):
+                stand_ins.add(person)
+            if person and (person not in script or placeholder(person)):
                 person = ""
             zh = _queries(row.get("zh"), 40)
             if person:
@@ -214,7 +228,9 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
         names = []
         for name in row.get("p", []) if isinstance(row.get("p"), list) else []:
             name = _text(name, 40)
-            if 2 <= len(name) and name in shot["narration"] and name not in names:
+            if placeholder(name):
+                stand_ins.add(name)
+            elif 2 <= len(name) and name in shot["narration"] and name not in names:
                 names.append(name)
         if group["person"] and group["person"] in shot["narration"] and group["person"] not in names:
             names.insert(0, group["person"])
@@ -234,6 +250,16 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
             shot["persons"] = identity.persons([{"name": n} for n in (names + missing)[:3]])
             shot["evidence_mode"] = "person"
     groups = {gid: g for gid, g in groups.items() if g["shots"]}
+    for group in groups.values():
+        # A story's nicknames found by the model, and any 张女士/王某 form, are not words to search for.
+        kept = [" ".join(w for w in q.split() if w not in stand_ins and not placeholder(w, person=False))
+                for q in group["zh"]]
+        group["zh"] = [q for q in kept if q] or group["zh"]
+    for shot in shots:
+        group = groups.get(shot["express"]["group"])
+        if group:
+            shot.update(query=(group["zh"] or [shot["visual"]])[0], search_queries=list(group["zh"]))
+            shot["express"]["zh"] = list(group["zh"])
     if not topic["zh"]:
         topic["zh"] = [q for g in groups.values() if not g["person"] for q in g["zh"]][:2]
     if domain:
