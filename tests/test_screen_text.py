@@ -133,6 +133,31 @@ def test_captions_found_by_reading_are_cropped_away(data, monkeypatch):
     assert not express_clean.dirty(m.clean["j1"]) and m.text_found["caption"] == 1
 
 
+def test_text_across_the_picture_is_replaced_not_blurred(data, monkeypatch):
+    shot = planner.new_shot("快递员送件。") | {"duration": 3.0}
+    m = _matcher([shot])
+    m.clean["j1"] = {"content": [0, 0, 1, 1], "overlays": [], "central": [], "crop": [0, 0, 1, 1], "zoom": 1.0,
+                     "residual": [], "src_aspect": 16 / 9}
+    monkeypatch.setattr(screen_text, "installed", lambda: True)
+    monkeypatch.setattr(screen_text, "frames_of", lambda path, duration: [Image.new("RGB", (64, 36))])
+    app_screen = [line("请输入取件码", (0.3, 0.3, 0.7, 0.36)), line("快递柜服务协议", (0.3, 0.45, 0.7, 0.5)),
+                  line("超时后每小时收费", (0.3, 0.55, 0.7, 0.6))]
+    monkeypatch.setattr(screen_text, "read", lambda image: app_screen)
+    with pytest.raises(ValueError, match="大段文字"):
+        m.read_text("j1", m.shots[0], {"tile": {"source": {"provider": "bilibili", "id": "BV1"}}}, Path("clip.mp4"))
+
+
+def test_many_or_large_blurred_patches_count_as_messy():
+    clean = {"crop": [0, 0, 1, 1], "residual": [{"kind": "logo", "box": [0.02, 0.02, 0.12, 0.08]}]}
+    assert not express_clean.messy(clean)                                    # one small corner logo: fine
+    clean["residual"] = [{"kind": "center", "box": [0.1, 0.3, 0.7, 0.45]}]
+    assert express_clean.messy(clean)                                        # a blurred band across the middle
+    clean["residual"] = [{"kind": "logo", "box": [0.02 + i * 0.1, 0.02, 0.06 + i * 0.1, 0.05]} for i in range(4)]
+    assert express_clean.messy(clean)                                        # a row of small patches
+    clean["residual"] = [{"kind": "subtitle", "box": [0.1, 0.85, 0.9, 0.95]}]
+    assert not express_clean.messy(clean)                                    # subtitle bands are never smeared
+
+
 def test_stock_footage_is_not_read(data, monkeypatch):
     m = _matcher([planner.new_shot("港口。") | {"duration": 3.0}])
     monkeypatch.setattr(screen_text, "installed", lambda: True)

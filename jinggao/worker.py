@@ -284,11 +284,13 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
             # voice it while the shots are planned (the account allows three speech requests at a time).
             from . import script_norm
             progress(1, "1/4 规划分镜 · 整理文稿标点")
-            standard, _ = script_norm.normalize(project["script"], check)
+            standard, normalized = script_norm.normalize(project["script"], check)
             def keep_standard(p):
                 if standard and standard != p["script"]:
                     p["script_original"] = p.get("script_original") or p["script"]
                     p["script"] = standard
+                if normalized.get("title"):
+                    p["headline"] = normalized["title"]     # the cover's text, not narration
             project = store.mutate(pid, keep_standard, internal=True)
             early = {"target": paths.project_dir(pid) / "audio" / f"{store.uid()}.wav", "error": None,
                      "began": time.monotonic(), "wall": time.time()}
@@ -552,6 +554,8 @@ def process(job: dict, stop=None, *, progress_sink=None, finalize=True) -> None:
                 # Narration and subtitles use the standard text; the original stays restorable.
                 p["script_original"] = p.get("script_original") or p.get("script", "")
                 p["script"] = standard
+            if (info.get("normalize") or {}).get("title"):
+                p["headline"] = info["normalize"]["title"]
             p["shots"] = shots
             p["plan_info"] = info
             p["full_audio"] = None

@@ -25,7 +25,8 @@ try:
 except ImportError:      # an older install without it: names match by characters only
     lazy_pinyin = None
 
-MAX_SOURCES = 8
+MAX_SOURCES = 5
+HEARD_SECONDS = 300                           # transcribe a report's first minutes: the event is told up front
 MIN_SECONDS, MAX_SECONDS = 45.0, 1200.0      # news reports and commentary, not clips or hour-long streams
 MAX_AUDIO_BYTES = 40 * 2**20
 MIN_SCORE = 0.06                              # share of a line's (rarity-weighted) character pairs said in the window
@@ -136,8 +137,8 @@ def transcript(bili, row, check=lambda: None) -> list[dict]:
             else:
                 raise ValueError("音频下载失败：" + "、".join(failures))
         check()
-        subprocess.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-i", str(source), "-ac", "1", "-ar", "16000",
-                        "-f", "wav", str(wav)], check=True, timeout=180, capture_output=True)
+        subprocess.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-i", str(source), "-t", str(HEARD_SECONDS),
+                        "-ac", "1", "-ar", "16000", "-f", "wav", str(wav)], check=True, timeout=180, capture_output=True)
         rows = segments(local_asr.transcribe(wav, check))
     finally:
         source.unlink(missing_ok=True)

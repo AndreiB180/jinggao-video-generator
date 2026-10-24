@@ -449,3 +449,20 @@ def test_a_new_seed_brings_frame_by_frame_descriptions_of_known_videos(data, tmp
     hit = fi.search("夫妻矛盾")[0]
     assert hit["id"] == "BV1rich00001" and hit["index_used"] == 1      # better lines, its use count kept
     assert fi.search("本机")[0]["id"] == "BV1rich00002"                 # already frame by frame: stays
+
+
+def test_the_search_index_is_merged_once_after_seeding(data, tmp_path, monkeypatch):
+    for n in range(3):
+        fi.add(row(f"BV1opt{n:06d}", f"港口 {n}"), [{"t": 1.0, "text": f"港口吊车 {n}", "kind": "实拍"}], described=True)
+    seed = tmp_path / "seed"
+    fi.export_seed(seed)
+    monkeypatch.setattr(paths, "DATA", tmp_path / "client")
+    calls = []
+    real = fi.optimize
+    monkeypatch.setattr(fi, "optimize", lambda: (calls.append(1), real()))
+    assert fi.install_seed(seed) == 3 and calls == [1]
+    assert fi.install_seed(seed) == 0 and calls == [1]                 # merged already
+    with fi._conn(write=True) as con:
+        con.execute("DELETE FROM meta WHERE key='optimized'")         # seeded by 0.4.4, never merged
+    assert fi.install_seed(seed) == 0 and calls == [1, 1]
+    assert fi.search("港口吊车")

@@ -793,6 +793,30 @@ def dirty(result: dict) -> bool:
                for r in (result or {}).get("residual", []))
 
 
+MESSY_AREA = 0.05    # share of the shown picture that blurred patches may cover
+MESSY_COUNT = 3      # blurred patches a clip may carry
+
+
+def blurred(result: dict) -> list[list[float]]:
+    """The boxes video_filter blurs (a subtitle band is cropped or left, never smeared)."""
+    return [r["box"] for r in (result or {}).get("residual") or []
+            if r["kind"] != "subtitle" and r["box"][2] - r["box"][0] >= 0.01 and r["box"][3] - r["box"][1] >= 0.01]
+
+
+def messy(result: dict) -> bool:
+    """More, or larger, blurred patches than a clean-looking clip has. Text pages, app screens and charts
+    blurred line by line came out as rows of smeared blocks that viewers took for random mosaic; such
+    clips are replaced instead."""
+    boxes = blurred(result)
+    if len(boxes) > MESSY_COUNT:
+        return True
+    x, y, w, h = (result or {}).get("crop") or (0.0, 0.0, 1.0, 1.0)
+    shown = 0.0
+    for x0, y0, x1, y1 in boxes:
+        shown += max(0.0, min(x1, x + w) - max(x0, x)) * max(0.0, min(y1, y + h) - max(y0, y))
+    return shown > MESSY_AREA * max(1e-6, w * h)
+
+
 def central_marks(source: dict | None) -> list[dict]:
     """Confirmed-shape mid-picture marks of a whole source (decided before any download)."""
     return [b for b in (source or {}).get("boxes", []) if b.get("central") and b.get("pattern") is not None]

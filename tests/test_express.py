@@ -485,3 +485,17 @@ def test_footage_fills_the_frame_unless_its_shape_is_far_off():
     assert curation.preferred_fit({}, video | {"width": 1080, "height": 1920}, "16:9") == "contain"   # vertical
     assert curation.preferred_fit({}, {"kind": "image", "width": 1440, "height": 1080}, "16:9") == "contain"
     assert express_match.intro_seconds(60) == 6 and express_match.intro_seconds(900) == 8
+
+
+def test_the_opening_shot_chooses_its_footage_first(data):
+    shots = [planner.new_shot(t) | {"duration": 5.0} for t in ("开头一句钩子。", "第二句讲细节。")]
+    project = store.new_project("t", "x")
+    project = store.mutate(project["id"], lambda p: p.update(shots=shots))
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    best = {"source": {"provider": "bilibili", "id": "BV1best00000", "duration": 300.0}, "t": 100.0}
+    filler = [{"source": {"provider": "bilibili", "id": f"BV1fill0000{n}", "duration": 300.0}, "t": 50.0} for n in range(3)]
+    first, second = m.shots[0]["id"], m.shots[1]["id"]
+    # The second line has fewer options and used to choose first, taking the one good clip.
+    options = {first: [(best, "pick")] + [(t, "near") for t in filler], second: [(best, "pick")]}
+    assigned = m.allocate(options, {}, {}, m.shots)
+    assert assigned[first]["tile"]["source"]["id"] == "BV1best00000" and assigned[first]["lane"] == "pick"

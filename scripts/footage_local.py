@@ -38,7 +38,8 @@ sys.path.insert(0, str(ROOT))
 ROUNDS = [(2, 10), (3, 20), (4, 35), (5, 50)]     # (result pages per search, tags added per topic)
 SLICE = 60                                        # searches per build: the model starts on them while later ones wait
 FIRST = ["影视·家庭伦理", "影视·都市职场", "短剧", "纪实·法治案件", "纪实·档案人物", "新闻·国际现场", "新闻·国内现场",
-         "人物·社会生活", "生活·家庭情感", "人物·情绪", "社会·民生", "法治·警务", "职场·教育"]
+         "人物·社会生活", "生活·家庭情感", "人物·情绪", "社会·民生", "法治·警务", "职场·教育", "娱乐·明星", "体育·赛事现场",
+         "财经·宏观"]
 SNOWBALL = 600                                    # tags searched per snowball pass (re-ranked between passes)
 # Tags that lead away from footage the scripts need: looks and dance channels, Bilibili's activity and
 # creator tags, study/ASMR/game/music/shopping videos.

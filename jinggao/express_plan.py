@@ -152,11 +152,15 @@ def merge_short(project: dict, indices: list[int]) -> None:
         group["shots"] = [sid for sid in group.get("shots", []) if any(s["id"] == sid for s in shots)]
 
 
-def _ask(shots: list[dict], requirements: str, check=None) -> tuple[dict, dict]:
+OPENING = ("\nS1 是全片开头的钩子，观众看不看下去就看它：S1 单独成一组，检索词写开头这件事最具体、最有冲击力的现场画面"
+           "（事件现场、冲突场面、当事人、标志性地点），不要写概念或泛泛的场景。")
+
+
+def _ask(shots: list[dict], requirements: str, check=None, opening: bool = False) -> tuple[dict, dict]:
     lines = [f"S{i+1}：{shot['narration']}" for i, shot in enumerate(shots)]
     least, most = max(1, math.ceil(len(shots) / 4)), min(20, max(1, len(shots) // 2))
     content = ("用户画面要求：" + (requirements.strip() or "无") + f"\n\n共 {len(shots)} 个镜头，groups 分 {least}-{most} 组。"
-               + "\n镜头：\n" + "\n".join(lines))
+               + (OPENING if opening else "") + "\n镜头：\n" + "\n".join(lines))
     max_tokens = min(8000, 900 + 70 * len(shots))
     if check:
         check()
@@ -178,9 +182,9 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
     if len(batches) > 1:   # independent requests: ask them together
         from .execution import ThreadPoolExecutor   # keeps the job's cost scope in the threads
         with ThreadPoolExecutor(max_workers=min(4, len(batches))) as pool:
-            answers = list(pool.map(lambda b: _ask(shots[b[0]:b[1]], requirements, check), batches))
+            answers = list(pool.map(lambda b: _ask(shots[b[0]:b[1]], requirements, check, opening=b[0] == 0), batches))
     else:
-        answers = [_ask(shots, requirements, check)]
+        answers = [_ask(shots, requirements, check, opening=True)]
     # One domain word for the whole script (the first batch that names one).
     domain = next((_text(r.get("domain"), 8) for r, _ in answers if isinstance(r, dict) and _text(r.get("domain"), 8)), "")
     # A concrete news event: queries for news reports about it (news_pool cuts their footage where they say the same).

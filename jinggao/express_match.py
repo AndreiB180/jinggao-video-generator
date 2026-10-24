@@ -75,7 +75,7 @@ IDENTITY_REJECTION = re.compile(r"演员|扮演|影视|情景|再现|不是|非|
                                 r"葬礼|遗体|遗像|灵堂|灵柩|追悼|悼念|花圈")
 # Rejections that make a clip unusable for any line, even as a last resort before a title card.
 BROKEN_REJECTION = re.compile(r"黑屏|黑场|纯色|模糊|动画|游戏|AI|PPT|文字页|图表|截图|截屏|评论区|聊天|界面|马赛克|主持|博主|嘉宾|访谈|采访|出镜|镜头讲话|对镜|"
-                              r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告|联系方式|引流|电话|微信|QQ|私信|号码")
+                              r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告|联系方式|引流|电话|微信|QQ|私信|号码|打码|色块")
 FUNERAL = re.compile(r"葬礼|遗体|遗容|遗像|灵堂|灵柩|追悼|悼念|花圈|讣告|火化|送别|逝世后|告别仪式")
 DEATH_LINE = re.compile(r"逝世|去世|病逝|离世|悼念|追悼|葬礼|长眠|告别")
 BROADCAST = re.compile(r"CCTV|cctv|央视|中央电视台|卫视|电视台|CGTN|凤凰卫视|凤凰资讯|凤凰网|凤凰视频")   # a channel logo sits top-left
@@ -107,7 +107,7 @@ TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体�
 
 QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
 对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
-bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
+bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克，或画面上有一块块模糊的色块、糊掉的文字（打码痕迹）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
 wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
 普通镜头（没有要求具名人物）：用电视剧、短剧、栏目剧片段里的演员表现口播讲的情节（夫妻吵架、婆媳矛盾、查看手机、离婚、职场冲突等）是合格的，不要因为是演员扮演或情景再现判不合格。画面主体和口播讲的对象一致即可，细节不必一致：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。以下算跑题（不合格，原因写“跑题”）：口播讲人和人之间的事（夫妻、家人、同事、官员、民众），画面却是风景、空镜、物品、动物，看不出相关的人；口播讲中国国内的人和事，画面明显是外国人或外国街景；口播讲某个国家、组织，画面明显是另一个国家的（如讲也门战事却是中国火箭军发射、中国海军演习）；科普讲解、课堂课件、带货、游戏解说之类与口播无关的视频画面；画面题材与口播完全无关。
@@ -824,7 +824,9 @@ class Matcher:
         looks = dict(self.looks)
         cap = max(HARD_MIN, math.ceil(len(self.timeline) * SOURCE_SHARE))
         hard_cap = max(HARD_MIN, math.ceil(len(self.timeline) * HARD_SHARE))
-        order = sorted(shots, key=lambda s: (len(options.get(s["id"], [])), self.position[s["id"]]))
+        # The opening shot chooses first (it decides whether viewers stay), then the shots with fewest options.
+        order = sorted(shots, key=lambda s: (self.position[s["id"]] != 0, len(options.get(s["id"], [])),
+                                             self.position[s["id"]]))
         stock_cap = max(2, int(len(self.timeline) * STOCK_SHARE))
         stock_used = sum(1 for key in assigned_keys.values() if key and key[0] == "pixabay")
         for shot in order:
@@ -965,6 +967,8 @@ class Matcher:
             if clean.get("central"):
                 choice["tile"]["source"]["dirty"] = True   # mid-picture watermark: avoid this source
             self.read_text(job_id, shot, choice, path)
+            if express_clean.messy(self.clean.get(job_id)):
+                raise ValueError("要打码的地方太多，换别的画面")
             return job_id, sid, path, None
         except media.Cancelled:
             raise
@@ -1149,6 +1153,10 @@ class Matcher:
                     self.text_found["sources_contact"] += 1
             source["contact"] = True
             raise ValueError("画面里有联系方式或广告文字：" + "、".join(found["contact"])[:40])
+        if found["dense"] or found["moving"]:
+            # Lines of text across the picture (title cards, app screens, charts, scrolling text) would be
+            # blurred into smeared blocks: another window or video is used instead.
+            raise ValueError("画面中间有大段文字或滚动字幕，不打码，换别的画面")
         if not found["marks"]:
             return
         if clean.get("crop"):
@@ -1272,6 +1280,10 @@ class Matcher:
             for label, where in marks.items():
                 if label in ids:
                     self.residual_mark(ids[label], where)
+            for job_id in ids.values():
+                # The marks it reported are blurred on top of what OCR found: too much of that looks smeared.
+                if job_id not in bad and express_clean.messy(self.clean.get(job_id)):
+                    bad[job_id] = "打码面积过大"
         return bad
 
     VIEW_BOXES = {"左上": [0, 0, 0.36, 0.16], "右上": [0.64, 0, 1, 0.16], "左下": [0, 0.84, 0.36, 1],
@@ -1559,6 +1571,10 @@ class Matcher:
                     if other["id"] != sid and not other.get("persons"):
                         neighbours += picks.get(other["id"], [])
                 fill += [(t, "neighbor") for t in neighbours]
+            if index == 0:
+                # The opening line hooks the viewer and usually sums up what the next lines tell: when it has no
+                # pick of its own, the next lines' picks come before any filler.
+                own += [(t, "pick") for other in self.timeline[1:4] for t in picks.get(other["id"], [])]
             seen, merged = set(), []
             for tile, lane in own + fill:
                 k = (tile["source"]["provider"], tile["source"]["id"], round(tile["t"], 1))

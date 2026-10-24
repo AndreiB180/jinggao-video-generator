@@ -337,6 +337,17 @@ def deliver(project: dict, result: dict) -> str:
     if srt.exists():
         (folder / SUBTITLE_FOLDER).mkdir(exist_ok=True)
         shutil.copyfile(srt, folder / SUBTITLE_FOLDER / f"{stem}.srt")
+    try:
+        from . import cover
+        starts, at = [], 0.0
+        for shot in (project.get("shots") or [])[:cover.SAMPLES]:
+            length = float(shot.get("duration") or 0)
+            starts.append(at + length / 2)
+            at += length
+        cover.make(video, folder / f"{stem}-封面.jpg", project.get("headline") or project.get("title") or "",
+                   starts, portrait=project.get("aspect") == "9:16")
+    except Exception:   # noqa: BLE001 — the cover is an extra; the film is saved either way
+        pass
     return str(video)
 
 

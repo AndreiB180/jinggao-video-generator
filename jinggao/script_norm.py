@@ -130,11 +130,28 @@ def _sum(*infos) -> dict:
     return usage
 
 
+TITLE_LINE = re.compile(r"^[\s*#>]*(?:标题|题目)\s*[:：]\s*(.+?)[\s*]*$")
+
+
+def split_title(script: str) -> tuple[str, str]:
+    """A "标题：…" line (the rewrite's headline, often at the end, sometimes in **bold**) is not narration:
+    it was read aloud at the end of the film. Returns (script without it, the headline)."""
+    kept, title = [], ""
+    for line in str(script or "").splitlines():
+        found = TITLE_LINE.match(line)
+        if found and not title:
+            title = found.group(1).strip("*“”\"' ")
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip(), title
+
+
 def normalize(script: str, check=None) -> tuple[str, dict]:
-    """The standard form of a script, plus what was done: {"model": bool, "changes": [...], ...}."""
-    script = str(script or "").strip()
+    """The standard form of a script, plus what was done: {"model": bool, "changes": [...], "title": the
+    headline line taken out of the narration, ...}."""
+    script, title = split_title(str(script or "").strip())
     if not needs_model(script):
-        return local(script), {"model": False, "changes": [], "chunks": 0, "kept": 0}
+        return local(script), {"model": False, "changes": [], "chunks": 0, "kept": 0, "title": title}
     lines = [line.strip() for line in script.splitlines() if line.strip()]
     chunks, current = [], []
     for line in lines:
@@ -157,5 +174,5 @@ def normalize(script: str, check=None) -> tuple[str, dict]:
         out.append(revised)
         changes += found
     normalized = local("\n".join(out))
-    return normalized, {"model": True, "changes": changes[:60], "chunks": len(texts), "kept": kept,
+    return normalized, {"model": True, "changes": changes[:60], "chunks": len(texts), "kept": kept, "title": title,
                         "usage": _sum(*(info for _, _, info in answers))}
