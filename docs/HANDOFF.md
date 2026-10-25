@@ -422,6 +422,15 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.4.7：B站被拒时等着重做、相关图片兜底、借用上限（2026-10-25，定稿候选）
+
+- 客户发来的片子 204 秒几乎全是 5 段 Pixabay 外国图库（存钱罐一段二十多次）：做这条时 B 站拒了客户电脑，剩下的靠 borrow 无限借用凑满。
+- `express_match.BiliUnavailable`：B 站搜索 ≥4 次全空，或引用的 B 站视频 ≥8 个且八成拿不到播放地址，就停下；worker 把任务置 interrupted 并重新入队（payload `bili_retries`、`not_before`=10 分钟后，`store.claim` 不取未到时间的任务），最多 3 次，之后 failed 并提示登录 B 站或稍后重试。
+- `Matcher.image_fill`：卡片之前（keepable 之后、borrow 之前）给仍没画面的句子找相关图片：每句 2 个检索词（去掉“电视剧片段/实拍/现场”等视频词）搜必应图片和中新网图片，跳过摄图网等带水印的图库站，下载后丢掉过小、长宽比离谱、OCR 字多或联系方式的、dHash 重复的，每句留 4 张，6 句一张对照图交 flash 模型挑一张或 0；lane "image"，provider "web_image"，存在项目 images/。8 句实测 7 句挑到贴题干净的图，每批 50–75 秒。
+- 图片渲染：zoompan 按镜头轮换推近/拉远/左移/右移（13%），比例接近成片的图片铺满（`preferred_fit` 图片 0.74–1.36 为 cover）。
+- borrow 每段素材最多借两次（去掉不限次的第二次 borrow）。
+- 抖音开放平台没有给普通开发者开放全站关键词搜视频并给下载地址的接口（开放的是授权用户自己的视频、发布、评论、数据），对找素材没用；以后做“自动发布到抖音”可以用。
+
 ## 代码入口
 
 | 路径 | 用途 |
