@@ -413,6 +413,15 @@
 - 素材库新增题材包 娱乐·明星、体育·赛事现场，和财经一起排进 FIRST。
 - 10-24 晚宿舍机在跑检查批次时整机离线（Tailscale 和 fra 通道都断），检查改在本机做（奥地利网络，时间不可比）。宿舍机建库停在 62,249 个视频（library\STOP 还在），上线后删 STOP、重启 supervisor.ps1。
 
+## 0.4.6：客户 10-25 反馈——不打码、表情包/静止画面、封面、文件名
+
+- 不再打码：`express_clean.video_filter` 只裁不模糊；裁不掉的标记留在画面上、片段降级（dirty）；`read_text` 读到画面中间成段文字不再直接扔，标 wm 交 QA 判（股市走势图、图表、logo、招牌是画面内容，文字页/App 截图不是）；QA 报“中间”有水印/花字的直接判掉（`qa_batch`）；滚动字幕仍直接换。
+- QA_SYSTEM 加：表情包/贴纸/梗图/夸张反应镜头、后加的大花字、整段静止画面不合格。标题含“倍速/加速版/快进/变速/表情包/梗图/斗图”的来源不用（`SKIPPED_UPLOADS`，库里 `SKIP_TITLE`）。被拒的静态画面在“借用别的镜头”之后才兜底，开头第一镜不用。
+- 客户的开头“长图片”= 静态画面被 keepable 兜底保留（排在借用之前）。客户说的“加速”是 B 站搬运号本身加速，标题不写的还识别不了，等客户给具体片段。
+- 文件名 `media.export_name`：稿子第一句（保留句末问号/叹号、去引号），不再加“（无字幕）”。
+- 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
+- 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
+
 ## 代码入口
 
 | 路径 | 用途 |
