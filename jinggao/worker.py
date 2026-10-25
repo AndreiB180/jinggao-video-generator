@@ -953,6 +953,7 @@ def run_once(stop=None, lane="main") -> bool:
             _write_diag(_current["name"])     # at once: a crash in the first seconds is still traced to this job
         except Exception:
             pass
+    from . import express_match
     began, wall_began = time.monotonic(), time.time()
     power_info = {}
     try:
@@ -962,6 +963,17 @@ def run_once(stop=None, lane="main") -> bool:
         store.job_update(job["id"], status="cancelled", message="已取消，已完成的结果保留")
     except (costs.BudgetExceeded, costs.PricingUnavailable) as exc:
         store.job_update(job["id"], status="failed", message="费用保护已停止模型请求，进度已保存", error=str(exc))
+    except express_match.BiliUnavailable as exc:
+        tries = int((job.get("payload") or {}).get("bili_retries", 0))
+        if tries >= BILI_RETRIES:
+            store.job_update(job["id"], status="failed", error=str(exc),
+                             message="B站一直限制这台电脑访问，没有用图库硬凑；请过一段时间再点重试，或在设置里登录B站")
+        else:
+            store.job_update(job["id"], status="interrupted", error=str(exc),
+                             message=f"B站暂时限制访问，{BILI_WAIT // 60} 分钟后自动重做（第 {tries + 1} 次）")
+            again = store.enqueue(job["project_id"], job["kind"], (job.get("payload") or {}) | {
+                "bili_retries": tries + 1, "not_before": time.time() + BILI_WAIT})
+            store.job_update(again["id"], message=f"B站暂时限制访问，等 {BILI_WAIT // 60} 分钟后自动重做")
     except Exception as exc:
         store.job_update(job["id"], status="failed", message="任务未完成，可重试", error=str(exc)[:2200])
     finally:
@@ -1021,6 +1033,8 @@ def _report_waits(name: str) -> None:
 
 
 CRASH_RETRIES = 2
+BILI_RETRIES = 3        # a video Bilibili refused is made again this many times...
+BILI_WAIT = 600         # ...after this many seconds each
 
 
 def requeue_after_crash(name: str, pid: int) -> str:

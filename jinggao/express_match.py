@@ -24,8 +24,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
-from . import (config, curation, execution, express_clean, express_sources as es, media, news_pool, paths, planner,
-               screen_text, store, throttle)
+from . import (config, curation, execution, express_clean, express_sources as es, media, network, news_pool, paths,
+               planner, screen_text, store, throttle)
 
 VERSION = 1
 BILI_PER_QUERY = 6
@@ -118,6 +118,15 @@ wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠
 要求具名人物的镜头：只要画面是此人本人的真实影像或照片就合格，即使与口播所讲的具体事件、场景不一致也不要判不合格。
 标为“古代人物”的镜头：此人没有真实影像，画像、雕像、影视剧/纪录片/动画/插画里表现此人的形象都合格，不要因演员扮演、动画或插画判不合格；只有现代场景、明显是其他具名人物、主持人对镜头讲解才不合格。
 任何镜头：口播没讲到逝世、悼念时，葬礼、遗体、遗像、灵堂、花圈、追悼会画面不合格。"""
+
+
+BROWSER = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+           "Chrome/124.0 Safari/537.36")
+
+
+class BiliUnavailable(RuntimeError):
+    """Bilibili refused this computer (searches all empty, or play addresses refused): a film made now would
+    be a few stock clips over and over, so the video waits and is made again later."""
 
 
 class Budget(RuntimeError):
@@ -303,6 +312,9 @@ class Matcher:
         with execution.ThreadPoolExecutor(max_workers=6) as pool:
             for task, rows in pool.map(run, tasks):
                 results[task] = rows
+        asked = [rows for (kind, _), rows in results.items() if kind == "bili"]
+        if len(asked) >= 4 and not any(asked):
+            raise BiliUnavailable(f"B站的 {len(asked)} 次搜索全部没有结果（多半是被限流或连不上B站）")
         # The local index: videos found and described before (no network), with the matching moments.
         from . import footage_index
         for q in dict.fromkeys(q for g in groups for q in g["zh"][:2]):
@@ -705,6 +717,124 @@ class Matcher:
                     continue
                 return sid
         return None
+
+    # ------------------------------------------------------------ pictures
+    IMAGE_PICK = """每一行是一句口播（行首黄色编号）和几张网上找来的候选图片（行内从左到右是第1、2、3、4张）。
+为每句挑一张最适合放在这句话下面的图片：要和口播讲的人、事、地方对得上，画面干净清楚。
+不要：文字多的图（海报、截图、图表、聊天记录）；带明显水印、网站logo或二维码的；表情包、漫画、卡通；
+画质很差或模糊的；人脸打了马赛克的；口播讲中国的人和事却明显是外国人或外国街景的。都不合适就填 0。
+只输出 JSON：{"S3":2,"S5":0}"""
+    IMAGE_WORDS = re.compile(r"电视剧片段|电视剧|短剧|栏目剧|片段|实拍|视频|素材|现场|新闻|航拍|空镜|纪录片|历史影像|画面|镜头")
+    # Stock-photo sites whose pictures carry their watermark across the middle.
+    IMAGE_SKIP_HOSTS = re.compile(r"699pic|588ku|58pic|ibaotu|nipic|huitu|quanjing|veer|51miz|shutterstock|gettyimages|"
+                                  r"istockphoto|dreamstime|alamy|123rf|depositphotos|vcg\.com|ooopic|zcool|sucai")
+
+    def image_fill(self, shots) -> dict:
+        """Lines still without footage: related web pictures (shown with slow motion by the render), chosen by
+        the vision model from up to four candidates a line. {shot id: (choice, path)}; lines nothing fits are
+        left out."""
+        from . import publisher_videos, screen_text, sources
+        from PIL import ImageOps
+        root = paths.project_dir(self.pid) / "images"
+        root.mkdir(exist_ok=True)
+        groups = {sid: g for g in self.plan.get("groups", []) for sid in g.get("shots", [])}
+        def queries(shot):
+            words = []
+            for q in (groups.get(shot["id"]) or {}).get("zh", [])[:2] + [shot.get("visual") or ""]:
+                q = " ".join(self.IMAGE_WORDS.sub(" ", q).split())
+                if q and q not in words:
+                    words.append(q)
+            return words[:2]
+        seen_hashes = []
+        lock = threading.Lock()
+        def candidates(shot):
+            rows = []
+            for q in queries(shot):
+                for search in (sources.bing_images, publisher_videos.chinanews_images):
+                    try:
+                        rows += search(q)[:8]
+                    except Exception:   # noqa: BLE001 — one search less
+                        continue
+            pictures = []
+            for row in rows:
+                if len(pictures) >= 4:
+                    break
+                url = row.get("url") or ""
+                if not url or self.IMAGE_SKIP_HOSTS.search(url + " " + str(row.get("source_url") or row.get("source") or "")):
+                    continue
+                self.check()
+                try:
+                    with network.client(timeout=12, follow_redirects=True) as client:
+                        response = client.get(url, headers={"User-Agent": BROWSER})
+                    if response.status_code != 200 or len(response.content) > 12 * 2**20:
+                        continue
+                    with Image.open(io.BytesIO(response.content)) as raw:
+                        image = ImageOps.exif_transpose(raw).convert("RGB")
+                except Exception:   # noqa: BLE001 — broken or refused picture
+                    continue
+                if min(image.size) < 400 or not 0.45 <= image.width / image.height <= 2.6:
+                    continue
+                h = _dhash(image)
+                with lock:
+                    if any(bin(h ^ other).count("1") <= 6 for other in seen_hashes):
+                        continue
+                    seen_hashes.append(h)
+                if screen_text.installed():
+                    try:
+                        found = screen_text.classify([screen_text.read(image)])
+                    except Exception:   # noqa: BLE001
+                        found = {"contact": [], "dense": False, "moving": False}
+                    if found["contact"] or found["dense"]:
+                        continue    # a poster, a screenshot or an ad
+                image.thumbnail((1920, 1920))
+                pictures.append((row, image, h))
+            return shot, pictures
+        found = {}
+        with execution.ThreadPoolExecutor(max_workers=4) as pool:
+            for shot, pictures in pool.map(candidates, shots):
+                if pictures:
+                    found[shot["id"]] = pictures
+        if not found:
+            return {}
+        chosen = {}
+        items = list(found.items())
+        for start in range(0, len(items), 6):
+            batch = items[start:start + 6]
+            labels = {f"S{self.position[sid] + 1}": sid for sid, _ in batch}
+            w, h = TILE_W, TILE_H
+            sheet = Image.new("RGB", (w * 4 + 8 * 3, (h + 8) * len(batch)), (30, 30, 30))
+            draw = ImageDraw.Draw(sheet)
+            font = _font(24)
+            lines = []
+            for row_index, (sid, pictures) in enumerate(batch):
+                for k, (_, image, _) in enumerate(pictures):
+                    sheet.paste(ImageOps.fit(image, (w, h)), (k * (w + 8), row_index * (h + 8)))
+                label = f"S{self.position[sid] + 1}"
+                box = draw.textbbox((4, row_index * (h + 8) + 2), label, font=font)
+                draw.rectangle((box[0] - 3, box[1] - 2, box[2] + 3, box[3] + 2), fill=(255, 214, 0))
+                draw.text((4, row_index * (h + 8) + 2), label, font=font, fill=(0, 0, 0))
+                lines.append(f"{label}（{len(pictures)} 张）：{self.shots_by_id_all[sid]['narration'][:60]}")
+            content = [{"type": "text", "text": "\n".join(lines)}, {"type": "image_url", "image_url": {"url": _jpeg(sheet)}}]
+            try:
+                result, _ = self.chat(self.IMAGE_PICK, content, max_tokens=60 + 12 * len(batch), task="express_pick")
+            except Exception as exc:   # noqa: BLE001 — these lines go on to borrowing
+                self.notes.append(f"挑图失败：{str(exc)[:60]}")
+                continue
+            for label, value in (result or {}).items() if isinstance(result, dict) else []:
+                sid = labels.get(str(label).strip())
+                if sid and isinstance(value, int) and 1 <= value <= len(found[sid]):
+                    chosen[sid] = found[sid][value - 1]
+        out = {}
+        for sid, (row, image, h) in chosen.items():
+            name = hashlib.sha1((row.get("url") or str(h)).encode()).hexdigest()[:16]
+            path = root / f"{name}.jpg"
+            image.save(path, "JPEG", quality=92)
+            source = {"provider": "web_image", "id": name, "title": (row.get("title") or "网页图片")[:80],
+                      "url": row.get("source_url") or row.get("source") or row.get("url") or "",
+                      "license": row.get("license") or "网页图片，使用许可待核实"}
+            out[sid] = ({"tile": {"source": source, "t": 0.0, "hash": h}, "start": 0.0, "lane": "image", "rank": 0,
+                         "qa": "image"}, path)
+        return out
 
     def title_card(self, shot, backdrop=None):
         """Neutral image card (counts as image seconds, never as fake footage): a blurred, darkened frame
@@ -1395,6 +1525,7 @@ class Matcher:
                                "repeat": "快速通道：素材不足，复用已通过抽检的相关画面",
                                "reuse": "快速通道：没有新的可用画面，借用附近镜头已通过检查的画面",
                                "stock": "快速通道：用正版图库空镜补位",
+                               "image": "快速通道：没有合适的视频，用相关图片加推拉动态补位",
                                "card": "快速通道：没有可用实拍素材，使用模糊背景卡片"}.get(choice["lane"], "快速通道"),
                     "visual_quality": {"representation": "live_action" if choice["lane"] != "card" else "illustration"},
                     "identity_evidence": identity,
@@ -1596,6 +1727,9 @@ class Matcher:
                 if tile["source"]["provider"] == "bilibili":
                     referenced[tile["source"]["id"]] = tile["source"]
         streams = self.resolve(referenced)
+        refused = sum(1 for bvid in referenced if not streams.get(bvid))
+        if len(referenced) >= 8 and refused >= 0.8 * len(referenced):
+            raise BiliUnavailable(f"B站 {len(referenced)} 个视频里有 {refused} 个拿不到播放地址（多半是被限流）")
         landscape = self.project.get("aspect", "16:9") != "9:16"
         def usable(tile):
             source = tile["source"]
@@ -1870,13 +2004,29 @@ class Matcher:
                 final[sid] = choice | {"qa": "rejected_kept:" + reason}
                 files[sid] = path
         cards = [s for s in self.shots if s["id"] not in final]
+        if cards:
+            # Related pictures with slow motion before any clip is shown again (the client saw one piggy-bank
+            # clip twenty times when Bilibili gave nothing).
+            began = time.monotonic()
+            try:
+                pictured = self.image_fill(cards)
+            except (media.Cancelled, Budget):
+                raise
+            except Exception as exc:   # noqa: BLE001 — borrowing and cards still follow
+                self.notes.append(f"相关图片补位失败：{type(exc).__name__}")
+                pictured = {}
+            for sid, (choice, path) in pictured.items():
+                final[sid], files[sid] = choice, path
+            cards = [s for s in cards if s["id"] not in pictured]
+            if pictured:
+                self.notes.append(f"{len(pictured)} 镜没有合适的视频，用了相关图片（慢慢推拉的动态画面）")
+            stamp("pictures", began)
         footage = sorted((self.position[sid], path) for sid, path in files.items() if sid in self.position)
-        # A real clip already accepted elsewhere (never the neighbouring one) beats a blurred card every time:
-        # viewers took the dark blurred frame for a broken video, which is worse than seeing a clip twice.
+        # A real clip already accepted elsewhere (never the neighbouring one) beats a blurred card, but each clip
+        # is lent out at most twice: one clip all over a film is what viewers notice first.
         reused = 0
         for shot in list(cards):
-            donor = (self.borrow(shot, final, files, limit=HARD_MIN + 2)
-                     or self.borrow(shot, final, files))
+            donor = self.borrow(shot, final, files, limit=2)
             if donor:
                 final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
                 files[shot["id"]] = files[donor]
@@ -1909,7 +2059,7 @@ class Matcher:
         report = {"selected": len(final), "unmatched": unmatched, "elapsed_seconds": round(time.monotonic() - self.started, 2),
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
-                            for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock",
+                            for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
                                          "repeat", "reuse", "card")},
                   "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
                   "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),

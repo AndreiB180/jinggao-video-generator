@@ -661,9 +661,14 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         else:
             visual += f"increase,crop={w}:{h}"
         if asset["kind"] == "image" and options.get("image_motion", True):
-            # Supersample before subpixel zoom to keep slow photographic motion smooth.
-            visual += (f",scale={w*2}:{h*2},zoompan=z='1+0.055*on/{max(1,round(duration*25))}':"
-                       f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={w}x{h}:fps=25")
+            # Supersample before subpixel zoom to keep slow photographic motion smooth. Pictures take turns at
+            # pushing in, pulling out and panning, so a run of them still looks like footage, not a slideshow.
+            n = max(1, round(duration * 25))
+            centre = "x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2'"
+            motion = [f"z='1+0.13*on/{n}':{centre}", f"z='1.13-0.13*on/{n}':{centre}",
+                      f"z='1.13':x='(iw-iw/zoom)*on/{n}':y='ih/2-ih/zoom/2'",
+                      f"z='1.13':x='(iw-iw/zoom)*(1-on/{n})':y='ih/2-ih/zoom/2'"][i % 4]
+            visual += f",scale={w*2}:{h*2},zoompan={motion}:d=1:s={w}x{h}:fps=25"
         visual = prefix + visual
         visual += f",setsar=1,fps=25,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}"
         args = [paths.binary("ffmpeg"), "-v", "error", "-y", "-filter_threads", "2"]

@@ -181,8 +181,11 @@ def claim(lane: str = "main") -> dict | None:
     with connection() as con:
         con.execute("BEGIN IMMEDIATE")
         # Batch videos wait behind everything else, so a single video or a quick edit never queues behind 100.
+        # A video waiting out a Bilibili refusal (payload not_before) is not taken before its time.
         row = con.execute(f"SELECT id FROM jobs WHERE status='queued' AND {_lane(lane)} "
-                          "ORDER BY json_extract(payload, '$.batch') IS NOT NULL, created LIMIT 1").fetchone()
+                          "AND COALESCE(json_extract(payload, '$.not_before'), 0) <= ? "
+                          "ORDER BY json_extract(payload, '$.batch') IS NOT NULL, created LIMIT 1",
+                          (time.time(),)).fetchone()
         if not row:
             return None
         con.execute("UPDATE jobs SET status='running',message='开始执行',updated=? WHERE id=?",

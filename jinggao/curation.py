@@ -25,7 +25,9 @@ def preferred_fit(shot: dict, asset: dict, aspect: str) -> str:
         # Footage fills the frame (cropping a band) unless its shape is far off, e.g. a vertical video in a
         # landscape film: customers read blurred side or top bands as "not filled".
         return "cover" if .7 <= ratio <= 1.43 else "contain"
-    return "cover" if .95 <= ratio <= 1.05 else "contain"
+    # A picture near the film's shape fills it (a 4:3 photo loses a band top and bottom); a tall one sits on
+    # a blurred copy of itself.
+    return "cover" if .74 <= ratio <= 1.36 else "contain"
 
 
 def needs_identity(shot: dict) -> bool:

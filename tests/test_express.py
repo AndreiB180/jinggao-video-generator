@@ -483,7 +483,8 @@ def test_footage_fills_the_frame_unless_its_shape_is_far_off():
     assert curation.preferred_fit({}, video | {"width": 1440, "height": 1080}, "16:9") == "cover"     # 4:3
     assert curation.preferred_fit({}, video | {"width": 1920, "height": 800}, "16:9") == "cover"      # 2.4:1
     assert curation.preferred_fit({}, video | {"width": 1080, "height": 1920}, "16:9") == "contain"   # vertical
-    assert curation.preferred_fit({}, {"kind": "image", "width": 1440, "height": 1080}, "16:9") == "contain"
+    assert curation.preferred_fit({}, {"kind": "image", "width": 1440, "height": 1080}, "16:9") == "cover"    # 4:3 photo
+    assert curation.preferred_fit({}, {"kind": "image", "width": 1080, "height": 1440}, "16:9") == "contain"  # tall
     assert express_match.intro_seconds(60) == 6 and express_match.intro_seconds(900) == 8
 
 
@@ -499,3 +500,34 @@ def test_the_opening_shot_chooses_its_footage_first(data):
     options = {first: [(best, "pick")] + [(t, "near") for t in filler], second: [(best, "pick")]}
     assigned = m.allocate(options, {}, {}, m.shots)
     assert assigned[first]["tile"]["source"]["id"] == "BV1best00000" and assigned[first]["lane"] == "pick"
+
+
+def test_a_bilibili_refusal_waits_and_makes_the_video_again(data, monkeypatch):
+    from jinggao import worker
+    project = store.new_project("片子", "第一句。")
+    store.enqueue(project["id"], "produce", {})
+    def refused(job, stop=None):
+        raise express_match.BiliUnavailable("B站的 6 次搜索全部没有结果")
+    monkeypatch.setattr(worker, "process", refused)
+    assert worker.run_once()
+    jobs = store.jobs(project["id"])
+    assert jobs[0]["status"] == "queued" and jobs[0]["payload"]["bili_retries"] == 1 and "分钟后自动重做" in jobs[0]["message"]
+    assert jobs[1]["status"] == "interrupted"
+    assert store.claim() is None                                   # it waits its ten minutes
+    monkeypatch.setattr(worker.time, "time", lambda: jobs[0]["payload"]["not_before"] + 1)
+    monkeypatch.setattr(store.time, "time", lambda: jobs[0]["payload"]["not_before"] + 1)
+    assert store.claim()["id"] == jobs[0]["id"]
+
+
+def test_searches_that_all_come_back_empty_stop_the_film(data):
+    shots = [planner.new_shot(t) | {"duration": 5.0} for t in ("一。", "二。")]
+    project = store.new_project("t", "x")
+    project = store.mutate(project["id"], lambda p: p.update(shots=shots))
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    class Bili:
+        def search(self, q):
+            return []
+    m.bili, m.pixa = Bili(), None
+    groups = [{"zh": ["甲 乙", "丙 丁"], "en": []}, {"zh": ["戊 己", "庚 辛"], "en": []}]
+    with pytest.raises(express_match.BiliUnavailable):
+        m.search(groups)
