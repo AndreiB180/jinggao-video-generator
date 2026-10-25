@@ -150,3 +150,15 @@ def test_a_timed_out_background_is_drawn_again_by_gpt_image(tmp_path, monkeypatc
     cfg = {"cover_mode": "ai_bg", "cover_api_key": "k", "cover_sizes": "landscape", "cover_reference": "0"}
     result = cover.render(cfg, Image.new("RGB", (1920, 1080)), cover.plan_text("标题"), "标题", tmp_path, "片")
     assert calls == ["nano-banana-2-lite", "gpt-image-2"] and not result["error"] and len(result["files"]) == 1
+
+
+def test_cover_words_are_never_cut_inside_a_word_or_repeated():
+    # The client's cover read "别人却是另一种颜" (cut at 15 characters) over a bar repeating the big line.
+    parts = cover.tidy({"tag": "深度揭秘", "main": "你眼中的蓝色｜别人却是另一种颜色", "sub": "",
+                        "ask": "你有没有想过，你眼中的蓝色可能在别人那里是另一种颜色？"})
+    assert parts == {"tag": "深度揭秘", "main": "你眼中的蓝色｜别人却是另一种颜色", "sub": "", "ask": "你有没有想过？"}
+    assert cover.tidy({"tag": "随便", "main": "结婚十六｜年没吵过架", "ask": "这个家为什么过不下去"}) == {
+        "tag": "深度解读", "main": "结婚十六年没吵过架", "sub": "", "ask": "这个家为什么过不下去？"}
+    long = cover.tidy({"main": "美军三航母压境", "sub": "伊朗三十枚导弹齐射，导弹落在海湾附近的美军基地外围",
+                       "ask": "中东这仗到底打不打得起来，美国和伊朗谁先撑不住了？"})
+    assert long["sub"] == "伊朗三十枚导弹齐射" and long["ask"] == "中东这仗到底打不打得起来？"

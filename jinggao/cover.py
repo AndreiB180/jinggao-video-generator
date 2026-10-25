@@ -353,8 +353,9 @@ PLAN_SYSTEM = """图片是一条视频开头几个画面的联系表，每格左
 1. frame：挑最适合做封面背景的一格编号。有人物正脸、冲突、爆炸、标志性地点或物件的优先；不要文字多、模糊、黑屏、表情包或只有空镜风景的。
 2. 把标题拆成封面上的字，全部用标题里的原词，不编新内容：
    tag：栏目标签，从 国际焦点、深度揭秘、历史档案、财经观察、社会热点、人物故事、军事前沿、娱乐速递、体育风云、真相调查 里选最贴的一个；
-   main：最抓人的一句（不超过12个字），超过6个字时用“｜”标出分两行的位置，断在两个词之间；sub：第二句（不超过14个字，可以为空）；ask：标题里的问句或悬念（不超过16个字，可以为空）。
-   一个短语不要拆到两项里（“这出戏还能演多久？”整句放进 ask）。
+   main：最抓人的一句（不超过14个字），超过6个字时用“｜”标出分两行的位置，断在两个词之间，最好断在意思的停顿处；sub：第二句（不超过16个字，可以为空）；ask：标题里的问句或悬念（不超过18个字，可以为空）。
+   每一项都是完整的词句，不能截断词语（“另一种颜色”不能写成“另一种颜”）；字数超了就换一句更短的，不要硬截。
+   一个短语不要拆到两项里（“这出戏还能演多久？”整句放进 ask）；三项不重复同一段话，main 里有的话 sub、ask 里不再出现。
 只输出 JSON：{"frame":1,"tag":"","main":"","sub":"","ask":""}"""
 
 
@@ -406,11 +407,77 @@ def choose(title: str, frames: list[Image.Image]) -> tuple[Image.Image | None, d
         return best, parts
     index = answer.get("frame")
     picture = frames[index - 1] if isinstance(index, int) and 1 <= index <= len(frames) else best
-    limits = {"tag": 6, "main": 15, "sub": 16, "ask": 20}
-    chosen = {k: re.sub(r"[“”\"|]", "", str(answer.get(k) or "")).strip()[:n] for k, n in limits.items()}
+    chosen = tidy(answer)
     if not chosen["main"]:
         return picture, parts
     return picture, chosen
+
+
+PUNCT = "，,、；;：:！!？?。"
+QUESTION = re.compile(r"(.)[不没]\1|到底|吗|呢|什么|怎么|为何|为什么|多久|多少|哪|谁|难道|是否|能否")
+
+
+def _clauses(text: str) -> list[str]:
+    return [c for c in re.findall(rf"[^{PUNCT}]+[{PUNCT}]?", text) if c.strip(PUNCT + " ")]
+
+
+def _shared(a: str, b: str) -> int:
+    """Length of the longest run of characters a and b have in common."""
+    best = 0
+    for i in range(len(a)):
+        for j in range(i + best + 1, len(a) + 1):
+            if a[i:j] in b:
+                best = j - i
+            else:
+                break
+    return best
+
+
+def _whole(text: str, most: int) -> str:
+    """text when it fits most characters, else as many whole clauses from the start as fit ("" when even the
+    first is longer): a word is never cut in half (the client got "另一种颜" for "另一种颜色")."""
+    if len(text) <= most:
+        return text
+    kept = ""
+    for clause in _clauses(text):
+        if len((kept + clause).rstrip(PUNCT)) > most:
+            break
+        kept += clause
+    return kept.rstrip(PUNCT + " ")
+
+
+def _not_again(text: str, *others: str) -> str:
+    """text without the clauses that repeat what the bigger lines already say (4 characters or more in a
+    row); a question left without its mark gets it back."""
+    kept = "".join(c for c in _clauses(text) if not any(_shared(c.rstrip(PUNCT), o) >= 4 for o in others if o))
+    kept = kept.rstrip("，,、；;：: ")
+    if len(kept.rstrip(PUNCT)) < 3:
+        return ""
+    if kept[-1] not in PUNCT and text.rstrip()[-1:] in "？?" or kept[-1] not in PUNCT and QUESTION.search(kept):
+        kept += "？"
+    return kept
+
+
+def tidy(answer: dict) -> dict:
+    """The model's cover words made safe to draw: whole words and clauses only, the main line's break moved
+    off a word's middle, no part repeating another, a known tag."""
+    clean = {k: re.sub(r"[“”\"|\s]", "", str(answer.get(k) or "")) for k in ("tag", "main", "sub", "ask")}
+    tag = clean["tag"] if clean["tag"] in TAGS else "深度解读"
+    main = clean["main"].replace("｜", "|", 1).replace("｜", "")
+    left, _, right = main.partition("|")
+    plain = (left + right).strip(PUNCT + " ")
+    if len(plain) > 20:
+        plain = _whole(plain, 20) or plain
+        left, right = plain, ""
+    if right and plain.startswith(left):
+        at = len(left.rstrip(PUNCT + " "))
+        fine = left[-1:] in PUNCT or at in _cuts(plain)
+        main = (left.rstrip(PUNCT + " ") + "｜" + right.lstrip(PUNCT + " ")) if fine else plain
+    else:
+        main = plain
+    sub = _not_again(_whole(clean["sub"].replace("｜", ""), 18), plain)
+    ask = _not_again(_whole(clean["ask"].replace("｜", ""), 22), plain, sub.rstrip(PUNCT))
+    return {"tag": tag, "main": main, "sub": sub, "ask": ask}
 
 
 class CoverError(RuntimeError):
