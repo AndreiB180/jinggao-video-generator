@@ -514,9 +514,15 @@ def test_a_bilibili_refusal_waits_and_makes_the_video_again(data, monkeypatch):
     assert jobs[0]["status"] == "queued" and jobs[0]["payload"]["bili_retries"] == 1 and "分钟后自动重做" in jobs[0]["message"]
     assert jobs[1]["status"] == "interrupted"
     assert store.claim() is None                                   # it waits its ten minutes
-    monkeypatch.setattr(worker.time, "time", lambda: jobs[0]["payload"]["not_before"] + 1)
-    monkeypatch.setattr(store.time, "time", lambda: jobs[0]["payload"]["not_before"] + 1)
+    other = store.new_project("另一条", "第一句。")
+    store.enqueue(other["id"], "produce", {})
+    assert not worker.run_once()                                   # and no other video starts meanwhile
+    assert store.jobs(other["id"])[0]["status"] == "queued"
+    later = jobs[0]["payload"]["not_before"] + 1
+    monkeypatch.setattr(worker.time, "time", lambda: later)
+    monkeypatch.setattr(store.time, "time", lambda: later)
     assert store.claim()["id"] == jobs[0]["id"]
+    assert later - worker.bili_refused_at() < worker.BILI_CALM     # one video at a time for the next hour
 
 
 def test_searches_that_all_come_back_empty_stop_the_film(data):

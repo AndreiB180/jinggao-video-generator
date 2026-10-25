@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 from copy import deepcopy
+import json
 import time
 import math
 import multiprocessing
@@ -942,6 +943,8 @@ _current = {"job": None, "title": ""}
 
 
 def run_once(stop=None, lane="main") -> bool:
+    if lane == "main" and time.time() - bili_refused_at() < BILI_WAIT:
+        return False    # every video now would be refused too, and asking again keeps the refusal going
     job = store.claim(lane)
     if not job:
         return False
@@ -964,6 +967,13 @@ def run_once(stop=None, lane="main") -> bool:
     except (costs.BudgetExceeded, costs.PricingUnavailable) as exc:
         store.job_update(job["id"], status="failed", message="费用保护已停止模型请求，进度已保存", error=str(exc))
     except express_match.BiliUnavailable as exc:
+        try:
+            target = paths.DATA / "bili-refused.json"
+            temporary = paths.temporary(target)
+            temporary.write_text(json.dumps({"at": time.time(), "why": str(exc)}, ensure_ascii=False), "utf-8")
+            paths.publish(temporary, target)
+        except OSError:
+            pass
         tries = int((job.get("payload") or {}).get("bili_retries", 0))
         if tries >= BILI_RETRIES:
             store.job_update(job["id"], status="failed", error=str(exc),
@@ -1034,7 +1044,16 @@ def _report_waits(name: str) -> None:
 
 CRASH_RETRIES = 2
 BILI_RETRIES = 3        # a video Bilibili refused is made again this many times...
-BILI_WAIT = 600         # ...after this many seconds each
+BILI_WAIT = 600         # ...after this many seconds each; meanwhile no other video starts on this computer
+BILI_CALM = 3600        # and for an hour after a refusal it makes one video at a time
+
+
+def bili_refused_at() -> float:
+    """When Bilibili last refused this computer (0: not recently). Shared by every worker process."""
+    try:
+        return float(json.loads((paths.DATA / "bili-refused.json").read_text("utf-8"))["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0
 
 
 def requeue_after_crash(name: str, pid: int) -> str:
@@ -1107,7 +1126,7 @@ def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
         if recover:
             store.recover(lane)
         while stop is None or not stop.is_set():
-            if slot and slot >= video_workers():
+            if slot and (slot >= video_workers() or time.time() - bili_refused_at() < BILI_CALM):
                 time.sleep(1)
                 continue
             if not run_once(stop, lane):
