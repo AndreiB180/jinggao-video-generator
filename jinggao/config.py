@@ -30,6 +30,8 @@ DEFAULTS = {
     "cost_image_tokens": "0",
     "pipeline": "express", "express_final_check": "1", "shot_length": "long", "news_mode": "1", "news_migrated": "",
     "subtitle_font": "black", "subtitle_size": "84", "subtitle_color": "white",
+    "cover_mode": "design", "cover_api_key": "", "cover_base_url": "https://grsai.dakka.com.cn", "cover_model": "gpt-image-2",
+    "cover_sizes": "both", "cover_reference": "1", "cover_prompt_landscape": "", "cover_prompt_portrait": "",
     "news_crawler_dir": "", "news_crawler_command": "", "news_crawler_output": "",
     "news_crawler_limit": "5", "news_crawler_platforms": "",
 }
@@ -131,6 +133,12 @@ def update(values: dict) -> dict:
             raise ValueError("并发数须为 1 到 4")
     if "video_workers" in values and values["video_workers"] not in ("1", "2", "3", "4", "5", "6"):
         raise ValueError("同时制作的视频须为 1 到 6 条")
+    if values.get("cover_mode", "design") not in ("design", "ai", "off"):
+        raise ValueError("封面方式无效")
+    if values.get("cover_sizes", "both") not in ("both", "landscape", "portrait"):
+        raise ValueError("封面尺寸无效")
+    if values.get("cover_reference", "1") not in ("0", "1"):
+        raise ValueError("封面参考图设置无效")
     if values.get("news_mode", "0") not in ("0", "1"):
         raise ValueError("新闻模式开关须为 0 或 1")
     if values.get("shot_length", "long") not in ("long", "medium", "line"):

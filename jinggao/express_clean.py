@@ -786,35 +786,9 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
 
 
 def dirty(result: dict) -> bool:
-    """Marks that the crop could not remove (blurred instead), or a subtitle line left in view. Caption lines
-    read by OCR (kind "caption") are blurred when they cannot be cropped: unlike a guessed subtitle band, their
-    extent is known."""
+    """Marks that the crop could not remove (left in view, never blurred), or a subtitle line left in view."""
     return any(r["kind"] in ("center", "subtitle", "caption") or (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]) > 0.004
                for r in (result or {}).get("residual", []))
-
-
-MESSY_AREA = 0.05    # share of the shown picture that blurred patches may cover
-MESSY_COUNT = 3      # blurred patches a clip may carry
-
-
-def blurred(result: dict) -> list[list[float]]:
-    """The boxes video_filter blurs (a subtitle band is cropped or left, never smeared)."""
-    return [r["box"] for r in (result or {}).get("residual") or []
-            if r["kind"] != "subtitle" and r["box"][2] - r["box"][0] >= 0.01 and r["box"][3] - r["box"][1] >= 0.01]
-
-
-def messy(result: dict) -> bool:
-    """More, or larger, blurred patches than a clean-looking clip has. Text pages, app screens and charts
-    blurred line by line came out as rows of smeared blocks that viewers took for random mosaic; such
-    clips are replaced instead."""
-    boxes = blurred(result)
-    if len(boxes) > MESSY_COUNT:
-        return True
-    x, y, w, h = (result or {}).get("crop") or (0.0, 0.0, 1.0, 1.0)
-    shown = 0.0
-    for x0, y0, x1, y1 in boxes:
-        shown += max(0.0, min(x1, x + w) - max(x0, x)) * max(0.0, min(y1, y + h) - max(y0, y))
-    return shown > MESSY_AREA * max(1e-6, w * h)
 
 
 def central_marks(source: dict | None) -> list[dict]:
@@ -840,24 +814,16 @@ def from_view(box, rect) -> list[float]:
 
 
 def video_filter(result: dict) -> str:
-    """FFmpeg filter prefix: blur leftover logos, then crop to the clean rectangle."""
+    """FFmpeg filter prefix: crop to the clean rectangle. Marks the crop cannot remove stay as they are:
+    blurred patches looked like random mosaic to viewers (a logo or a chart label is part of the picture),
+    and such clips already rank behind clean ones (dirty)."""
     if not result or not result.get("crop"):
         return ""
-    parts = []
-    for i, item in enumerate(result.get("residual") or []):
-        x0, y0, x1, y1 = item["box"]
-        if item["kind"] == "subtitle" or x1 - x0 < 0.01 or y1 - y0 < 0.01:
-            continue   # a smeared subtitle band looks worse than the cropped-out line; such clips are marked dirty
-        crop = (f"crop=w='max(4,trunc(iw*{x1 - x0:.4f}/2)*2)':h='max(4,trunc(ih*{y1 - y0:.4f}/2)*2)'"
-                f":x='trunc(iw*{x0:.4f})':y='trunc(ih*{y0:.4f})'")
-        parts.append(f"split=2[clean_main{i}][clean_cut{i}];[clean_cut{i}]{crop},"
-                     f"boxblur=lr='min(10,min(w,h)/2-1)':lp=3:cr='min(5,min(cw,ch)/2-1)':cp=3[clean_blur{i}];"
-                     f"[clean_main{i}][clean_blur{i}]overlay=x='trunc(W*{x0:.4f})':y='trunc(H*{y0:.4f})'")
     x, y, w, h = result["crop"]
     if w < 0.995 or h < 0.995:
-        parts.append(f"crop=w='trunc(iw*{w:.4f}/2)*2':h='trunc(ih*{h:.4f}/2)*2'"
-                     f":x='trunc(iw*{x:.4f})':y='trunc(ih*{y:.4f})'")
-    return ",".join(parts)
+        return (f"crop=w='trunc(iw*{w:.4f}/2)*2':h='trunc(ih*{h:.4f}/2)*2'"
+                f":x='trunc(iw*{x:.4f})':y='trunc(ih*{y:.4f})'")
+    return ""
 
 
 def _merge(boxes):

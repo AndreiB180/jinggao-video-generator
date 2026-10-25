@@ -62,6 +62,9 @@ NOISE_WORDS = re.compile(
     r"教程|讲解|解说|课程|讲座|课件|PPT|ppt|直播|游戏|动画|MMD|手书|鬼畜|CAD|图纸|三维模型|建模|广告|带货|测评|开箱|"
     r"reaction|反应|翻唱|MV|AMV|搞笑|模拟器|我的世界|原神|王者|AI绘|AI生成|配音秀|考研|考试|答辩|股票|基金|大A|"
     r"财经|行情|招聘|面试|求职|小说|有声书|电台|音乐|歌曲|BGM|bgm|伴奏")
+# Uploads that say they are sped up (re-uploaders speed clips up against duplicate checks) or are memes:
+# never used.
+SKIPPED_UPLOADS = re.compile(r"倍速|加速版|快进|变速|表情包|梗图|斗图")
 DRAMA_WORDS = re.compile(r"电视剧|电影|剧照|饰演|扮演|演员|剧情|混剪|AI|特型演员|模仿|cos|动画|动漫|漫画|手绘|配音|片段合集|"
                          r"朗诵|背景视频|LED|舞台|情景")
 PERSON_EVIDENCE = re.compile(r"影像|纪录|新闻|讲话|原声|视频|资料|珍贵|历史|现场|采访|发言|报道")
@@ -107,9 +110,10 @@ TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体�
 
 QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
 对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
-bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克，或画面上有一块块模糊的色块、糊掉的文字（打码痕迹）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
+bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克或打码；表情包、卡通表情、贴纸、梗图、对话气泡图标叠在画面上，或画面本身是表情包式的夸张反应镜头（对着镜头狂笑、做鬼脸）；画面上后加的大号花字、标题字（不是场景里本来就有的字）；整段画面静止不动（一张图片或定格）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
 wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
+股市K线和走势图、数据图表、商品和品牌logo、街道招牌、包装上的字是画面本身的内容，不算文字页，口播相关就合格。
 普通镜头（没有要求具名人物）：用电视剧、短剧、栏目剧片段里的演员表现口播讲的情节（夫妻吵架、婆媳矛盾、查看手机、离婚、职场冲突等）是合格的，不要因为是演员扮演或情景再现判不合格。画面主体和口播讲的对象一致即可，细节不必一致：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。以下算跑题（不合格，原因写“跑题”）：口播讲人和人之间的事（夫妻、家人、同事、官员、民众），画面却是风景、空镜、物品、动物，看不出相关的人；口播讲中国国内的人和事，画面明显是外国人或外国街景；口播讲某个国家、组织，画面明显是另一个国家的（如讲也门战事却是中国火箭军发射、中国海军演习）；科普讲解、课堂课件、带货、游戏解说之类与口播无关的视频画面；画面题材与口播完全无关。
 要求具名人物的镜头：只要画面是此人本人的真实影像或照片就合格，即使与口播所讲的具体事件、场景不一致也不要判不合格。
 标为“古代人物”的镜头：此人没有真实影像，画像、雕像、影视剧/纪录片/动画/插画里表现此人的形象都合格，不要因演员扮演、动画或插画判不合格；只有现代场景、明显是其他具名人物、主持人对镜头讲解才不合格。
@@ -336,6 +340,8 @@ class Matcher:
         need = max([float(shots_by_id[s]["duration"]) for s in group["shots"]] or [8])
         if row["provider"] == "bilibili":
             if duration < 12 or duration > 3 * 3600:
+                return None
+            if SKIPPED_UPLOADS.search(row.get("title", "") + row.get("tags", "")):
                 return None
             if NOISE_WORDS.search(row.get("title", "")):
                 score -= 1.2
@@ -967,8 +973,6 @@ class Matcher:
             if clean.get("central"):
                 choice["tile"]["source"]["dirty"] = True   # mid-picture watermark: avoid this source
             self.read_text(job_id, shot, choice, path)
-            if express_clean.messy(self.clean.get(job_id)):
-                raise ValueError("要打码的地方太多，换别的画面")
             return job_id, sid, path, None
         except media.Cancelled:
             raise
@@ -1153,10 +1157,13 @@ class Matcher:
                     self.text_found["sources_contact"] += 1
             source["contact"] = True
             raise ValueError("画面里有联系方式或广告文字：" + "、".join(found["contact"])[:40])
-        if found["dense"] or found["moving"]:
-            # Lines of text across the picture (title cards, app screens, charts, scrolling text) would be
-            # blurred into smeared blocks: another window or video is used instead.
-            raise ValueError("画面中间有大段文字或滚动字幕，不打码，换别的画面")
+        if found["moving"]:
+            raise ValueError("画面里有滚动字幕，换别的画面")
+        if found["dense"]:
+            # Text across the picture: a text page or an app screen is unusable, a stock chart, a logo or a
+            # sign is footage. Nothing is blurred; the visual check judges it and cleaner clips come first.
+            with self.lock:
+                self.soft.setdefault(job_id, set()).add("wm")
         if not found["marks"]:
             return
         if clean.get("crop"):
@@ -1280,10 +1287,9 @@ class Matcher:
             for label, where in marks.items():
                 if label in ids:
                     self.residual_mark(ids[label], where)
-            for job_id in ids.values():
-                # The marks it reported are blurred on top of what OCR found: too much of that looks smeared.
-                if job_id not in bad and express_clean.messy(self.clean.get(job_id)):
-                    bad[job_id] = "打码面积过大"
+                    # Nothing is blurred any more: an "@name" or 花字 across the middle would stay in the film.
+                    if label in ids and ids[label] not in bad and "中间" in str(where):
+                        bad[ids[label]] = "画面中间有水印或花字"
         return bad
 
     VIEW_BOXES = {"左上": [0, 0, 0.36, 0.16], "右上": [0.64, 0, 1, 0.16], "左下": [0, 0.84, 0.36, 1],
@@ -1856,7 +1862,9 @@ class Matcher:
             return not IDENTITY_REJECTION.search(reason) and (lane in ("ctx", "topic") or self.unfilmed_shot(shot))
         for shot in list(pending):
             sid = shot["id"]
-            kept = next(((c, path, reason) for c, path, reason in rejected.get(sid, []) if keepable(shot, c, reason)), None)
+            # A still picture waits until borrowing moving footage has been tried (below).
+            kept = next(((c, path, reason) for c, path, reason in rejected.get(sid, [])
+                         if "静态" not in reason and keepable(shot, c, reason)), None)
             if kept:
                 choice, path, reason = kept
                 final[sid] = choice | {"qa": "rejected_kept:" + reason}
@@ -1876,6 +1884,17 @@ class Matcher:
                 reused += 1
         if reused:
             self.notes.append(f"{reused} 镜没有新的可用画面，借用了附近镜头已通过检查的画面")
+        for shot in list(cards):
+            # Nothing to borrow: a still picture beats a title card, except as the opening shot.
+            sid = shot["id"]
+            still = None if self.position[sid] == 0 else next(
+                ((c, path, reason) for c, path, reason in rejected.get(sid, [])
+                 if "静态" in reason and keepable(shot, c, reason)), None)
+            if still:
+                choice, path, reason = still
+                final[sid] = choice | {"qa": "rejected_kept:" + reason}
+                files[sid] = path
+                cards.remove(shot)
         for shot in cards:
             # Background: a frame of the nearest accepted clip (blurred), so the card belongs to the video.
             near = min(footage, key=lambda item: abs(item[0] - self.position[shot["id"]]), default=None)

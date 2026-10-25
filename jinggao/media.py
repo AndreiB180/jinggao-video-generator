@@ -317,6 +317,15 @@ def choose_folder(initial: str = "") -> str | None:
     return chosen[-1].strip() or None
 
 
+def export_name(project: dict) -> str:
+    """The film's file name: the first sentence of the script (the hook the video opens with), else the
+    project title."""
+    script = re.sub(r"[*#>“”\"'‘’]", "", str(project.get("script") or "")).strip()
+    found = re.match(r"[^。！？!?\n]*[！？!?]?", script)
+    first = (found.group(0) if found else "").strip(" ，,、；;：:")
+    return first or str(project.get("title") or "")
+
+
 def deliver(project: dict, result: dict) -> str:
     """Copy a finished export to the output folder as <title>.mp4; the subtitle file goes one level down so
     players that auto-load a same-named .srt do not show the subtitles twice."""
@@ -324,9 +333,7 @@ def deliver(project: dict, result: dict) -> str:
         return ""
     folder = output_folder()
     folder.mkdir(parents=True, exist_ok=True)
-    name = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", project.get("title") or "").strip(" .")[:60] or "成片"
-    if result.get("subtitles") is False:
-        name += "（无字幕）"
+    name = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", export_name(project)).strip(" .")[:60] or "成片"
     stem, n = name, 2
     while (folder / f"{stem}.mp4").exists():
         stem, n = f"{name}（{n}）", n + 1
@@ -339,13 +346,7 @@ def deliver(project: dict, result: dict) -> str:
         shutil.copyfile(srt, folder / SUBTITLE_FOLDER / f"{stem}.srt")
     try:
         from . import cover
-        starts, at = [], 0.0
-        for shot in (project.get("shots") or [])[:cover.SAMPLES]:
-            length = float(shot.get("duration") or 0)
-            starts.append(at + length / 2)
-            at += length
-        cover.make(video, folder / f"{stem}-封面.jpg", project.get("headline") or project.get("title") or "",
-                   starts, portrait=project.get("aspect") == "9:16")
+        cover.start(project, video, folder, stem, project.get("headline") or name)
     except Exception:   # noqa: BLE001 — the cover is an extra; the film is saved either way
         pass
     return str(video)

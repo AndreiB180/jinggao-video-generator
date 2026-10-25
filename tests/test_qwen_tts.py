@@ -166,8 +166,9 @@ def test_finished_export_is_copied_with_subtitles_one_level_down(tmp_path, monke
     assert (out / media.SUBTITLE_FOLDER / "范仲淹 荒政 三策.srt").exists()
     assert not list(out.glob("*.srt"))
     plain = media.deliver(project, result | {"subtitles": False})
-    assert Path(plain).name == "范仲淹 荒政 三策（无字幕）.mp4"
-    assert (out / media.SUBTITLE_FOLDER / "范仲淹 荒政 三策（无字幕）.srt").exists()
+    assert Path(plain).name == "范仲淹 荒政 三策（3）.mp4"             # no "（无字幕）" in the name (client 10-25)
+    scripted = media.deliver(project | {"script": "范仲淹为什么要抬高米价？\n第二句。"}, result)
+    assert Path(scripted).name == "范仲淹为什么要抬高米价？.mp4"       # named after the opening line
 
 
 def test_produce_voices_the_standard_script_while_shots_are_planned(tmp_path, monkeypatch):

@@ -36,7 +36,7 @@ SHOT_WORKERS = 8        # videoshot metadata (same API gateway as search) and it
 DESCRIBE_WORKERS = 10   # the background worker allows 10 model calls at a time (execution.MODEL_SLOTS)
 MAX_TRIES = 2           # a video whose sheets failed this often is left out of later builds
 SKIP_TITLE = re.compile(r"直播|回放|教程|PPT|课件|歌曲|MV|翻唱|游戏|手游|原神|王者荣耀|和平精英|鬼畜|reaction|开箱|测评|"
-                        r"带货|广告|招聘|网课|考研|公务员|英语|单词")
+                        r"带货|广告|招聘|网课|考研|公务员|英语|单词|倍速|加速版|快进|变速|表情包|梗图|斗图")
 BAD_KINDS = {"主持人出镜", "图表文字", "黑屏或模糊"}
 DESCRIBE_SYSTEM = """图片是视频预览帧的联系表，每格左上角有黄色编号。为每一格写一句画面描述（最多16个字，不要标点结尾）：主体、动作、场景，能看出时代的写上（古代/近代/现代），能认出地名或事物的写上；再给画面类型，只能是：实拍、影视剧、动画、图表文字、主持人出镜、黑屏或模糊。
 只输出 JSON：{"1":["描述","类型"],"2":["描述","类型"],...}，每个编号都要有。"""
