@@ -5,9 +5,12 @@ Setting cover_mode:
   opening shots (taken from the footage itself, so no burned-in subtitles) and splits the title into a
   tag, a big line, a second line and a question; the cover is then drawn locally in the 百家号 look: red
   tag, gold main line, silver second line, the question on a yellow hazard bar.
-- "ai": an image model draws the cover (GrsAI; the cheapest usable models are ¥0.02-0.06 a picture), with
-  the chosen frame as a reference picture and the user's prompts; it runs in the background, and any
-  shape it fails on is designed locally instead.
+- "ai_bg": the image model draws one picture without lettering (the cheapest model, about ¥0.02), and both
+  shapes are designed on it: an AI-drawn cover for a cent or two a film, with a title that cannot be misspelt.
+- "ai": the image model draws each cover whole, title included (GrsAI gpt-image-2, ¥0.03-0.06 a picture),
+  from the user's prompts.
+Both AI ways get the chosen frame as a reference picture, run in the background, and fall back to the
+design above for whatever fails.
 - "off".
 Landscape 16:9 and/or portrait 9:16 (cover_sizes).
 """
@@ -30,6 +33,9 @@ FONT = "NotoSansSC-Black.otf"
 PROMPT = ("这个是我的自媒体选题标题，需要展示出主题文字钩子，这个封面是用在百家号这个平台的，"
           "整体风格喜好要对应这个平台的人群")
 SHAPES = {"landscape": ("16:9", "横版", (1920, 1080)), "portrait": ("9:16", "竖版", (1080, 1920))}
+BACKGROUND = ("为这期视频画一张百家号封面的背景图。画面里不要出现任何文字、字母、数字、标志和水印。"
+              "主体人物或场景放在画面右侧，左侧留出较暗、干净的区域放标题。写实、电影感、冲击力强，"
+              "符合百家号读者的喜好。")
 AI_WAIT = 240          # seconds one AI cover may take
 SAMPLES = 5            # opening shots looked at for the picture
 YELLOW, WHITE, BLACK = (255, 222, 0), (255, 255, 255), (0, 0, 0)
@@ -207,6 +213,15 @@ def _shiny(base: Image.Image, xy, text: str, font, colours, stroke: int, outline
     return w, h
 
 
+def _bottom_fade(base: Image.Image, top: int, strength: int = 235) -> Image.Image:
+    """Darken from `top` to the bottom edge: the subtitle line that some footage has burned in sits there."""
+    w, h = base.size
+    column = Image.new("L", (1, h), 0)
+    for y in range(top, h):
+        column.putpixel((0, y), int(strength * min(1.0, (y - top) / max(1, (h - top) * 0.55))))
+    return Image.composite(Image.new("RGB", (w, h)), base, column.resize((w, h)))
+
+
 def _grade(picture: Image.Image) -> Image.Image:
     """A little more contrast and colour, a little darker: the dramatic look of these covers."""
     from PIL import ImageEnhance
@@ -291,6 +306,7 @@ def design(picture: Image.Image, parts: dict, shape: str = "landscape") -> Image
         base = ImageOps.fit(frame, (w, h))
         dark = _shade((w, h), [(0, 235), (0.45, 190), (0.72, 40), (1, 20)]).resize((w, h))
         base = Image.composite(Image.new("RGB", (w, h)), base, dark)
+        base = _bottom_fade(base, int(h * 0.74))
         left, width = int(w * 0.045), int(w * 0.6)
         y = int(h * 0.07)
         if parts.get("tag"):
@@ -330,7 +346,7 @@ def design(picture: Image.Image, parts: dict, shape: str = "landscape") -> Image
     for i in range(shown.height):
         fade.putpixel((0, i), int(255 * min(1.0, i / max(1, shown.height * 0.2))))
     base.paste(Image.new("RGB", (w, shown.height)), (0, top), Image.eval(fade.resize((w, shown.height)), lambda v: 255 - v))
-    return base
+    return _bottom_fade(base, int(h * 0.84))
 
 
 PLAN_SYSTEM = """图片是一条视频开头几个画面的联系表，每格左上角有黄色编号。要为这条视频做百家号封面：
@@ -417,37 +433,85 @@ def prompt_for(template: str, title: str, aspect_label: str, references: bool) -
     return text
 
 
-def ai_picture(cfg: dict, title: str, shape: str, references: list) -> Image.Image:
-    """One cover drawn by the image model (GrsAI's /v1/api/generate, then polling /v1/api/result)."""
+def model_for(cfg: dict) -> str:
+    """The chosen model, else the cheapest that does the job: a background needs no lettering
+    (nano-banana-2-lite, about ¥0.02); a whole cover with its Chinese title needs gpt-image-2."""
+    return cfg.get("cover_model") or ("nano-banana-2-lite" if cfg.get("cover_mode") == "ai_bg" else "gpt-image-2")
+
+
+def ai_picture(cfg: dict, prompt: str, shape: str, references: list) -> Image.Image:
+    """One picture drawn by the image model (GrsAI's /v1/api/generate, then polling /v1/api/result)."""
     from . import network
     key = (cfg.get("cover_api_key") or "").strip()
     if not key:
         raise CoverError("没有填写封面 API Key")
-    aspect, label, _ = SHAPES[shape]
+    aspect = SHAPES[shape][0]
     host = (cfg.get("cover_base_url") or "https://grsai.dakka.com.cn").rstrip("/")
-    body = {"model": cfg.get("cover_model") or "gpt-image-2", "aspectRatio": aspect, "replyType": "async",
-            "prompt": prompt_for(cfg.get(f"cover_prompt_{shape}"), title, label, bool(references))}
+    body = {"model": model_for(cfg), "aspectRatio": aspect, "replyType": "async", "prompt": prompt}
+    if body["model"].startswith("nano-banana"):
+        body["imageSize"] = "1K"
     if references:
         body["images"] = [_data_url(image) for image in references]
     headers = {"Authorization": f"Bearer {key}"}
     with network.client(timeout=60) as client:
-        answer = client.post(host + "/v1/api/generate", json=body, headers=headers).json()
-        began = time.monotonic()
-        while answer.get("status") not in ("succeeded", "failed", "violation"):
-            if not answer.get("id"):
-                raise CoverError(str(answer.get("error") or answer.get("msg") or "封面服务没有返回任务")[:120])
-            if time.monotonic() - began > AI_WAIT:
-                raise CoverError("封面生成超时")
-            time.sleep(4)
-            answer = client.get(host + "/v1/api/result", params={"id": answer["id"]}, headers=headers).json() \
-                | {"id": answer["id"]}
-        if answer.get("status") != "succeeded" or not answer.get("results"):
-            reason = "内容审核没有通过" if answer.get("status") == "violation" else answer.get("error") or "生成失败"
-            raise CoverError(f"封面生成失败：{str(reason)[:120]}")
-        picture = client.get(answer["results"][0]["url"], timeout=120)
+        try:
+            url = _drawn(client, host, headers, body)
+        except CoverError as exc:
+            if "审核" in str(exc):
+                raise
+            url = _drawn_legacy(client, host, headers, body)    # the older per-model interface
+        picture = client.get(url, timeout=120)
         picture.raise_for_status()
     with Image.open(io.BytesIO(picture.content)) as image:
         return image.convert("RGB")
+
+
+def _finished(answer: dict) -> str:
+    if answer.get("status") != "succeeded" or not answer.get("results"):
+        reason = "内容审核没有通过" if answer.get("status") == "violation" or "moderation" in str(
+            answer.get("failure_reason")) else answer.get("error") or "生成失败"
+        raise CoverError(f"封面生成失败：{str(reason)[:120]}")
+    return answer["results"][0]["url"]
+
+
+def _drawn(client, host, headers, body) -> str:
+    """POST /v1/api/generate (async), then GET /v1/api/result until it is done: the picture's URL."""
+    response = client.post(host + "/v1/api/generate", json=body, headers=headers)
+    try:
+        answer = response.json()
+    except ValueError:
+        raise CoverError(f"封面服务返回 HTTP {response.status_code}") from None
+    began = time.monotonic()
+    while answer.get("status") not in ("succeeded", "failed", "violation"):
+        if not answer.get("id"):
+            raise CoverError(str(answer.get("error") or answer.get("msg") or "封面服务没有返回任务")[:120])
+        if time.monotonic() - began > AI_WAIT:
+            raise CoverError("封面生成超时")
+        time.sleep(4)
+        answer = client.get(host + "/v1/api/result", params={"id": answer["id"]}, headers=headers).json() \
+            | {"id": answer["id"]}
+    return _finished(answer)
+
+
+def _drawn_legacy(client, host, headers, body) -> str:
+    """The older interface: /v1/draw/nano-banana or /v1/draw/completions with webHook "-1", polled at
+    /v1/draw/result."""
+    nano = body["model"].startswith("nano-banana")
+    old = {"model": body["model"], "prompt": body["prompt"], "urls": body.get("images", []), "webHook": "-1",
+           "shutProgress": True} | ({"aspectRatio": body["aspectRatio"], "imageSize": "1K"} if nano
+                                    else {"size": body["aspectRatio"]})
+    answer = client.post(host + ("/v1/draw/nano-banana" if nano else "/v1/draw/completions"), json=old,
+                         headers=headers).json()
+    if answer.get("code") != 0 or not (answer.get("data") or {}).get("id"):
+        raise CoverError(str(answer.get("msg") or "封面服务没有返回任务")[:120])
+    task, began = answer["data"]["id"], time.monotonic()
+    while True:
+        if time.monotonic() - began > AI_WAIT:
+            raise CoverError("封面生成超时")
+        time.sleep(4)
+        data = (client.post(host + "/v1/draw/result", json={"id": task}, headers=headers).json() or {}).get("data") or {}
+        if data.get("status") in ("succeeded", "failed"):
+            return _finished(data)
 
 
 def _shapes(cfg: dict) -> list[str]:
@@ -459,13 +523,25 @@ def render(cfg: dict, picture: Image.Image, parts: dict, title: str, folder: Pat
     """Save the covers (<stem>-封面-横版.jpg / -竖版.jpg). AI mode draws them with the image model, any shape it
     fails on is designed locally instead. Returns {"files": [...], "error": "..."}."""
     files, error = [], ""
+    references = [picture] if cfg.get("cover_reference", "1") == "1" else []
+    mode = cfg.get("cover_mode")
+    if mode == "ai_bg":
+        # One picture without lettering, then both shapes are designed on it: a cent or two a film, and the
+        # title cannot come out misspelt.
+        try:
+            prompt = (cfg.get("cover_prompt_background") or BACKGROUND).strip() + f"\n视频主题：{headline(title)}"
+            if references:
+                prompt += "\n参考图是这期视频里的画面，可以用其中的人物和场景。"
+            picture = ai_picture(cfg, prompt, "landscape", references)
+        except Exception as exc:   # noqa: BLE001 — the footage frame instead
+            error = str(exc)[:160]
     for shape in _shapes(cfg):
         target = folder / f"{stem}-封面-{SHAPES[shape][1]}.jpg"
         picture_out = None
-        if cfg.get("cover_mode") == "ai":
+        if mode == "ai":
             try:
-                references = [picture] if cfg.get("cover_reference", "1") == "1" else []
-                picture_out = ai_picture(cfg, headline(title), shape, references)
+                prompt = prompt_for(cfg.get(f"cover_prompt_{shape}"), headline(title), SHAPES[shape][1], bool(references))
+                picture_out = ai_picture(cfg, prompt, shape, references)
             except Exception as exc:   # noqa: BLE001 — designed locally instead
                 error = str(exc)[:160]
         (picture_out or design(picture, parts, shape)).save(target, "JPEG", quality=92)
@@ -499,7 +575,7 @@ def start(project: dict, video: Path, folder: Path, stem: str, title: str) -> di
     if picture is None:
         note({"files": [], "error": "没有可用的画面"})
         return None
-    if cfg.get("cover_mode") == "ai" and (cfg.get("cover_api_key") or "").strip():
+    if cfg.get("cover_mode") in ("ai", "ai_bg") and (cfg.get("cover_api_key") or "").strip():
         threading.Thread(target=lambda: note(render(cfg, picture, parts, title, folder, stem)),
                          name="cover", daemon=True).start()
         return {"files": [], "pending": True}

@@ -98,3 +98,42 @@ def test_the_model_picks_the_frame_and_words_and_its_absence_falls_back(monkeypa
     picture, parts = cover.choose("凌晨六枚导弹砸向总统府，还能绷多久？", frames)
     assert picture in frames and parts == {"tag": "深度解读", "main": "凌晨六枚导弹砸向总统府", "sub": "", "ask": "还能绷多久？"}
     assert cover.choose("标题", []) == (None, cover.plan_text("标题"))
+
+
+def test_one_ai_background_is_lettered_locally_in_both_shapes(tmp_path, monkeypatch):
+    seen = _fake_service(monkeypatch)
+    cfg = {"cover_mode": "ai_bg", "cover_api_key": "k", "cover_sizes": "both", "cover_reference": "1"}
+    picture = Image.new("RGB", (1920, 1080), (9, 9, 9))
+    result = cover.render(cfg, picture, cover.plan_text("伊朗导弹齐射？"), "伊朗导弹齐射？", tmp_path, "片名")
+    asks = [body for method, path, auth, body in seen if path == "/v1/api/generate"]
+    assert len(asks) == 1 and asks[0]["model"] == "nano-banana-2-lite" and asks[0]["imageSize"] == "1K"
+    assert "不要出现任何文字" in asks[0]["prompt"] and "伊朗导弹齐射？" in asks[0]["prompt"]
+    assert [p.split("/")[-1] for p in result["files"]] == ["片名-封面-横版.jpg", "片名-封面-竖版.jpg"] and not result["error"]
+    landscape = Image.open(result["files"][0])
+    assert landscape.size == (1920, 1080) and landscape.getpixel((1800, 300))[0] > 100   # the AI picture (red) behind
+
+
+def test_the_older_interface_is_tried_when_the_new_one_refuses(tmp_path, monkeypatch):
+    import io
+    import json
+    import httpx
+    from jinggao import network
+    png = io.BytesIO()
+    Image.new("RGB", (64, 36), (200, 30, 30)).save(png, "PNG")
+    paths_seen = []
+    def handler(request):
+        paths_seen.append(request.url.path)
+        if request.url.path == "/v1/api/generate":
+            return httpx.Response(400, json={"id": "", "status": "failed", "error": "unknown parameter images"})
+        if request.url.path == "/v1/draw/completions":
+            body = json.loads(request.content)
+            assert body["webHook"] == "-1" and body["size"] == "16:9" and body["urls"]
+            return httpx.Response(200, json={"code": 0, "data": {"id": "old1"}, "msg": "success"})
+        if request.url.path == "/v1/draw/result":
+            return httpx.Response(200, json={"code": 0, "data": {"id": "old1", "status": "succeeded",
+                                                                "results": [{"url": "https://files.example/c.png"}]}})
+        return httpx.Response(200, content=png.getvalue())
+    monkeypatch.setattr(network, "client", lambda **kw: httpx.Client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(cover.time, "sleep", lambda s: None)
+    image = cover.ai_picture({"cover_api_key": "k", "cover_mode": "ai"}, "画", "landscape", [Image.new("RGB", (32, 18))])
+    assert image.size == (64, 36) and paths_seen[:3] == ["/v1/api/generate", "/v1/draw/completions", "/v1/draw/result"]
