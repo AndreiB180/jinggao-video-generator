@@ -137,3 +137,16 @@ def test_the_older_interface_is_tried_when_the_new_one_refuses(tmp_path, monkeyp
     monkeypatch.setattr(cover.time, "sleep", lambda s: None)
     image = cover.ai_picture({"cover_api_key": "k", "cover_mode": "ai"}, "画", "landscape", [Image.new("RGB", (32, 18))])
     assert image.size == (64, 36) and paths_seen[:3] == ["/v1/api/generate", "/v1/draw/completions", "/v1/draw/result"]
+
+
+def test_a_timed_out_background_is_drawn_again_by_gpt_image(tmp_path, monkeypatch):
+    calls = []
+    def drawn(cfg, prompt, shape, references):
+        calls.append(cover.model_for(cfg))
+        if len(calls) == 1:
+            raise cover.CoverError("封面生成失败：google gemini timeout")
+        return Image.new("RGB", (1672, 941), (200, 30, 30))
+    monkeypatch.setattr(cover, "ai_picture", drawn)
+    cfg = {"cover_mode": "ai_bg", "cover_api_key": "k", "cover_sizes": "landscape", "cover_reference": "0"}
+    result = cover.render(cfg, Image.new("RGB", (1920, 1080)), cover.plan_text("标题"), "标题", tmp_path, "片")
+    assert calls == ["nano-banana-2-lite", "gpt-image-2"] and not result["error"] and len(result["files"]) == 1

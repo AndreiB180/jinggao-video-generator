@@ -532,7 +532,13 @@ def render(cfg: dict, picture: Image.Image, parts: dict, title: str, folder: Pat
             prompt = (cfg.get("cover_prompt_background") or BACKGROUND).strip() + f"\n视频主题：{headline(title)}"
             if references:
                 prompt += "\n参考图是这期视频里的画面，可以用其中的人物和场景。"
-            picture = ai_picture(cfg, prompt, "landscape", references)
+            try:
+                picture = ai_picture(cfg, prompt, "landscape", references)
+            except CoverError as exc:
+                # The cheapest model times out now and then ("google gemini timeout"): gpt-image-2 once more.
+                if "审核" in str(exc) or not model_for(cfg).startswith("nano-banana"):
+                    raise
+                picture = ai_picture(cfg | {"cover_model": "gpt-image-2"}, prompt, "landscape", references)
         except Exception as exc:   # noqa: BLE001 — the footage frame instead
             error = str(exc)[:160]
     for shape in _shapes(cfg):
