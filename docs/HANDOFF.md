@@ -422,6 +422,14 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.4.9：搜索被限时接着用素材库；“B站限流时”开关（2026-10-26，sha256 d95986d4…）
+
+- 客户反馈 0.4.8 做了 3 条就整机停住（队列 42 条“等待执行”）：搜索全空就 BiliUnavailable，而 B 站通常先限搜索、下载还能用。
+- 现在搜索全空只记 `bili-search-refused.json`，之后 5 分钟（SEARCH_QUIET）各片不搜 B 站、只用本地库；本地库命中的组少于 max(2, 组数/3)，或 B 站视频八成拿不到播放地址，才 BiliUnavailable。
+- 设置 `bili_limit_mode`：wait（默认，整机停 5 分钟、之后 30 分钟一条一条）/ continue（从不停，靠库和图片补）。批量面板“设置”里可选；`/api/bili-pause` 让队列上方显示几点继续。
+- 种子库换成宿舍机 10-26 导出：112,325 个视频（part-01/02，55 MB）；空库装一遍本机 237 秒。
+- 多账号/代理 IP：没做。账号只对按账号算的限制有用，同一宽带的 IP 限制换号不管用；代理要客户买国内住宅代理，机房 IP 很快被 B 站封。
+
 ## 0.4.8：B站被拒后整机歇一会儿；封面字不截断（2026-10-25，定稿候选，sha256 b86e0fa5…）
 
 - 客户三台电脑同时挂（默认每台同时 3 条，多半同一宽带）。一条遇到 BiliUnavailable 就写 `data/bili-refused.json`；`worker.run_once` 10 分钟内不开新视频（BILI_WAIT），一小时内只有 slot 0 干活（BILI_CALM）。
