@@ -21,6 +21,7 @@ DEFAULTS = {
     "encoder": "auto", "search_provider": "mixed",
     "baidu_voice_name": "磁性专业很灵动", "baidu_browser": "auto",
     "plan_workers": "3", "match_workers": "3", "render_workers": "3", "video_workers": "3",
+    "bili_limit_mode": "wait",
     "plan_retries": "1",
     "source_plan_mode": "unified", "pixel_observer_mode": "joint",
     "model_project_budget_cny": "0.10", "model_daily_budget_cny": "3.00",
@@ -133,6 +134,8 @@ def update(values: dict) -> dict:
             raise ValueError("并发数须为 1 到 4")
     if "video_workers" in values and values["video_workers"] not in ("1", "2", "3", "4", "5", "6"):
         raise ValueError("同时制作的视频须为 1 到 6 条")
+    if values.get("bili_limit_mode", "wait") not in ("wait", "continue"):
+        raise ValueError("B站限流时的做法无效")
     if values.get("cover_mode", "design") not in ("design", "ai_bg", "ai", "off"):
         raise ValueError("封面方式无效")
     if values.get("cover_sizes", "both") not in ("both", "landscape", "portrait"):

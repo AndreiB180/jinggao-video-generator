@@ -38,13 +38,14 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
  const provider=settings.tts_provider||'edge_tts', voices=useVoices(['edge_tts','qwen_tts'].includes(provider)?provider:'edge_tts');
  const workers=Number(settings.video_workers||3);
  const [system,setSystem]=useState<Record<string,any>>({});
+ const [pause,setPause]=useState<{until:number;calm:number}>({until:0,calm:0});
  // With the NVIDIA card encoding, more videos at once mostly overlap downloads and model calls.
  // What this computer carries at once (processor and memory); more would make every video slower.
  const limit=Number(system.max_videos||2), recommended=limit;
  const refresh=()=>request('/queue').then((r:Row[])=>{
   // Each project's latest video job; a later retry supersedes the failed run.
   const seen=new Set<string>();setRows(r.filter(j=>j.kind==='produce'&&!seen.has(j.project_id)&&!!seen.add(j.project_id)));setQueueError('')
- }).catch(()=>setQueueError('工作台暂时连接中断，恢复后会自动更新队列。'));
+ }).catch(()=>setQueueError('工作台暂时连接中断，恢复后会自动更新队列。')).then(()=>request('/bili-pause').then(setPause).catch(()=>{}));
  useEffect(()=>{
   refresh();request('/settings').then(setSettings).catch(()=>{});request('/costs').then(setCosts).catch(()=>{});request('/system').then(setSystem).catch(()=>{});
   const t=setInterval(refresh,2500);return()=>clearInterval(t)
@@ -152,6 +153,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
   <div className="field-grid">
    <label>同时制作<select value={String(Math.min(workers,limit))} onChange={e=>change('video_workers',e.target.value)}>{[1,2,3,4,5,6].map(n=><option key={n} value={n} disabled={n>limit}>{n} 条{n===recommended?'（这台电脑最多）':n>limit?'（这台电脑带不动）':''}</option>)}</select>
     <small className="field-hint">{system.cores?`这台电脑 ${system.cores} 个线程、${Math.round(system.memory_gb||0)} GB 内存，最多同时 ${limit} 条；再多每条都会变慢，第一条要等很久才出来。`:''}</small></label>
+   <label>B站限流时<select value={settings.bili_limit_mode||'wait'} onChange={e=>change('bili_limit_mode',e.target.value)}><option value="wait">等几分钟再做（画面好）</option><option value="continue">不等，继续做（缺的画面用素材库、相关图片补）</option></select>
+    <small className="field-hint">B站一下子被访问太多次会暂时不让这台电脑下载视频。选“等”：这台电脑停 5 分钟再接着做，之后半小时一条一条做；选“不等”：照常做，画面里B站视频会少一些。</small></label>
    <label>清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p · 更快</option></select></label>
    <label>画面比例<select value={aspect} onChange={e=>setAspect(e.target.value)}><option value="16:9">横屏 16:9</option><option value="9:16">竖屏 9:16</option></select></label>
    <label>素材组合<select value={policy} onChange={e=>setPolicy(e.target.value)}><option value="video_preferred">至少 80% 实拍视频</option><option value="video_only">全部实拍视频</option><option value="mixed">图片与视频混合</option></select></label>
@@ -174,6 +177,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
   {error&&<p role="alert" className="candidate-warning">{error}</p>}
   {note&&<p role="status" className="muted-note">{note}</p>}
   {queueError&&<p role="status" className="candidate-warning">{queueError}</p>}
+  {pause.until>0&&<p className="inline-note warning">B站暂时限制这台电脑访问，{new Date(pause.until*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} 继续制作；之后到 {new Date(pause.calm*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} 一条一条做。不想等可以在上面把“B站限流时”改成“不等，继续做”。</p>}
+  {!pause.until&&pause.calm>0&&<p className="inline-note warning">刚被B站限流过，到 {new Date(pause.calm*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} 一条一条做，之后恢复同时制作。</p>}
   <div className="queue-head"><h3>制作队列</h3>
    {rows.length>0&&<span>制作中 {count('running')} · 排队 {count('queued')} · 已完成 {count('completed')}{failed.length?` · 失败 ${failed.length}`:''}</span>}
    <div>{failed.length>0&&<button className="secondary small" disabled={busy} onClick={retryAll}><RotateCcw size={14}/>失败的全部重试</button>}

@@ -428,6 +428,16 @@ def create_app() -> FastAPI:
                     pass      # the project was deleted or already has a job
         return {"retried": retried}
 
+    @app.get("/api/bili-pause")
+    def bili_pause():
+        """Whether this computer is waiting out a Bilibili refusal: new videos start again at `until`, and
+        until `calm` one video at a time."""
+        from . import worker
+        at = worker.bili_refused_at()
+        now = time.time()
+        return {"until": at + worker.BILI_WAIT if now < at + worker.BILI_WAIT else 0,
+                "calm": at + worker.BILI_CALM if now < at + worker.BILI_CALM else 0}
+
     @app.get("/api/queue")
     def queue():
         with store.connection() as con:

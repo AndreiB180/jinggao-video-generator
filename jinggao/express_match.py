@@ -124,6 +124,27 @@ BROWSER = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
            "Chrome/124.0 Safari/537.36")
 
 
+SEARCH_QUIET = 300      # seconds after a refused round of searches that films use the local library only
+
+
+def _stamp(name: str) -> float:
+    """When the note `name` in the data folder was last written (0: never); shared by every worker process."""
+    try:
+        return float(json.loads((paths.DATA / name).read_text("utf-8"))["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0
+
+
+def _mark(name: str, why: str) -> None:
+    target = paths.DATA / name
+    try:
+        temporary = paths.temporary(target)
+        temporary.write_text(json.dumps({"at": time.time(), "why": why}, ensure_ascii=False), "utf-8")
+        paths.publish(temporary, target)
+    except OSError:
+        pass
+
+
 class BiliUnavailable(RuntimeError):
     """Bilibili refused this computer (searches all empty, or play addresses refused): a film made now would
     be a few stock clips over and over, so the video waits and is made again later."""
@@ -293,8 +314,13 @@ class Matcher:
     # ------------------------------------------------------------------ search
     def search(self, groups):
         tasks = []
+        # Bilibili refused searches from this computer a few minutes ago: asking again only keeps the refusal
+        # going, so this film takes its footage from the local library (downloads usually still work).
+        quiet = time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET
+        if quiet:
+            self.notes.append("B站搜索刚被限流，这条先用本地素材库的视频")
         for g in groups:
-            for q in g["zh"][:2]:
+            for q in g["zh"][:2] if not quiet else []:
                 tasks.append(("bili", q))
             if self.pixa:
                 for q in g["en"][:2]:
@@ -313,8 +339,9 @@ class Matcher:
             for task, rows in pool.map(run, tasks):
                 results[task] = rows
         asked = [rows for (kind, _), rows in results.items() if kind == "bili"]
-        if len(asked) >= 4 and not any(asked):
-            raise BiliUnavailable(f"B站的 {len(asked)} 次搜索全部没有结果（多半是被限流或连不上B站）")
+        refused = len(asked) >= 4 and not any(asked)
+        if refused:
+            _mark("bili-search-refused.json", f"B站的 {len(asked)} 次搜索全部没有结果")
         # The local index: videos found and described before (no network), with the matching moments.
         from . import footage_index
         for q in dict.fromkeys(q for g in groups for q in g["zh"][:2]):
@@ -323,6 +350,9 @@ class Matcher:
             except Exception as exc:   # a missing or damaged index only costs this lane
                 self.notes.append(f"本地素材库检索失败: {type(exc).__name__}")
                 break
+        local = sum(1 for (kind, _), rows in results.items() if kind == "local" and rows)
+        if (refused or quiet) and local < max(2, len(groups) // 3) and self.cfg.get("bili_limit_mode", "wait") == "wait":
+            raise BiliUnavailable("B站搜索被限流，本地素材库里也没有这条要的画面")
         return results
 
     def score(self, row, group, shots_by_id):
@@ -1728,7 +1758,7 @@ class Matcher:
                     referenced[tile["source"]["id"]] = tile["source"]
         streams = self.resolve(referenced)
         refused = sum(1 for bvid in referenced if not streams.get(bvid))
-        if len(referenced) >= 8 and refused >= 0.8 * len(referenced):
+        if len(referenced) >= 8 and refused >= 0.8 * len(referenced) and self.cfg.get("bili_limit_mode", "wait") == "wait":
             raise BiliUnavailable(f"B站 {len(referenced)} 个视频里有 {refused} 个拿不到播放地址（多半是被限流）")
         landscape = self.project.get("aspect", "16:9") != "9:16"
         def usable(tile):

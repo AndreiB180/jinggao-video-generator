@@ -537,3 +537,30 @@ def test_searches_that_all_come_back_empty_stop_the_film(data):
     groups = [{"zh": ["甲 乙", "丙 丁"], "en": []}, {"zh": ["戊 己", "庚 辛"], "en": []}]
     with pytest.raises(express_match.BiliUnavailable):
         m.search(groups)
+
+
+def test_refused_searches_go_on_with_the_local_library_or_by_setting(data, monkeypatch):
+    from jinggao import config, footage_index
+    shots = [planner.new_shot(t) | {"duration": 5.0} for t in ("一。", "二。")]
+    project = store.new_project("t", "x")
+    project = store.mutate(project["id"], lambda p: p.update(shots=shots))
+    class Bili:
+        asked = 0
+        def search(self, q):
+            Bili.asked += 1
+            return []
+    groups = [{"zh": ["甲 乙", "丙 丁"], "en": []}, {"zh": ["戊 己", "庚 辛"], "en": []}]
+    monkeypatch.setattr(footage_index, "search", lambda q, limit=8: [{"source": {"id": q}}])
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    m.bili, m.pixa = Bili(), None
+    results = m.search(groups)                     # the library has these: the film goes on
+    assert results[("local", "甲 乙")] and Bili.asked == 4
+    m.search(groups)                               # and the next films leave Bilibili search alone a while
+    assert Bili.asked == 4 and any("本地素材库" in n for n in m.notes)
+    monkeypatch.setattr(footage_index, "search", lambda q, limit=8: [])
+    with pytest.raises(express_match.BiliUnavailable):
+        m.search(groups)
+    config.update({"bili_limit_mode": "continue"})
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    m.bili, m.pixa = Bili(), None
+    m.search(groups)                               # set to go on regardless: no stop

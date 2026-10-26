@@ -967,17 +967,11 @@ def run_once(stop=None, lane="main") -> bool:
     except (costs.BudgetExceeded, costs.PricingUnavailable) as exc:
         store.job_update(job["id"], status="failed", message="费用保护已停止模型请求，进度已保存", error=str(exc))
     except express_match.BiliUnavailable as exc:
-        try:
-            target = paths.DATA / "bili-refused.json"
-            temporary = paths.temporary(target)
-            temporary.write_text(json.dumps({"at": time.time(), "why": str(exc)}, ensure_ascii=False), "utf-8")
-            paths.publish(temporary, target)
-        except OSError:
-            pass
+        express_match._mark("bili-refused.json", str(exc))
         tries = int((job.get("payload") or {}).get("bili_retries", 0))
         if tries >= BILI_RETRIES:
             store.job_update(job["id"], status="failed", error=str(exc),
-                             message="B站一直限制这台电脑访问，没有用图库硬凑；请过一段时间再点重试，或在设置里登录B站")
+                             message="B站一直限制这台电脑访问；请过一段时间再点重试，或在批量设置里把“B站限流时”改成继续做")
         else:
             store.job_update(job["id"], status="interrupted", error=str(exc),
                              message=f"B站暂时限制访问，{BILI_WAIT // 60} 分钟后自动重做（第 {tries + 1} 次）")
@@ -1043,17 +1037,17 @@ def _report_waits(name: str) -> None:
 
 
 CRASH_RETRIES = 2
-BILI_RETRIES = 3        # a video Bilibili refused is made again this many times...
-BILI_WAIT = 600         # ...after this many seconds each; meanwhile no other video starts on this computer
-BILI_CALM = 3600        # and for an hour after a refusal it makes one video at a time
+BILI_RETRIES = 4        # a video Bilibili refused is made again this many times...
+BILI_WAIT = 300         # ...after this many seconds each; meanwhile no other video starts on this computer
+BILI_CALM = 1800        # and for half an hour after a refusal it makes one video at a time
 
 
 def bili_refused_at() -> float:
-    """When Bilibili last refused this computer (0: not recently). Shared by every worker process."""
-    try:
-        return float(json.loads((paths.DATA / "bili-refused.json").read_text("utf-8"))["at"])
-    except (OSError, ValueError, KeyError, TypeError):
+    """When Bilibili last refused this computer (0: not recently, or the setting says to go on regardless)."""
+    if config.read().get("bili_limit_mode", "wait") != "wait":
         return 0.0
+    from .express_match import _stamp
+    return _stamp("bili-refused.json")
 
 
 def requeue_after_crash(name: str, pid: int) -> str:
