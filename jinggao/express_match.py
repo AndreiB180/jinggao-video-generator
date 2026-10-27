@@ -2011,7 +2011,11 @@ class Matcher:
             carried = settle(carried + jobs, got, bad, running, last=True)
             stamp("stock", began)
             pending = [s for s in pending if s["id"] not in final]
-        if pending:
+        # Other moments of accepted videos before the same clip is shown again: a second pass lets a long video
+        # give a few more windows (the client saw one clip eight times in a film where borrowing filled in).
+        for repeat_pass in range(2):
+            if not pending:
+                break
             # Last resort without unchecked footage: reuse a window that already passed QA,
             # preferring the same search group, then the nearest shot on the timeline.
             began = time.monotonic()
@@ -2198,7 +2202,7 @@ class Matcher:
                 files[sid] = path
                 cards.remove(shot)
         reused_more = 0
-        for limit in (None,):
+        for limit in (5, 6, 8, None):    # spread over many clips: never one clip all over the film
             for shot in list(cards):
                 # Still nothing: the client reads a blurred card as a broken video (24 of them in one film), so
                 # a clip lent out more often comes first, the least-lent ones before the rest.
