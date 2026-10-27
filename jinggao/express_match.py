@@ -31,13 +31,13 @@ VERSION = 1
 # Sources per group: the picker sees 60 tiles of a group at most, so beyond about 14 videos every extra one is
 # fetched, profiled and screened for nothing. 0.4.9's bigger library filled 10 local places a group on top
 # of 12 Bilibili ones and made the client's preview step 1.5-12 minutes a film.
-BILI_PER_QUERY = 4
-BILI_AFTER_LOCAL = 2   # a query the library already answers with LOCAL_PER_QUERY videos takes few live results
+BILI_PER_QUERY = 5
+BILI_AFTER_LOCAL = 3   # a query the library already answers with LOCAL_PER_QUERY videos takes few live results
                        # (the client: a big library matches well enough; live searches bring the 营销号 junk)
 PERSON_PER_QUERY = 5   # named people have little real footage: look a little wider before falling back
 PIXA_PER_QUERY = 3     # licensed stock: clean, no subtitles or contact text; strong for generic and abstract lines
 LOCAL_PER_QUERY = 4     # videos from the local footage index (footage_index) per query, ahead of live results
-GROUP_SOURCES = 16      # at most this many videos a group (stock clips included)
+GROUP_SOURCES = 20      # at most this many videos a group (stock clips included)
 TILES_PER_BILI = 8
 PERSON_TILES = 10
 QA_W, QA_H = 320, 180
@@ -685,7 +685,7 @@ class Matcher:
             return set()
 
     # ------------------------------------------------------------------ picks
-    def pick(self, group, tiles, shots_by_id):
+    def pick(self, group, tiles, shots_by_id, halved=False):
         if not tiles:
             return {}, {}
         tiles = tiles[:3 * SHEET_COLS * SHEET_ROWS]
@@ -730,7 +730,22 @@ class Matcher:
         result = es._read_json(cache, 30 * 24 * 3600)
         if result is None:
             self.check()
-            result, _ = self.chat(system, content, max_tokens=120 + 60 * len(ids), task="express_pick")
+            try:
+                result, _ = self.chat(system, content, max_tokens=120 + 60 * len(ids), task="express_pick")
+            except Exception as exc:   # noqa: BLE001
+                # The service refuses a whole request over one picture now and then (HTTP 400, its content
+                # check); without picks the group's lines all fall back to borrowed clips. Halves, one by one.
+                if "HTTP 400" not in str(exc) or len(tiles) < 8 or halved:
+                    raise
+                merged = {}
+                for part in (tiles[:len(tiles) // 2], tiles[len(tiles) // 2:]):
+                    try:
+                        got, _ = self.pick(group, part, shots_by_id, halved=True)
+                    except Exception:   # noqa: BLE001 — the other half may still answer
+                        continue
+                    for sid, picked in got.items():
+                        merged.setdefault(sid, []).extend(picked)
+                return {sid: v[:12 if group.get("topic") else 6] for sid, v in merged.items()}, {"ctx": []}
             with self.lock:
                 self.calls["pick"] += 1
             es._write_json(cache, result)
@@ -864,11 +879,14 @@ class Matcher:
                     seen_hashes.append(h)
                 if screen_text.installed():
                     try:
-                        found = screen_text.classify([screen_text.read(image)])
+                        lines = screen_text.read(image)
+                        found = screen_text.classify([lines])
                     except Exception:   # noqa: BLE001
-                        found = {"contact": [], "dense": False, "moving": False}
-                    if found["contact"] or found["dense"]:
-                        continue    # a poster, a screenshot or an ad
+                        lines, found = [], {"contact": [], "dense": False, "moving": False}
+                    big = any(l["score"] >= 0.7 and screen_text._cjk(l["text"]) >= 1 and l["box"][3] - l["box"][1] >= 0.08
+                              for l in lines)
+                    if found["contact"] or found["dense"] or big:
+                        continue    # a poster, a screenshot, an ad, or a stock picture with big words on it ("房贷")
                 image.thumbnail((1920, 1920))
                 pictures.append((row, image, h))
             return shot, pictures
@@ -1484,6 +1502,13 @@ class Matcher:
                 else:   # people-free context footage for this line
                     role = (f"｜背景画面：口播提到{names}；画面可以是不含人物的相关场景、文件、建筑，也可以是此人本人的真实影像，"
                             "不要因没有此人而判不合格；但不能是演员扮演，也不应以其他可辨认的具名人物为主体")
+            if not role:
+                lane = (self.job_choice.get(job_id) or {}).get("lane")
+                if lane in ("topic", "near", "neighbor", "repeat"):
+                    # Filler for a line without footage of its own: a fresh clean picture beats the same clip
+                    # again (the client: "less on topic is fine, but clean and not repeated").
+                    role = ("｜补位画面：只要和整篇主题大致相关就合格，不要因为和这句口播对不上、是空镜或风景而判跑题；"
+                            "只按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
             lines.append(f"{label} 口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{role}")
         domain = self.plan.get("domain") or ""
         head = [f"整篇领域：{domain}"] if domain else []
