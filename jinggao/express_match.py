@@ -62,6 +62,9 @@ STOCK_SHARE = 0.15     # foreign stock (Pixabay) at most this share of a film: f
                        # couples and weddings read as filler ("都是空镜头"), whatever the planner asked for
 TWIN_BITS = 8
 SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in grey)
+# Footage a line about a named person may borrow as background: it was chosen as context, not as someone else
+# (a 70-line film about two named people got 19 title cards while library and picture fill were off limits).
+CONTEXT_LANES = ("ctx", "topic", "library", "image", "stock")
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -803,7 +806,7 @@ class Matcher:
                     continue
                 donor_shot = self.shots_by_id_all.get(sid) or {}
                 if shot.get("persons"):
-                    if not (self.names_in_source(shot, choice["tile"]["source"]) or choice.get("lane") in ("ctx", "topic")):
+                    if not (self.names_in_source(shot, choice["tile"]["source"]) or choice.get("lane") in CONTEXT_LANES):
                         continue
                 elif donor_shot.get("persons") and choice.get("lane") in ("pick", "person", "person_near"):
                     continue    # that clip shows someone by name
@@ -2102,7 +2105,7 @@ class Matcher:
                 for donor_id, donor in ranked:
                     # A named-person shot may only reuse footage verified for that name or people-free context.
                     if person and not (self.names_in_source(shot, donor["tile"]["source"])
-                                       or donor["lane"] in ("ctx", "topic")):
+                                       or donor["lane"] in CONTEXT_LANES):
                         continue
                     if not person and shots_from.get(key_of(donor)[0], 0) >= hard_cap + 1:
                         continue    # that video already fills its share of the film (plus one): try another
