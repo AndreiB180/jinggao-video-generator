@@ -598,3 +598,28 @@ def test_vertical_and_half_black_pictures_are_recognised():
     frames = [np.array(boxed.convert("L"), dtype=np.uint8) for _ in range(4)]
     x0, y0, x1, y1 = express_clean.content_rect(frames)
     assert 0.3 < x0 < 0.36 and 0.64 < x1 < 0.7
+
+
+def test_a_new_copy_of_the_app_keeps_the_api_key_login_and_assist_key(tmp_path, monkeypatch):
+    from jinggao import paths
+    old, new, keep = tmp_path / "Jinggao-0.4.9" / "Jinggao-Windows-x64", tmp_path / "Jinggao-0.5.0" / "Jinggao-Windows-x64", tmp_path / "AppData"
+    (old / "data" / "assist").mkdir(parents=True)
+    (old / "data" / "settings.json").write_text('{"model_api_key": "sk-old"}', "utf-8")
+    (old / "data" / "bilibili-cookies.json").write_text('{"SESSDATA": "x"}', "utf-8")
+    (old / "data" / "assist" / "assist.key").write_text("KEY", "utf-8")
+    # First start of 0.5.0 unpacked next to 0.4.9: nothing kept yet, so it starts from the old copy.
+    monkeypatch.setattr(paths, "ROOT", new)
+    monkeypatch.setattr(paths, "DATA", new / "data")
+    monkeypatch.setattr(paths, "KEEP", keep)
+    (new / "data").mkdir(parents=True)
+    paths.keep_sync()
+    assert (new / "data" / "settings.json").read_text("utf-8") == '{"model_api_key": "sk-old"}'
+    assert (new / "data" / "assist" / "assist.key").read_text("utf-8") == "KEY"
+    paths.keep_sync()                                   # and keeps them in the user's folder
+    assert (keep / "bilibili-cookies.json").exists()
+    # A later copy anywhere starts from the kept files.
+    other = tmp_path / "elsewhere" / "data"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(paths, "DATA", other)
+    paths.keep_sync()
+    assert (other / "settings.json").read_text("utf-8") == '{"model_api_key": "sk-old"}'

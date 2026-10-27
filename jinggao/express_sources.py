@@ -95,6 +95,7 @@ def save_cookies(cookies: dict) -> None:
     tmp.write_text(json.dumps(cookies, ensure_ascii=False), "utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(target)
+    paths.keep_sync()
 
 
 class Bilibili:

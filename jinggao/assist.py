@@ -52,6 +52,7 @@ def start(app_port: int) -> dict:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 encoding="utf-8", errors="replace", creationflags=flags)
             _state.update(state="connecting", port=None, message="正在连接…", since=time.time())
+            threading.Timer(5, paths.keep_sync).start()    # the key is made on first use: keep it
             threading.Thread(target=_read, args=(_process,), daemon=True).start()
     return status()
 

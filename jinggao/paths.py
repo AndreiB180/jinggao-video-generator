@@ -10,9 +10,60 @@ ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 DATA = Path(os.environ.get("JINGGAO_DATA", ROOT / "data")).resolve()
 
 
+# Small things a new copy of the app must not ask for again: the client unpacks every version into a new
+# folder and had to type the API key and scan the Bilibili code each time (and the remote-assist code
+# changed). A copy lives in the user's own folder (Windows %APPDATA%\\Jinggao); a new data folder starts from
+# it, or from the newest copy of the app found next to this one.
+KEPT = ("settings.json", "bilibili-cookies.json", "assist/assist.key")
+KEEP = (Path(os.environ["JINGGAO_KEEP"]) if os.environ.get("JINGGAO_KEEP") else
+        Path(os.environ["APPDATA"]) / "Jinggao" if os.name == "nt" and os.environ.get("APPDATA")
+        and not os.environ.get("JINGGAO_DATA") else None)
+
+
+def keep_sync() -> None:
+    """Copy each kept file to KEEP when this data folder has a newer one; fill a missing one from KEEP, or (a
+    first start of a new copy before any was kept) from the most recently used copy of the app nearby."""
+    if KEEP is None:
+        return
+    older = None
+    if not any((DATA / name).exists() for name in KEPT) and not any((KEEP / name).exists() for name in KEPT):
+        older = _previous_copy()
+    for name in KEPT:
+        here, kept = DATA / name, KEEP / name
+        try:
+            if here.exists():
+                if not kept.exists() or (kept.read_bytes() != here.read_bytes() and here.stat().st_mtime >= kept.stat().st_mtime):
+                    kept.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(here, kept)
+            else:
+                source = kept if kept.exists() else (older / name if older and (older / name).exists() else None)
+                if source:
+                    here.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, here)
+        except OSError:
+            continue    # a locked or unreadable file: the next start tries again
+
+
+def _previous_copy() -> Path | None:
+    """The data folder of another copy of the app next to this one (unpacked side by side), newest first."""
+    found = []
+    for base, pattern in ((ROOT.parent, "*/data/settings.json"), (ROOT.parent.parent, "*/*/data/settings.json")):
+        try:
+            found += [f for f in base.glob(pattern) if f.parent.resolve() != DATA]
+        except OSError:
+            continue
+    return max(found, key=lambda f: f.stat().st_mtime).parent if found else None
+
+
+_kept_once = []
+
+
 def prepare() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     (DATA / "projects").mkdir(exist_ok=True)
+    if not _kept_once:     # once per process; settings and login writes sync again themselves
+        _kept_once.append(True)
+        keep_sync()
 
 
 def project_dir(project_id: str) -> Path:

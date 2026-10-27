@@ -201,4 +201,5 @@ def update(values: dict) -> dict:
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
         os.chmod(temporary, 0o600)
         temporary.replace(target)
+    paths.keep_sync()
     return public()
