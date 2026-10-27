@@ -422,6 +422,19 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.5.0：素材质量（水印/花字/竖屏）、换文件夹不丢登录（2026-10-27）
+
+客户 10-27：“素材太差：水印、大花字多，还有竖屏、半边大黑边”，抖音账号被降权。远程（`customer-pc-1027`，协助码 23001）看他 0.4.9 的 9 条：每条 2–22 镜带 wm 标记照样用了，币安那条 24 张模糊文字卡；那台当时**没登录 B 站**（之后登了“北极熊暗区事况”）；CPU 100%（全是镜稿自己：OCR、抽帧、转码），frames 排队每条 300–6000 秒，bili_paused 100–680 秒。
+- 标记片段不再直接用：`settle` 里 flags 有 wm/narrow 一律进 rejected（MARKED / MARKED_MIDDLE / NARROW），`keepable` 也不在图片之前捡回（含 QA 理由里的水印/花字字样、flags 有 wm/narrow 的）；图片、借用之后才按 边缘水印 → 竖屏 → 中间花字 的顺序兜底。
+- 边缘小水印（`paintable`：非 center/subtitle/caption，面积 ≤3%，离边 ≤20%）用 delogo 抹（`video_filter` 需要分析结果里的 `size`，frame_crop 也存了）；抹得掉的不算 dirty。
+- 黑边每边 42% 以内都认（原来 30%，竖屏塞 16:9 正好漏掉）；`narrow` 按内容宽高比 <0.8×成片，或两边模糊（`blurred_sides`）。预览阶段 `_boxed` 丢掉竖屏/黑边/模糊两边的来源，不下载。横片不用竖图补位。
+- OCR：字高 ≥ 8.5% 画面高（`BIG_TEXT`）在哪都算花字（表情包底下的“不要视奸我”原来被当字幕裁掉）；联系方式不再把价格/小数/钱包地址/日期/时间/百分比当电话（币安那条整批行情图因此被扔），认区号座机和“再联系”。
+- 图片/借用都没有时：先 borrow(limit=4)、再不限，最后才文字卡。
+- `Bilibili()` 里 nav 检查被拒时保留保存的登录（原来清 cookies，整条片子按未登录 480p 做）。
+- `throttle.GPU_WAIT` 3→20 秒：有 NVENC 时片段转码多等显卡，不挤满载的 CPU。
+- `paths.KEEP`（Windows %APPDATA%\\Jinggao）：settings.json、bilibili-cookies.json、assist/assist.key 另存一份，新解压的文件夹缺了就从那里或旁边最新的旧版文件夹拿（客户每个版本解压到新文件夹，每次重填 API、重扫码、识别码也变）。
+- 本机 6 条客户同类稿子（抗美援朝、养老金、辽宁舰、苏联撤专家）逐镜头看：无水印、无花字、无竖屏黑边、无文字卡。
+
 ## 0.4.9：搜索被限时接着用素材库；“B站限流时”开关（2026-10-26，sha256 d95986d4…）
 
 - 客户反馈 0.4.8 做了 3 条就整机停住（队列 42 条“等待执行”）：搜索全空就 BiliUnavailable，而 B 站通常先限搜索、下载还能用。

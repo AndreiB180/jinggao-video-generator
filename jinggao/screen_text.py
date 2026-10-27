@@ -261,6 +261,7 @@ NOT_CONTACT = re.compile(r"[A-Z]{3}[UJZ]\s?\d{6,7}|bili[_ ]?\d+|0x[0-9a-f]{6,}|\
                          r"(?<!\d)(19|20)\d{2}[年/.-]\d{1,2}([月/.-]\d{1,2}日?)?|\d{1,2}月\d{1,2}日?|\d{1,2}:\d{2}(:\d{2})?", re.I)
 CJK = re.compile(r"[㐀-鿿]")
 TOP, BOTTOM = 0.22, 0.62      # within the picture: above TOP is the title/watermark band, below BOTTOM captions
+BIG_TEXT = 0.085              # a line this tall (share of the picture height) is 花字, not a subtitle (about 0.05)
 
 
 def _cjk(text: str) -> int:
@@ -310,6 +311,12 @@ def classify(frames: list[list[dict]], content=(0.0, 0.0, 1.0, 1.0)) -> dict:
             cjk, text = _cjk(line["text"]), line["text"]
             words = len(text.split())
             top, bottom = _relative(line["box"], content)
+            if cjk >= 2 and bottom - top >= BIG_TEXT:
+                # Characters this tall are 花字 or a meme caption wherever they sit (the client got a crying
+                # meme face over a huge red "不要视奸我" at the bottom, cropped as if it were a subtitle).
+                marks.append({"kind": "center", "box": line["box"]})
+                middle.append(True)
+                continue
             if bottom <= TOP and (cjk >= 2 or len(text) >= 4):
                 marks.append({"kind": "logo", "box": line["box"]})
             elif top >= BOTTOM and (cjk >= 2 or words >= 3):

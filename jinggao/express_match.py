@@ -191,7 +191,15 @@ def _boxed(image: Image.Image) -> bool:
     small = image.convert("L").resize((64, 36))
     cols = [max(small.getpixel((x, y)) for y in range(36)) for x in range(64)]
     side = 13    # a fifth of 64
-    return max(cols[:side]) < 40 and max(cols[-side:]) < 40 and max(cols[side:-side]) >= 60
+    if max(cols[:side]) < 40 and max(cols[-side:]) < 40 and max(cols[side:-side]) >= 60:
+        return True
+    # A vertical video on a blurred, enlarged copy of itself: both sides carry almost no detail while the
+    # middle is sharp (the client got an old man between two smeared brown bands).
+    edges = small.filter(ImageFilter.FIND_EDGES)
+    def detail(x0, x1):
+        return ImageStat.Stat(edges.crop((x0, 2, x1, 34))).mean[0]
+    middle = detail(24, 40)
+    return middle >= 12 and detail(1, 12) < middle * 0.25 and detail(52, 63) < middle * 0.25
 
 
 def _dhash(image: Image.Image) -> int:

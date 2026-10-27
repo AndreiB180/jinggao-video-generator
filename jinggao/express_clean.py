@@ -769,7 +769,8 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
     edge = _merge(edge + corners)
     subs = subtitles(frames, content, source_boxes)
     # A picture much narrower than the film: a vertical video, or one inside wide black or blurred bars.
-    narrow = (content[2] - content[0]) * src_aspect / max(1e-6, content[3] - content[1]) < 0.8 * out_aspect
+    narrow = (content[2] - content[0]) * src_aspect / max(1e-6, content[3] - content[1]) < 0.8 * out_aspect \
+        or (out_aspect > 1 and blurred_sides(frames, content))
     if narrow:
         # A picture much narrower than the film (a vertical video): show it whole; the render's contain fit
         # fills the sides with a blurred copy of the picture itself. Marks inside it are blurred.
@@ -786,6 +787,21 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
             "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still | {"fixed_camera": fixed},
             "src_aspect": round(src_aspect, 4), "inner_picture": list(pip) if pip else None, "narrow": narrow,
             "layout_jump": jump}
+
+
+def blurred_sides(frames, content) -> bool:
+    """A vertical video on an enlarged, blurred copy of itself: the outer fifths on both sides carry almost no
+    detail while the middle is sharp."""
+    stack = np.stack(frames).astype(np.float32)
+    h, w = stack.shape[1:]
+    x0, x1 = int(content[0] * w), int(content[2] * w)
+    y0, y1 = int(content[1] * h) + 2, int(content[3] * h) - 2
+    if x1 - x0 < 50 or y1 - y0 < 20:
+        return False
+    grad = np.abs(np.diff(stack[:, y0:y1, x0:x1], axis=2)).mean(axis=(0, 1))
+    n = len(grad)
+    side, middle = n // 5, grad[2 * n // 5: 3 * n // 5].mean()
+    return bool(middle >= 4 and grad[2:side].mean() < middle * 0.25 and grad[n - side:n - 2].mean() < middle * 0.25)
 
 
 def dirty(result: dict) -> bool:

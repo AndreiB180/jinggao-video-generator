@@ -623,3 +623,26 @@ def test_a_new_copy_of_the_app_keeps_the_api_key_login_and_assist_key(tmp_path, 
     monkeypatch.setattr(paths, "DATA", other)
     paths.keep_sync()
     assert (other / "settings.json").read_text("utf-8") == '{"model_api_key": "sk-old"}'
+
+
+def test_meme_captions_and_vertical_videos_on_blurred_sides_are_caught():
+    import random
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+    from jinggao import express_clean, screen_text
+    # A huge red caption at the bottom is 花字, not a subtitle to crop away; a normal subtitle line is not.
+    big = screen_text.classify([[{"text": "不要视奸我", "score": 0.95, "box": [0.05, 0.82, 0.9, 0.95]}]])
+    assert big["dense"] and big["marks"][0]["kind"] == "center"
+    small = screen_text.classify([[{"text": "他说今天的会议推迟了", "score": 0.95, "box": [0.2, 0.88, 0.8, 0.93]}]])
+    assert not small["dense"] and small["marks"][0]["kind"] == "caption"
+    random.seed(2)
+    sharp = Image.new("L", (480, 270))
+    d = ImageDraw.Draw(sharp)
+    for _ in range(500):
+        x, y = random.randrange(480), random.randrange(270)
+        d.rectangle((x, y, x + random.randrange(3, 20), y + random.randrange(3, 20)), fill=random.randrange(256))
+    mix = sharp.filter(ImageFilter.GaussianBlur(14))
+    mix.paste(sharp.crop((165, 0, 315, 270)), (165, 0))
+    assert express_clean.blurred_sides([np.array(mix)] * 3, (0, 0, 1, 1))
+    assert not express_clean.blurred_sides([np.array(sharp)] * 3, (0, 0, 1, 1))
+    assert express_match._boxed(mix.convert("RGB")) and not express_match._boxed(sharp.convert("RGB"))
