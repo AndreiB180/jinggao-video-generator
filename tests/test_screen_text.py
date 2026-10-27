@@ -267,3 +267,13 @@ def test_a_line_without_usable_footage_borrows_a_nearby_clip_instead_of_a_card(d
     assert m.borrow(person, final, files) is None        # never someone else's footage for a named person
     title = Image.open(m.title_card(m.shots[2]))
     assert len(set(title.convert("L").getdata())) < 60   # a plain gradient: no name written on it
+
+
+
+def test_market_screens_are_not_contact_details():
+    # The client lost every crypto chart: prices, wallet addresses and dates were read as phone numbers.
+    for text in ("1.63333389100586", "0x1a03642874ba814b5309cF8td6d187b80ceE00", "0.000008029544 usD",
+                 "10月11日XRP将达到什么价格？", "2026-10-27 13:45:22", "涨幅 12.5%", "价格 88元"):
+        assert not screen_text.contact({"text": text, "box": [0.1, 0.5, 0.5, 0.55]}), text
+    for text in ("订房热线 0731-8888888", "电话 13812345678", "QQ 12345678"):
+        assert screen_text.contact({"text": text, "box": [0.1, 0.5, 0.5, 0.55]}), text

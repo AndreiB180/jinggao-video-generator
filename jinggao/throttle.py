@@ -96,7 +96,9 @@ LIMITS = {
     "baidu_web": 1,        # 百度一镜: one dedicated browser and download folder, one narration at a time
 }
 MAX_VIDEOS = 6             # videos made at the same time (setting video_workers)
-GPU_WAIT = 3.0             # seconds a clip waits for the card before a free CPU slot may take it
+GPU_WAIT = 20.0            # seconds a clip waits for the card before a free CPU slot may take it: the client's
+                           # i5-13400F sat at 100% with 3 videos, and a libx264 clip there takes far longer than
+                           # waiting for one of the six NVENC sessions
 
 _slots: dict = {name: threading.BoundedSemaphore(n) for name, n in LIMITS.items()}
 

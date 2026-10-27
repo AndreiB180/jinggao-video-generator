@@ -564,3 +564,37 @@ def test_refused_searches_go_on_with_the_local_library_or_by_setting(data, monke
     m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
     m.bili, m.pixa = Bili(), None
     m.search(groups)                               # set to go on regardless: no stop
+
+
+def test_small_edge_logos_left_after_the_crop_are_painted_out_and_text_in_the_middle_is_not():
+    import subprocess
+    from jinggao import express_clean, paths
+    corner = {"crop": [0.0, 0.1, 0.9, 0.9], "size": [1280, 720], "zoom": 1.11,
+              "residual": [{"kind": "logo", "box": [0.82, 0.12, 0.9, 0.2]}]}
+    vf = express_clean.video_filter(corner)
+    assert vf.startswith("crop=") and ",delogo=x=" in vf and not express_clean.dirty(corner)
+    middle = corner | {"residual": [{"kind": "center", "box": [0.3, 0.4, 0.7, 0.55]}]}
+    assert "delogo" not in express_clean.video_filter(middle) and express_clean.dirty(middle)
+    big = corner | {"residual": [{"kind": "logo", "box": [0.5, 0.1, 0.9, 0.4]}]}
+    assert "delogo" not in express_clean.video_filter(big) and express_clean.dirty(big)
+    old = {"crop": corner["crop"], "residual": corner["residual"]}       # saved before sizes were kept
+    assert "delogo" not in express_clean.video_filter(old)
+    done = subprocess.run([paths.binary("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "testsrc=size=1280x720",
+                           "-vf", vf, "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def test_vertical_and_half_black_pictures_are_recognised():
+    from PIL import Image, ImageDraw
+    from jinggao import express_clean
+    import numpy as np
+    wide = Image.new("RGB", (480, 270), (90, 120, 150))
+    assert not express_match._boxed(wide)
+    assert express_match._boxed(Image.new("RGB", (270, 480), (90, 120, 150)))       # a vertical video
+    boxed = Image.new("RGB", (480, 270), (0, 0, 0))
+    ImageDraw.Draw(boxed).rectangle((165, 0, 315, 270), fill=(140, 120, 100))         # vertical inside 16:9
+    assert express_match._boxed(boxed)
+    # The same frames in a clip: the content is found between bars wider than 30% each, and is narrow.
+    frames = [np.array(boxed.convert("L"), dtype=np.uint8) for _ in range(4)]
+    x0, y0, x1, y1 = express_clean.content_rect(frames)
+    assert 0.3 < x0 < 0.36 and 0.64 < x1 < 0.7

@@ -79,6 +79,12 @@ IDENTITY_REJECTION = re.compile(r"演员|扮演|影视|情景|再现|不是|非|
 # Rejections that make a clip unusable for any line, even as a last resort before a title card.
 BROKEN_REJECTION = re.compile(r"黑屏|黑场|纯色|模糊|动画|游戏|AI|PPT|文字页|图表|截图|截屏|评论区|聊天|界面|马赛克|主持|博主|嘉宾|访谈|采访|出镜|镜头讲话|对镜|"
                               r"对着镜头|面对镜头|口播画面|演播室|遮挡|硬字幕|水印|台标|弹幕|贴纸|广告|联系方式|引流|电话|微信|QQ|私信|号码|打码|色块")
+# Clips with a watermark or 花字 left in view (the client's biggest complaint, 10-27): used only after related
+# pictures and borrowing, an edge watermark (painted out where small) before 花字 across the middle.
+MARKED = "有去不掉的水印或文字"
+MARKED_MIDDLE = "画面中间有花字或大段文字"
+NARROW = "竖屏或只占半边的画面"
+MARK_REJECTION = re.compile(r"水印|花字|大字|字幕条|标题字|台标|logo|LOGO|二维码|贴纸|表情包")
 FUNERAL = re.compile(r"葬礼|遗体|遗容|遗像|灵堂|灵柩|追悼|悼念|花圈|讣告|火化|送别|逝世后|告别仪式")
 DEATH_LINE = re.compile(r"逝世|去世|病逝|离世|悼念|追悼|葬礼|长眠|告别")
 BROADCAST = re.compile(r"CCTV|cctv|央视|中央电视台|卫视|电视台|CGTN|凤凰卫视|凤凰资讯|凤凰网|凤凰视频")   # a channel logo sits top-left
@@ -175,6 +181,17 @@ def _jpeg(image: Image.Image, quality=80) -> str:
 def _dark(image: Image.Image) -> bool:
     stat = ImageStat.Stat(image.convert("L").resize((64, 36)))
     return stat.mean[0] < 22 or stat.stddev[0] < 10
+
+
+def _boxed(image: Image.Image) -> bool:
+    """A preview frame of a vertical video: taller than wide, or a picture in the middle with both sides
+    black (wider than a fifth of the frame each)."""
+    if image.width < image.height * 1.2:
+        return True
+    small = image.convert("L").resize((64, 36))
+    cols = [max(small.getpixel((x, y)) for y in range(36)) for x in range(64)]
+    side = 13    # a fifth of 64
+    return max(cols[:side]) < 40 and max(cols[-side:]) < 40 and max(cols[side:-side]) >= 60
 
 
 def _dhash(image: Image.Image) -> int:
@@ -478,16 +495,22 @@ class Matcher:
             avoid = row.get("avoid") or []
             picked = [p for p in {id(p): p for p in near + picked}.values()
                       if not any(abs(p["t"] - t) < 6 for t in avoid)][:count]
-        tiles, hashes = [], []
+        tiles, hashes, boxed = [], [], 0
+        landscape = self.project.get("aspect", "16:9") != "9:16"
         for p in picked:
             image = es.bilibili_tile(self.bili, p)
             if _dark(image):
+                continue
+            if landscape and _boxed(image):
+                boxed += 1
                 continue
             h = _dhash(image)
             if any(bin(h ^ other).count("1") <= 5 for other in hashes):
                 continue
             hashes.append(h)
             tiles.append({"source": row, "t": p["t"], "image": image, "hash": h})
+        if boxed and boxed >= len(tiles):
+            return []    # a vertical video (or one inside black bars): never shown in a landscape film
         if tiles and row["provider"] == "bilibili":
             # Kept full size for reading the source's text, which happens only if the picker chooses it.
             row["_screen"] = [t["image"] for t in tiles][:self.SCREEN_FRAMES]
@@ -804,6 +827,8 @@ class Matcher:
                     continue
                 if min(image.size) < 400 or not 0.45 <= image.width / image.height <= 2.6:
                     continue
+                if self.project.get("aspect", "16:9") != "9:16" and image.width < image.height * 1.15:
+                    continue    # a tall picture in a landscape film would sit between blurred side bands
                 h = _dhash(image)
                 with lock:
                     if any(bin(h ^ other).count("1") <= 6 for other in seen_hashes):
@@ -1320,10 +1345,10 @@ class Matcher:
         if found["moving"]:
             raise ValueError("画面里有滚动字幕，换别的画面")
         if found["dense"]:
-            # Text across the picture: a text page or an app screen is unusable, a stock chart, a logo or a
-            # sign is footage. Nothing is blurred; the visual check judges it and cleaner clips come first.
+            # Text across the picture (花字, a title board, an app screen): the client's biggest complaint.
+            # Used only when neither another clip, a related picture nor a borrowed clip is left.
             with self.lock:
-                self.soft.setdefault(job_id, set()).add("wm")
+                self.soft.setdefault(job_id, set()).update(("wm", "center"))
         if not found["marks"]:
             return
         if clean.get("crop"):
@@ -1345,6 +1370,8 @@ class Matcher:
             flags.add("jump")
         if express_clean.dirty(clean):
             flags.add("wm")
+        if clean.get("narrow"):
+            flags.add("narrow")
         return flags
 
     # ---------------------------------------------------------------------- QA
@@ -1466,6 +1493,7 @@ class Matcher:
         if not hits or any(k in where for k in ("中间", "左侧", "右侧")):
             self.soft.setdefault(job_id, set()).add("wm")
         if "中间" in where:   # a mid-picture "@name" is on the whole video: other windows of it are no better
+            self.soft.setdefault(job_id, set()).add("center")
             source = ((self.job_choice.get(job_id) or {}).get("tile") or {}).get("source")
             if source is not None:
                 source["dirty"] = True
@@ -1516,7 +1544,8 @@ class Matcher:
                 # The workbench shows what the export shows: thumbnail after the same crop and blur.
                 root = paths.project_dir(self.pid)
                 target = root / "thumbs" / f"{asset['id']}-clean.jpg"
-                cleaned = express_clean.video_filter({"crop": clean["crop"], "residual": clean["residual"]})
+                cleaned = express_clean.video_filter({"crop": clean["crop"], "residual": clean["residual"],
+                                                      "size": clean.get("size")})
                 try:
                     media.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-ss",
                                f"{min(1.0, float(asset.get('duration') or 2) / 2):.2f}", "-i", str(path), "-frames:v", "1",
@@ -1570,7 +1599,7 @@ class Matcher:
                 clean = self.clean.get(choice.get("job")) or {}
                 framed = asset
                 if clean.get("crop"):
-                    shot["frame_crop"] = {"crop": clean["crop"], "zoom": clean["zoom"],
+                    shot["frame_crop"] = {"crop": clean["crop"], "zoom": clean["zoom"], "size": clean.get("size"),
                                           "residual": [r for r in clean["residual"] if r["kind"] != "subtitle"],
                                           "overlays": [o["kind"] for o in clean["overlays"]],
                                           # Where each mark was found (source-frame fractions), shown in the workbench.
@@ -1840,6 +1869,12 @@ class Matcher:
                 passed = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
                                    "job": job_id}
                 flags = self.flags(job_id)
+                if flags & {"wm", "narrow"}:
+                    # Watermark or 花字 left in view, or a vertical / half-black picture: related pictures and
+                    # borrowed clean clips come first.
+                    reason = MARKED_MIDDLE if "center" in flags else NARROW if "narrow" in flags else MARKED
+                    rejected.setdefault(sid, []).append((passed, path, reason))
+                    continue
                 if "still" in flags:
                     # A still picture (illustration, photo slideshow) is a last resort: moving footage, also
                     # reused from a neighbour, comes first; keepable() may still take it before a title card.
@@ -2001,11 +2036,14 @@ class Matcher:
             pending = [s for s in pending if s["id"] not in final]
             stamp("repeat", began)
         failures.update(self.stop_downloads())
-        def keepable(shot, choice, reason):
+        def keepable(shot, choice, reason, marks_ok=False):
             # Clearly wrong footage is worse than a neutral card: badly off-topic anywhere, and for an
             # ancient-history video modern, foreign or other-dynasty scenes.
             if re.search(r"严重不符|完全无关|完全不符|明显无关|毫无关系|毫无关联", reason):
                 return False
+            if not marks_ok and (reason in (MARKED, MARKED_MIDDLE, NARROW) or MARK_REJECTION.search(reason)
+                                 or self.flags(choice.get("job")) & {"wm", "narrow"}):
+                return False    # watermarks, 花字, vertical pictures: after pictures and borrowing (below)
             if self.ancient and re.search(r"现代|当代|清朝|清代|明朝|明代|民国|外国|国外|西方|欧美|朝代|时代背景|时代错|年代不符", reason):
                 return False
             if self.ancient_shot(shot) and not re.search(r"黑屏|黑场|纯色|模糊|主持|博主|截图|界面|马赛克|水印|台标|字幕|弹幕", reason):
@@ -2064,6 +2102,23 @@ class Matcher:
                 reused += 1
         if reused:
             self.notes.append(f"{reused} 镜没有新的可用画面，借用了附近镜头已通过检查的画面")
+        marked = 0
+        for shot in list(cards):
+            # Nothing else: a clip with a watermark (edge marks first, then text across the middle) beats a card.
+            sid = shot["id"]
+            for wanted in (lambda r: r == MARKED, lambda r: r == NARROW,
+                           lambda r: r == MARKED_MIDDLE or bool(MARK_REJECTION.search(r))):
+                kept = next(((c, path, reason) for c, path, reason in rejected.get(sid, [])
+                             if wanted(reason) and keepable(shot, c, "画面合格", marks_ok=True)), None)
+                if kept:
+                    choice, path, reason = kept
+                    final[sid] = choice | {"qa": "rejected_kept:" + reason}
+                    files[sid] = path
+                    cards.remove(shot)
+                    marked += 1
+                    break
+        if marked:
+            self.notes.append(f"{marked} 镜实在没有别的画面，用了带水印、文字或竖屏的片段")
         for shot in list(cards):
             # Nothing to borrow: a still picture beats a title card, except as the opening shot.
             sid = shot["id"]
@@ -2075,6 +2130,19 @@ class Matcher:
                 final[sid] = choice | {"qa": "rejected_kept:" + reason}
                 files[sid] = path
                 cards.remove(shot)
+        reused_more = 0
+        for limit in (4, None):
+            for shot in list(cards):
+                # Still nothing: the client reads a blurred card as a broken video (24 of them in one film), so
+                # a clip lent out more often comes first, the least-lent ones before the rest.
+                donor = self.borrow(shot, final, files, limit=limit)
+                if donor:
+                    final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
+                    files[shot["id"]] = files[donor]
+                    cards.remove(shot)
+                    reused_more += 1
+        if reused_more:
+            self.notes.append(f"{reused_more} 镜实在没有别的画面，又借用了已经用过的画面")
         for shot in cards:
             # Background: a frame of the nearest accepted clip (blurred), so the card belongs to the video.
             near = min(footage, key=lambda item: abs(item[0] - self.position[shot["id"]]), default=None)

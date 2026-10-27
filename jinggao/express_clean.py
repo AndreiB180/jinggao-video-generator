@@ -122,8 +122,10 @@ def content_rect(frames) -> tuple[float, float, float, float]:
         if not len(live):
             return 0, n
         a, b = int(live[0]), int(live[-1]) + 1
-        # Bars must be thin margins at both ends to count; otherwise keep the full frame.
-        return (a, b) if a < n * 0.3 and b > n * 0.7 else (0, n)
+        # Bars must be margins at both ends to count; otherwise keep the full frame. They may be wide: a
+        # vertical video posted inside a 16:9 frame leaves about a third black on each side (the client got
+        # those half-black pictures while the limit was 30%).
+        return (a, b) if a < n * 0.42 and b > n * 0.58 else (0, n)
     y0, y1 = span(rows, h)
     x0, x1 = span(cols, w)
     pad = 2
@@ -766,7 +768,8 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
         corners += static_bands(frames, content)
     edge = _merge(edge + corners)
     subs = subtitles(frames, content, source_boxes)
-    narrow = bool(pip) and (pip[2] - pip[0]) * src_aspect / max(1e-6, pip[3] - pip[1]) < 0.8 * out_aspect
+    # A picture much narrower than the film: a vertical video, or one inside wide black or blurred bars.
+    narrow = (content[2] - content[0]) * src_aspect / max(1e-6, content[3] - content[1]) < 0.8 * out_aspect
     if narrow:
         # A picture much narrower than the film (a vertical video): show it whole; the render's contain fit
         # fills the sides with a blurred copy of the picture itself. Marks inside it are blurred.
@@ -779,16 +782,16 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
     else:   # nothing to hide: only trim black bars and let the render's fit decide the framing
         x0, y0, x1, y1 = content
         rect, zoom, residual = [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)], 1.0, []
-    return {"content": [round(v, 4) for v in content], "overlays": edge + subs, "central": central,
+    return {"content": [round(v, 4) for v in content], "overlays": edge + subs, "central": central, "size": [cw, chh],
             "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still | {"fixed_camera": fixed},
             "src_aspect": round(src_aspect, 4), "inner_picture": list(pip) if pip else None, "narrow": narrow,
             "layout_jump": jump}
 
 
 def dirty(result: dict) -> bool:
-    """Marks that the crop could not remove (left in view, never blurred), or a subtitle line left in view."""
-    return any(r["kind"] in ("center", "subtitle", "caption") or (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]) > 0.004
-               for r in (result or {}).get("residual", []))
+    """Marks that neither the crop nor painting out removes (text across the middle, a subtitle line, a big
+    logo) are left in view."""
+    return bool(result) and not painted(result)
 
 
 def central_marks(source: dict | None) -> list[dict]:
@@ -814,16 +817,53 @@ def from_view(box, rect) -> list[float]:
 
 
 def video_filter(result: dict) -> str:
-    """FFmpeg filter prefix: crop to the clean rectangle. Marks the crop cannot remove stay as they are:
-    blurred patches looked like random mosaic to viewers (a logo or a chart label is part of the picture),
-    and such clips already rank behind clean ones (dirty)."""
+    """FFmpeg filter prefix: crop to the clean rectangle, then paint out small logos near the edges that the
+    crop could not remove (delogo fills them from the pixels around them; the client saw corner watermarks
+    left in view). Text across the middle is never painted over (it looked like random mosaic): such clips
+    are used only when nothing else is left."""
     if not result or not result.get("crop"):
         return ""
     x, y, w, h = result["crop"]
+    parts = []
     if w < 0.995 or h < 0.995:
-        return (f"crop=w='trunc(iw*{w:.4f}/2)*2':h='trunc(ih*{h:.4f}/2)*2'"
-                f":x='trunc(iw*{x:.4f})':y='trunc(ih*{y:.4f})'")
-    return ""
+        parts.append(f"crop=w='trunc(iw*{w:.4f}/2)*2':h='trunc(ih*{h:.4f}/2)*2'"
+                     f":x='trunc(iw*{x:.4f})':y='trunc(ih*{y:.4f})'")
+    size = result.get("size")
+    if size and len(size) == 2:
+        iw, ih = int(size[0]), int(size[1])
+        cw, ch = int(iw * w / 2) * 2 if w < 0.995 or h < 0.995 else iw, int(ih * h / 2) * 2 if w < 0.995 or h < 0.995 else ih
+        x0, y0 = (int(iw * x), int(ih * y)) if w < 0.995 or h < 0.995 else (0, 0)
+        for mark in result.get("residual") or []:
+            box = paintable(mark, result["crop"])
+            if not box:
+                continue
+            bx0, by0 = max(1, round(box[0] * iw) - x0 - 2), max(1, round(box[1] * ih) - y0 - 2)
+            bx1, by1 = min(cw - 2, round(box[2] * iw) - x0 + 2), min(ch - 2, round(box[3] * ih) - y0 + 2)
+            if bx1 - bx0 >= 4 and by1 - by0 >= 4:
+                parts.append(f"delogo=x={bx0}:y={by0}:w={bx1 - bx0}:h={by1 - by0}")
+    return ",".join(parts)
+
+
+def paintable(mark: dict, crop) -> list | None:
+    """A leftover mark small enough and close enough to the picture's edge to paint out: a logo, an "@name",
+    a channel bug. Its box in source fractions, or None."""
+    if mark.get("kind") in ("center", "subtitle", "caption"):
+        return None
+    x, y, w, h = crop
+    b = [max(mark["box"][0], x), max(mark["box"][1], y), min(mark["box"][2], x + w), min(mark["box"][3], y + h)]
+    if b[2] <= b[0] or b[3] <= b[1]:
+        return None
+    area = (b[2] - b[0]) * (b[3] - b[1]) / max(1e-6, w * h)
+    # Relative to the cropped view: within the outer fifth on some side.
+    near = min((b[0] - x) / w, (x + w - b[2]) / w, (b[1] - y) / h, (y + h - b[3]) / h) <= 0.2
+    return b if area <= 0.03 and near else None
+
+
+def painted(result: dict) -> bool:
+    """Whether every mark left in view gets painted out (the clip then counts as clean)."""
+    rest = [r for r in (result or {}).get("residual", []) if not (result.get("size") and paintable(r, result["crop"]))]
+    return not any(r["kind"] in ("center", "subtitle", "caption") or (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]) > 0.004
+                   for r in rest)
 
 
 def _merge(boxes):

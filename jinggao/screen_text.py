@@ -250,12 +250,15 @@ def read(image: Image.Image) -> list[dict]:
 # the picture: 需要视频私信 / 加微信 / QQ numbers / phone numbers).
 CONTACT = re.compile(r"微信|威信|薇信|徽信|[Vv]信|(?<![A-Za-z])(?:[VvWw][Xx])(?![A-Za-z])|加[Vv](?![A-Za-z])|私信|私聊|私我|"
                      r"签名|扣扣|(?<![A-Za-z])[Qq]{2}(?![A-Za-z])|需要视频|需要素材|抖音号|快手号|公众号|直播间|二维码|扫码|"
-                     r"联系方式|联系我|加我|商务合作|淘宝|天猫|拼多多|店铺")
+                     r"联系方式|联系我|再联系|请联系|欢迎联系|需要联系|加我|商务合作|淘宝|天猫|拼多多|店铺")
 # Words that only mean selling or contact when a number stands next to them (OCR also misreads 水电站 as 水电话).
 WITH_NUMBER = re.compile(r"电话|热线|手机|价格|费用|收费|报价|包邮|购买|下单|订房|订餐")   # not 元: menu boards are scenery
-MOBILE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-DIGITS = re.compile(r"\d{7,}")
-NOT_CONTACT = re.compile(r"[A-Z]{3}[UJZ]\s?\d{6,7}|bili[_ ]?\d+", re.I)   # container numbers; B站 default user names
+MOBILE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)|(?<![\d.])0\d{2,3}-\d{7,8}(?!\d)")   # mobile; landline with area code
+DIGITS = re.compile(r"(?<!\d)\d{7,12}(?!\d)")    # QQ and phone numbers; longer runs are prices, IDs, addresses
+# Container numbers, B站 default user names, and the numbers of a market screen (the client lost every crypto
+# chart to "contact details": prices 1.63333389100586, wallet addresses 0x1a03…, dates, times, percentages).
+NOT_CONTACT = re.compile(r"[A-Z]{3}[UJZ]\s?\d{6,7}|bili[_ ]?\d+|0x[0-9a-f]{6,}|\d+[.,]\d+%?|\d+%|"
+                         r"(?<!\d)(19|20)\d{2}[年/.-]\d{1,2}([月/.-]\d{1,2}日?)?|\d{1,2}月\d{1,2}日?|\d{1,2}:\d{2}(:\d{2})?", re.I)
 CJK = re.compile(r"[㐀-鿿]")
 TOP, BOTTOM = 0.22, 0.62      # within the picture: above TOP is the title/watermark band, below BOTTOM captions
 
@@ -269,7 +272,7 @@ def contact(line: dict) -> bool:
     plain = NOT_CONTACT.sub("", text.replace(" ", ""))
     if CONTACT.search(text) or MOBILE.search(plain):
         return True
-    if WITH_NUMBER.search(plain) and re.search(r"\d{2,}", plain):
+    if WITH_NUMBER.search(plain) and re.search(r"\d{4,}", plain):
         return True
     digits = DIGITS.search(plain)
     if digits:
