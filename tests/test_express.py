@@ -675,3 +675,22 @@ def test_big_letters_in_the_middle_of_the_scene_are_not_花字():
     from jinggao import screen_text
     card = screen_text.classify([[{"text": "社会保障卡", "score": 0.95, "box": [0.3, 0.4, 0.7, 0.52]}]])
     assert not card["dense"]                     # a 社保卡 held up to the camera is footage
+
+
+def test_lines_without_footage_get_a_fresh_library_video_at_its_matching_moment(data, monkeypatch):
+    from jinggao import footage_index
+    shots = [planner.new_shot(t) | {"duration": 5.0, "visual": "超市 收银台 顾客"} for t in ("一。", "二。")]
+    project = store.new_project("t", "x")
+    project = store.mutate(project["id"], lambda p: p.update(shots=shots))
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    m.plan = {"groups": [{"shots": [s["id"] for s in project["shots"]], "zh": ["超市 收银"]}]}
+    used = {"tile": {"source": {"provider": "bilibili", "id": "BVused"}}}
+    rows = [{"provider": "bilibili", "id": "BVused", "duration": 300, "moments": [40.0], "avoid": []},
+            {"provider": "bilibili", "id": "BVnew1", "duration": 300, "moments": [12.0, 90.0], "avoid": [10.0]},
+            {"provider": "bilibili", "id": "BVnew2", "duration": 300, "moments": [55.0], "avoid": []}]
+    monkeypatch.setattr(footage_index, "search", lambda q, limit=8: [dict(r) for r in rows])
+    monkeypatch.setattr(m, "resolve", lambda sources: {k: {"available": True} for k in sources})
+    jobs = m.library_jobs(project["shots"], {"x": used}, {}, {})
+    picked = [(j[2]["tile"]["source"]["id"], j[2]["start"]) for j in jobs]
+    assert picked == [("BVnew1", 89.0), ("BVnew2", 54.0)]       # unused videos, one each, off the avoided frame
+    assert all(j[2]["lane"] == "library" for j in jobs)

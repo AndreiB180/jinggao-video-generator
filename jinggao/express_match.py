@@ -814,6 +814,52 @@ class Matcher:
                 return sid
         return None
 
+    # ------------------------------------------------------------- library
+    def library_jobs(self, pending, final, reserved, streams) -> list:
+        """Lines still without footage: a fresh window from a video of the local library whose described
+        frames match the line (its visual note and its group's search words), at the matching moment, from a
+        video this film does not show yet. No previews or picker: the library's descriptions choose, QA and
+        the clean-up check the window. [(job_id, sid, choice)]"""
+        from . import footage_index
+        groups = {sid: g for g in self.plan.get("groups", []) for sid in g.get("shots", [])}
+        used = {c["tile"]["source"].get("id") for c in final.values()}
+        planned = []
+        for shot in pending:
+            words = " ".join([shot.get("visual") or "", *((groups.get(shot["id"]) or {}).get("zh") or [])[:1]])
+            try:
+                rows = footage_index.search(words, limit=12)
+            except Exception:   # noqa: BLE001 — no library: the next fallbacks take over
+                return []
+            need = float(shot["duration"]) + MARGIN
+            for row in rows:
+                if row.get("provider") != "bilibili" or row.get("id") in used or row.get("contact"):
+                    continue
+                if FUNERAL.search(row.get("title", "")) and not DEATH_LINE.search(shot["narration"]):
+                    continue
+                length = float(row.get("duration") or 0)
+                key = ("bilibili", row["id"])
+                start = None
+                for t in row.get("moments") or []:
+                    begin = max(0.0, float(t) - 1.0)
+                    if begin + need > length - 0.1 or any(abs(float(t) - a) < 6 for a in row.get("avoid") or []):
+                        continue
+                    if all(begin + need + 0.2 <= a or begin >= b + 0.2 for a, b in reserved.get(key, [])):
+                        start = begin
+                        break
+                if start is None:
+                    continue
+                used.add(row["id"])            # one new video per line: the point is not to repeat
+                reserved.setdefault(key, []).append((start, start + need))
+                base = "ctx" if shot.get("persons") else "library"
+                planned.append((f"{shot['id']}#lib", shot["id"], {
+                    "tile": {"source": row, "t": float(start) + 1.0, "hash": None}, "start": round(start, 2),
+                    "lane": "library", "base_lane": base, "rank": 0}))
+                break
+        if not planned:
+            return []
+        streams.update(self.resolve({choice["tile"]["source"]["id"]: choice["tile"]["source"] for _, _, choice in planned}))
+        return [job for job in planned if (streams.get(job[2]["tile"]["source"]["id"]) or {}).get("available")]
+
     # ------------------------------------------------------------ pictures
     IMAGE_PICK = """每一行是一句口播（行首黄色编号）和几张网上找来的候选图片（行内从左到右是第1、2、3、4张）。
 为每句挑一张最适合放在这句话下面的图片：要和口播讲的人、事、地方对得上，画面干净清楚。
@@ -1504,7 +1550,7 @@ class Matcher:
                             "不要因没有此人而判不合格；但不能是演员扮演，也不应以其他可辨认的具名人物为主体")
             if not role:
                 lane = (self.job_choice.get(job_id) or {}).get("lane")
-                if lane in ("topic", "near", "neighbor", "repeat"):
+                if lane in ("topic", "near", "neighbor", "repeat", "library"):
                     # Filler for a line without footage of its own: a fresh clean picture beats the same clip
                     # again (the client: "less on topic is fine, but clean and not repeated").
                     role = ("｜补位画面：只要和整篇主题大致相关就合格，不要因为和这句口播对不上、是空镜或风景而判跑题；"
@@ -1638,6 +1684,7 @@ class Matcher:
                                "reuse": "快速通道：没有新的可用画面，借用附近镜头已通过检查的画面",
                                "stock": "快速通道：用正版图库空镜补位",
                                "image": "快速通道：没有合适的视频，用相关图片加推拉动态补位",
+                               "library": "快速通道：素材库里描述相符的新视频补位",
                                "card": "快速通道：没有可用实拍素材，使用模糊背景卡片"}.get(choice["lane"], "快速通道"),
                     "visual_quality": {"representation": "live_action" if choice["lane"] != "card" else "illustration"},
                     "identity_evidence": identity,
@@ -2095,6 +2142,37 @@ class Matcher:
                     files[sid] = got[job_id]
             pending = [s for s in pending if s["id"] not in final]
             stamp("repeat", began)
+        if pending:
+            # Fresh windows from the library before any clip is shown again (the client: "the library is big,
+            # don't repeat; less on topic is fine if it is clean").
+            began = time.monotonic()
+            try:
+                jobs = self.library_jobs(pending, final, reserved, streams)
+            except (media.Cancelled, Budget):
+                raise
+            except Exception as exc:   # noqa: BLE001 — pictures and borrowing still follow
+                self.notes.append(f"素材库补位失败：{type(exc).__name__}")
+                jobs = []
+            if jobs:
+                self.job_choice.update({job_id: c for job_id, _, c in jobs})
+                got, failed, bad, running = self.download(jobs, streams, qa=checking,
+                                                           deadline=time.monotonic() + (60 + 0.3 * len(jobs)) * self.share())
+                failures.update(failed)
+                qa_bad.update(bad)
+                filled = 0
+                for job_id, sid, choice in jobs:
+                    if sid in final or job_id not in got or job_id in bad:
+                        continue
+                    if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
+                        continue
+                    final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
+                                           "job": job_id}
+                    files[sid] = got[job_id]
+                    filled += 1
+                if filled:
+                    self.notes.append(f"{filled} 镜用素材库里描述相符的新视频补上，没有重复已经用过的画面")
+                pending = [s for s in pending if s["id"] not in final]
+            stamp("library", began)
         failures.update(self.stop_downloads())
         def keepable(shot, choice, reason, marks_ok=False):
             # Clearly wrong footage is worse than a neutral card: badly off-topic anywhere, and for an
@@ -2229,7 +2307,7 @@ class Matcher:
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
-                                         "repeat", "reuse", "card")},
+                                         "library", "repeat", "reuse", "card")},
                   "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
                   "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),
                             "wm": sum(1 for c in final.values() if "wm" in self.flags(c.get("job"))),

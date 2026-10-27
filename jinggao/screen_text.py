@@ -253,11 +253,16 @@ CONTACT = re.compile(r"微信|威信|薇信|徽信|[Vv]信|(?<![A-Za-z])(?:[VvWw
                      r"联系方式|联系我|再联系|请联系|欢迎联系|需要联系|加我|商务合作|淘宝|天猫|拼多多|店铺")
 # Words that only mean selling or contact when a number stands next to them (OCR also misreads 水电站 as 水电话).
 WITH_NUMBER = re.compile(r"电话|热线|手机|价格|费用|收费|报价|包邮|购买|下单|订房|订餐")   # not 元: menu boards are scenery
+# Serial numbers on banknotes (FA08300881), models, flights: letters then digits. Across the middle of the
+# picture they are its content (the client's 老100元 film lost every banknote to them); at the edges they are
+# an uploader's ID (TC8888802).
+SERIAL = re.compile(r"(?<![A-Za-z])[A-Za-z]{1,3}\s?\d{6,10}(?!\d)")
 MOBILE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)|(?<![\d.])0\d{2,3}-\d{7,8}(?!\d)")   # mobile; landline with area code
 DIGITS = re.compile(r"(?<!\d)\d{7,12}(?!\d)")    # QQ and phone numbers; longer runs are prices, IDs, addresses
 # Container numbers, B站 default user names, and the numbers of a market screen (the client lost every crypto
 # chart to "contact details": prices 1.63333389100586, wallet addresses 0x1a03…, dates, times, percentages).
 NOT_CONTACT = re.compile(r"[A-Z]{3}[UJZ]\s?\d{6,7}|bili[_ ]?\d+|0x[0-9a-f]{6,}|\d+[.,]\d+%?|\d+%|"
+                         r"(\d)\1{6,}|"     # one digit repeated (00000000000)
                          r"(?<!\d)(19|20)\d{2}[年/.-]\d{1,2}([月/.-]\d{1,2}日?)?|\d{1,2}月\d{1,2}日?|\d{1,2}:\d{2}(:\d{2})?", re.I)
 CJK = re.compile(r"[㐀-鿿]")
 TOP, BOTTOM = 0.22, 0.62      # within the picture: above TOP is the title/watermark band, below BOTTOM captions
@@ -270,15 +275,19 @@ def _cjk(text: str) -> int:
 
 def contact(line: dict) -> bool:
     text = line["text"]
+    edge = line["box"][3] <= 0.22 or line["box"][1] >= 0.78
     plain = NOT_CONTACT.sub("", text.replace(" ", ""))
+    if not edge:
+        plain = SERIAL.sub("", plain)
     if CONTACT.search(text) or MOBILE.search(plain):
         return True
     if WITH_NUMBER.search(plain) and re.search(r"\d{4,}", plain):
         return True
     digits = DIGITS.search(plain)
     if digits:
-        # 8+ digits anywhere (QQ, phone); 7 near the edges, where uploaders put their IDs (TC8888802).
-        return len(digits.group(0)) >= 8 or line["box"][3] <= 0.2 or line["box"][1] >= 0.8
+        # Near the top or bottom edge, where uploaders put their IDs, 7 digits are one (TC8888802); across the
+        # middle only a QQ- or phone-length number is (2695274503), not a counter or a serial's digits.
+        return edge or len(digits.group(0)) >= 9
     return False
 
 
