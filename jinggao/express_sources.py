@@ -121,7 +121,9 @@ class Bilibili:
                 nav = self.client.get("https://api.bilibili.com/x/web-interface/nav").json().get("data") or {}
                 self.logged_in = bool(nav.get("isLogin"))
             except (httpx.HTTPError, ValueError):
-                self.logged_in = False
+                # The check itself was refused (B站 throttling three computers on one line): keep the saved
+                # login rather than make the whole film anonymous (480p, most videos skipped).
+                self.logged_in = True
             if not self.logged_in:
                 self.client.cookies.clear()
 
