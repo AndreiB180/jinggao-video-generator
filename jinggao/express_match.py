@@ -780,6 +780,8 @@ class Matcher:
                 choice = final.get(sid)
                 if not choice or choice.get("lane") in ("card", "reuse") or sid not in files:
                     continue
+                if str(choice.get("qa", "")).startswith("rejected_kept") or self.flags(choice.get("job")) & {"wm", "narrow"}:
+                    continue    # a marked clip is never lent out: it would show its marks again and again
                 source = choice["tile"]["source"]
                 if limit and counts.get((source.get("provider"), source.get("id")), 0) >= limit:
                     continue
@@ -2053,6 +2055,9 @@ class Matcher:
                 if job_id in got and job_id not in bad and self.flags(job_id) & {"still", "dark", "jump"}:
                     # Reused windows are a last resort: a static one is usually a screenshot or text page.
                     bad[job_id] = "近似静态截图或黑场"
+                if job_id in got and job_id not in bad and self.flags(job_id) & {"wm", "narrow"}:
+                    flags = self.flags(job_id)
+                    bad[job_id] = MARKED_MIDDLE if "center" in flags else NARROW if "narrow" in flags else MARKED
                 if job_id in got and job_id in bad:
                     rejected.setdefault(sid, []).append((choice | {"job": job_id}, got[job_id], bad[job_id]))
                 elif job_id in got:
@@ -2128,6 +2133,17 @@ class Matcher:
                 reused += 1
         if reused:
             self.notes.append(f"{reused} 镜没有新的可用画面，借用了附近镜头已通过检查的画面")
+        lent_more = 0
+        for shot in list(cards):
+            # Clean footage seen a few times beats a watermark or 花字 (the client: "clean first, repeat little").
+            donor = self.borrow(shot, final, files, limit=4)
+            if donor:
+                final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
+                files[shot["id"]] = files[donor]
+                cards.remove(shot)
+                lent_more += 1
+        if lent_more:
+            self.notes.append(f"{lent_more} 镜没有干净的新画面，多借用了几次干净画面（不用带水印、花字的）")
         marked = 0
         for shot in list(cards):
             # Nothing else: a clip with a watermark (edge marks first, then text across the middle) beats a card.
@@ -2157,7 +2173,7 @@ class Matcher:
                 files[sid] = path
                 cards.remove(shot)
         reused_more = 0
-        for limit in (4, None):
+        for limit in (None,):
             for shot in list(cards):
                 # Still nothing: the client reads a blurred card as a broken video (24 of them in one film), so
                 # a clip lent out more often comes first, the least-lent ones before the rest.

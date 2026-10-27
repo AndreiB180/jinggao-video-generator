@@ -162,3 +162,13 @@ def test_cover_words_are_never_cut_inside_a_word_or_repeated():
     long = cover.tidy({"main": "美军三航母压境", "sub": "伊朗三十枚导弹齐射，导弹落在海湾附近的美军基地外围",
                        "ask": "中东这仗到底打不打得起来，美国和伊朗谁先撑不住了？"})
     assert long["sub"] == "伊朗三十枚导弹齐射" and long["ask"] == "中东这仗到底打不打得起来？"
+
+
+def test_cover_words_come_from_the_title_and_the_bar_is_a_question():
+    t = "3个没人愿意干的“偏门”生意，投资小利润厚，一年挣个三十万！"
+    parts = cover.tidy({"main": "3个没人愿干的偏门生意｜一年挣三十万", "sub": "投资小利润厚，揭秘冷门赚钱之道"}, t)
+    assert parts["sub"] == "投资小利润厚"                                   # the made-up clause goes
+    t = "西方学者曾经大胆预言过：人民币将在未来5年内，有一个重大进展"
+    assert cover.tidy({"main": "西方学者预言｜人民币5年重大进展", "ask": "曾经大胆预言过：人民币将在未来5年内"}, t)["ask"] == ""
+    assert cover.title_of({"title": "养猪亏50亿，大家不吃猪肉了？-温氏-股份-消费量"}) == "养猪亏50亿，大家不吃猪肉了？"
+    assert cover.title_of({"title": "未命名项目"}) == "" and cover.title_of({"title": "x", "headline": "标题行"}) == "标题行"

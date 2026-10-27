@@ -669,3 +669,9 @@ def test_pasted_keys_are_cleaned_and_a_rejected_key_is_refused_and_requeued(data
         r = client.patch("/api/settings", json={"model_api_key": "sk-new"})
     assert r.status_code == 200 and r.json()["requeued"] == 1
     assert store.jobs(project["id"])[0]["status"] == "queued"
+
+
+def test_big_letters_in_the_middle_of_the_scene_are_not_花字():
+    from jinggao import screen_text
+    card = screen_text.classify([[{"text": "社会保障卡", "score": 0.95, "box": [0.3, 0.4, 0.7, 0.52]}]])
+    assert not card["dense"]                     # a 社保卡 held up to the camera is footage

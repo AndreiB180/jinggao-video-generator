@@ -311,9 +311,10 @@ def classify(frames: list[list[dict]], content=(0.0, 0.0, 1.0, 1.0)) -> dict:
             cjk, text = _cjk(line["text"]), line["text"]
             words = len(text.split())
             top, bottom = _relative(line["box"], content)
-            if cjk >= 2 and bottom - top >= BIG_TEXT:
-                # Characters this tall are 花字 or a meme caption wherever they sit (the client got a crying
-                # meme face over a huge red "不要视奸我" at the bottom, cropped as if it were a subtitle).
+            if cjk >= 2 and bottom - top >= BIG_TEXT and (bottom <= TOP + 0.08 or top >= BOTTOM - 0.05):
+                # Characters this tall in the title or caption band are 花字 or a meme caption (the client got
+                # a crying meme face over a huge red "不要视奸我", cropped as if it were a subtitle). In the middle,
+                # big letters are usually part of the scene (a 社保卡, a sign): the rules below judge those.
                 marks.append({"kind": "center", "box": line["box"]})
                 middle.append(True)
                 continue

@@ -41,6 +41,21 @@ SAMPLES = 5            # opening shots looked at for the picture
 YELLOW, WHITE, BLACK = (255, 222, 0), (255, 255, 255), (0, 0, 0)
 
 
+TAG_TAIL = re.compile(r"(?:-[\u4e00-\u9fffA-Za-z0-9·]{1,8}){1,4}$")
+DEFAULT_TITLES = {"未命名项目", "成片", ""}
+
+
+def title_of(project: dict) -> str:
+    """What the cover says: the script's "标题：" line, else the project's own title (a batch takes it from the
+    document's name, e.g. "“彩电第一股”主动退市！4年亏超200亿，2.48元的清场谁买单？-品牌-价格-消费者", whose
+    keyword tail goes), else "" (the caller falls back to the first sentence, a hook that makes a poor cover)."""
+    if (project.get("headline") or "").strip():
+        return project["headline"].strip()
+    title = re.sub(r"\.(txt|docx?|md)$", "", (project.get("title") or "").strip(), flags=re.I)
+    title = TAG_TAIL.sub("", title).strip(" -")
+    return "" if title in DEFAULT_TITLES or len(title) < 6 else title
+
+
 def headline(title: str) -> str:
     """The title without a "标题：" label, quotes or a trailing full stop."""
     text = re.sub(r"^\s*(标题|题目)\s*[:：]\s*", "", title or "").strip()
@@ -407,7 +422,7 @@ def choose(title: str, frames: list[Image.Image]) -> tuple[Image.Image | None, d
         return best, parts
     index = answer.get("frame")
     picture = frames[index - 1] if isinstance(index, int) and 1 <= index <= len(frames) else best
-    chosen = tidy(answer)
+    chosen = tidy(answer, title)
     if not chosen["main"]:
         return picture, parts
     return picture, chosen
@@ -458,10 +473,40 @@ def _not_again(text: str, *others: str) -> str:
     return kept
 
 
-def tidy(answer: dict) -> dict:
+def _covered(text: str, title: str) -> float:
+    """Share of text's characters (punctuation aside) found in the title."""
+    chars = [c for c in text if c.isalnum()]
+    if not chars:
+        return 1.0
+    pool = list(title)
+    hit = 0
+    for c in chars:
+        if c in pool:
+            pool.remove(c)
+            hit += 1
+    return hit / len(chars)
+
+
+def _own_words(text: str, title: str) -> str:
+    """text without the clauses the model made up (most characters not in the title): "揭秘冷门赚钱之道",
+    "背后原因令人唏嘘" stated things the article never said."""
+    if not title:
+        return text
+    return "".join(c for c in _clauses(text) if _covered(c, title) >= 0.7).rstrip("，,、；;：: ")
+
+
+def tidy(answer: dict, title: str = "") -> dict:
     """The model's cover words made safe to draw: whole words and clauses only, the main line's break moved
-    off a word's middle, no part repeating another, a known tag."""
+    off a word's middle, no part repeating another, nothing the title does not say, a question on the bar,
+    a known tag."""
     clean = {k: re.sub(r"[“”\"|\s]", "", str(answer.get(k) or "")) for k in ("tag", "main", "sub", "ask")}
+    title = headline(title)
+    if title and _covered(clean["main"].replace("｜", ""), title) < 0.7:
+        clean["main"] = plan_text(title)["main"]
+    clean["sub"] = _own_words(clean["sub"], title)
+    clean["ask"] = _own_words(clean["ask"], title)
+    if clean["ask"] and clean["ask"][-1:] not in "？?！!" and not QUESTION.search(clean["ask"]):
+        clean["ask"] = ""        # the hazard bar carries a question or an exclamation, not half a sentence
     tag = clean["tag"] if clean["tag"] in TAGS else "深度解读"
     main = clean["main"].replace("｜", "|", 1).replace("｜", "")
     left, _, right = main.partition("|")

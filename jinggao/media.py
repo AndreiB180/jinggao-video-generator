@@ -346,7 +346,7 @@ def deliver(project: dict, result: dict) -> str:
         shutil.copyfile(srt, folder / SUBTITLE_FOLDER / f"{stem}.srt")
     try:
         from . import cover
-        cover.start(project, video, folder, stem, project.get("headline") or name)
+        cover.start(project, video, folder, stem, cover.title_of(project) or name)
     except Exception:   # noqa: BLE001 — the cover is an extra; the film is saved either way
         pass
     return str(video)
