@@ -240,6 +240,16 @@ def search(query: str, limit: int = 8, *, exclude: set | None = None) -> list[di
         return out
 
 
+def frame_kinds(row: dict) -> list[tuple[float, str]]:
+    """[(time, kind)] of a video's described frames (实拍, 影视剧, 动画, 主持人出镜, 图表文字, 黑屏或模糊)."""
+    try:
+        with _conn() as con:
+            return [(float(r["t"]), r["kind"]) for r in con.execute(
+                "SELECT t, kind FROM moments WHERE source=? AND t>=0 ORDER BY t", (_key(row),))]
+    except sqlite3.Error:
+        return []
+
+
 def _valid(row) -> bool:
     return isinstance(row, dict) and row.get("provider") == "bilibili" and bool(BV.fullmatch(str(row.get("id", ""))))
 

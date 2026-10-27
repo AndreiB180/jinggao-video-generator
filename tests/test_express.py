@@ -688,9 +688,18 @@ def test_lines_without_footage_get_a_fresh_library_video_at_its_matching_moment(
     rows = [{"provider": "bilibili", "id": "BVused", "duration": 300, "moments": [40.0], "avoid": []},
             {"provider": "bilibili", "id": "BVnew1", "duration": 300, "moments": [12.0, 90.0], "avoid": [10.0]},
             {"provider": "bilibili", "id": "BVnew2", "duration": 300, "moments": [55.0], "avoid": []}]
+    kinds = {"BVused": [(40.0, "实拍")],
+             "BVnew1": [(0.0, "实拍"), (12.0, "实拍"), (30.0, "主持人出镜"), (75.0, "实拍"), (90.0, "实拍"), (105.0, "影视剧")],
+             "BVnew2": [(40.0, "实拍"), (55.0, "实拍"), (70.0, "实拍")],
+             "BVtalk": [(10.0, "主持人出镜"), (20.0, "主持人出镜"), (30.0, "实拍")]}
+    rows.insert(1, {"provider": "bilibili", "id": "BVtalk", "duration": 300, "moments": [30.0], "avoid": []})
     monkeypatch.setattr(footage_index, "search", lambda q, limit=8: [dict(r) for r in rows])
+    monkeypatch.setattr(footage_index, "frame_kinds", lambda row: kinds[row["id"]])
     monkeypatch.setattr(m, "resolve", lambda sources: {k: {"available": True} for k in sources})
     jobs = m.library_jobs(project["shots"], {"x": used}, {}, {})
-    picked = [(j[2]["tile"]["source"]["id"], j[2]["start"]) for j in jobs]
-    assert picked == [("BVnew1", 89.0), ("BVnew2", 54.0)]       # unused videos, one each, off the avoided frame
+    picked = [(j[1], j[2]["tile"]["source"]["id"], j[2]["start"]) for j in jobs]
+    # Unused videos only, not the commentary one; a filmed frame between filmed neighbours (12 s sits next to a
+    # presenter frame); two candidates for the first line, nothing new left for the second.
+    first = project["shots"][0]["id"]
+    assert picked == [(first, "BVnew1", 89.0), (first, "BVnew2", 54.0)]
     assert all(j[2]["lane"] == "library" for j in jobs)

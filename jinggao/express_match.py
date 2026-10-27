@@ -62,6 +62,7 @@ STOCK_SHARE = 0.15     # foreign stock (Pixabay) at most this share of a film: f
                        # couples and weddings read as filler ("都是空镜头"), whatever the planner asked for
 TWIN_BITS = 8
 SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in grey)
+FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
 NOISE_WORDS = re.compile(
@@ -831,30 +832,47 @@ class Matcher:
             except Exception:   # noqa: BLE001 — no library: the next fallbacks take over
                 return []
             need = float(shot["duration"]) + MARGIN
+            tries = 0
             for row in rows:
                 if row.get("provider") != "bilibili" or row.get("id") in used or row.get("contact"):
                     continue
                 if FUNERAL.search(row.get("title", "")) and not DEATH_LINE.search(shot["narration"]):
                     continue
+                # Only a filmed frame between filmed neighbours: the first dorm runs lost 77% of library windows
+                # to QA (a presenter, a text page or a cartoon a few seconds from the matching frame), and a
+                # commentary video (mostly presenter or text frames) is skipped whole.
+                kinds = footage_index.frame_kinds(row)
+                if not kinds or sum(k in footage_index.BAD_KINDS for _, k in kinds) > 0.35 * len(kinds):
+                    continue
+                kind_at = dict(kinds)
+                times = [t for t, _ in kinds]
                 length = float(row.get("duration") or 0)
                 key = ("bilibili", row["id"])
                 start = None
                 for t in row.get("moments") or []:
-                    begin = max(0.0, float(t) - 1.0)
-                    if begin + need > length - 0.1 or any(abs(float(t) - a) < 6 for a in row.get("avoid") or []):
+                    t = float(t)
+                    if kind_at.get(t) not in FILMED_KINDS:
+                        continue
+                    i = times.index(t)
+                    if any(kind_at[n] not in FILMED_KINDS for n in times[max(0, i - 1):i + 2]):
+                        continue
+                    begin = max(0.0, t - 1.0)
+                    if begin + need > length - 0.1:
                         continue
                     if all(begin + need + 0.2 <= a or begin >= b + 0.2 for a, b in reserved.get(key, [])):
                         start = begin
                         break
                 if start is None:
                     continue
-                used.add(row["id"])            # one new video per line: the point is not to repeat
+                used.add(row["id"])            # one new video per window: the point is not to repeat
                 reserved.setdefault(key, []).append((start, start + need))
                 base = "ctx" if shot.get("persons") else "library"
-                planned.append((f"{shot['id']}#lib", shot["id"], {
+                planned.append((f"{shot['id']}#lib{tries}", shot["id"], {
                     "tile": {"source": row, "t": float(start) + 1.0, "hash": None}, "start": round(start, 2),
-                    "lane": "library", "base_lane": base, "rank": 0}))
-                break
+                    "lane": "library", "base_lane": base, "rank": tries}))
+                tries += 1
+                if tries >= 2:                 # two candidates a line: one usually passes QA
+                    break
         if not planned:
             return []
         streams.update(self.resolve({choice["tile"]["source"]["id"]: choice["tile"]["source"] for _, _, choice in planned}))
@@ -862,7 +880,7 @@ class Matcher:
 
     # ------------------------------------------------------------ pictures
     IMAGE_PICK = """每一行是一句口播（行首黄色编号）和几张网上找来的候选图片（行内从左到右是第1、2、3、4张）。
-为每句挑一张最适合放在这句话下面的图片：要和口播讲的人、事、地方对得上，画面干净清楚。
+为每句挑一张放在这句话下面的图片。这是没有视频时的补位画面：和口播讲的人、事、地方、话题大致相关就可以选，画面干净清楚最重要。
 不要：文字多的图（海报、截图、图表、聊天记录）；带明显水印、网站logo或二维码的；表情包、漫画、卡通；
 画质很差或模糊的；人脸打了马赛克的；口播讲中国的人和事却明显是外国人或外国街景的。都不合适就填 0。
 只输出 JSON：{"S3":2,"S5":0}"""
@@ -2160,7 +2178,7 @@ class Matcher:
                 failures.update(failed)
                 qa_bad.update(bad)
                 filled = 0
-                for job_id, sid, choice in jobs:
+                for job_id, sid, choice in sorted(jobs, key=lambda job: job[2]["rank"]):
                     if sid in final or job_id not in got or job_id in bad:
                         continue
                     if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
