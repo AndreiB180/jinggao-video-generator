@@ -25,8 +25,9 @@ try:
 except ImportError:      # an older install without it: names match by characters only
     lazy_pinyin = None
 
-MAX_SOURCES = 5
-HEARD_SECONDS = 300                           # transcribe a report's first minutes: the event is told up front
+MAX_SOURCES = 4
+HEARD_SECONDS = 200                           # transcribe a report's first minutes: the event is told up front
+# (5 reports x 300 s took 2-4 minutes of the client's CPU per film while two other films waited for it)
 MIN_SECONDS, MAX_SECONDS = 45.0, 1200.0      # news reports and commentary, not clips or hour-long streams
 MAX_AUDIO_BYTES = 40 * 2**20
 MIN_SCORE = 0.06                              # share of a line's (rarity-weighted) character pairs said in the window

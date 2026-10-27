@@ -163,7 +163,28 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/settings")
     def save_settings(values: dict):
-        return config.update(values)
+        saved = config.update(values)
+        if (values.get("model_api_key") or "").strip():
+            # A new model key: the videos stopped by the old one being refused (HTTP 401; the client's whole
+            # queue of 16 failed in one minute) go back into the queue from where they stopped.
+            saved = saved | {"requeued": requeue_refused_key()}
+        return saved
+
+    def requeue_refused_key() -> int:
+        with store.connection() as con:
+            rows = con.execute("SELECT * FROM jobs WHERE kind='produce' ORDER BY created DESC LIMIT 1000").fetchall()
+        latest = {}
+        for row in rows:
+            latest.setdefault(row["project_id"], row)
+        requeued = 0
+        for row in latest.values():
+            if row["status"] == "failed" and "HTTP 401" in (row["error"] or ""):
+                try:
+                    store.enqueue(row["project_id"], "produce", json.loads(row["payload"]))
+                    requeued += 1
+                except (KeyError, ValueError):
+                    pass
+        return requeued
 
     @app.post("/api/settings/stock/check")
     def check_stock_key(values: dict):

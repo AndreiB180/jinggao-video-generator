@@ -28,10 +28,16 @@ from . import (config, curation, execution, express_clean, express_sources as es
                planner, screen_text, store, throttle)
 
 VERSION = 1
-BILI_PER_QUERY = 6
+# Sources per group: the picker sees 60 tiles of a group at most, so beyond about 14 videos every extra one is
+# fetched, profiled and screened for nothing. 0.4.9's bigger library filled 10 local places a group on top
+# of 12 Bilibili ones and made the client's preview step 1.5-12 minutes a film.
+BILI_PER_QUERY = 4
+BILI_AFTER_LOCAL = 2   # a query the library already answers with LOCAL_PER_QUERY videos takes few live results
+                       # (the client: a big library matches well enough; live searches bring the 营销号 junk)
 PERSON_PER_QUERY = 5   # named people have little real footage: look a little wider before falling back
-PIXA_PER_QUERY = 6     # licensed stock: clean, no subtitles or contact text; strong for generic and abstract lines
-LOCAL_PER_QUERY = 5     # videos from the local footage index (footage_index) per query, ahead of live results
+PIXA_PER_QUERY = 3     # licensed stock: clean, no subtitles or contact text; strong for generic and abstract lines
+LOCAL_PER_QUERY = 4     # videos from the local footage index (footage_index) per query, ahead of live results
+GROUP_SOURCES = 16      # at most this many videos a group (stock clips included)
 TILES_PER_BILI = 8
 PERSON_TILES = 10
 QA_W, QA_H = 320, 180
@@ -95,7 +101,8 @@ PICK_SYSTEM = """你在为营销号视频挑选实拍素材。图片是若干视
 普通镜头标准：画面主体要和口播讲的对象一致（画面建议只是参考），不要求型号、年份、地点、动作逐一一致：讲人和人之间的事（夫妻、家人、同事、官员、民众、士兵），画面要有相应的人和场景，不选风景、空镜、物品；讲某个国家、组织的事，画面要是那个国家、组织的，不选别国的同类画面（讲也门战事不选中国火箭军、中国海军）；讲中国国内的人和事，不选明显是外国人或外国街景的画面。情感、家庭、社会故事可以选影视剧、短剧里情节相符的片段（有人物、有情绪）。
 必须排除：主持人或博主对镜头口播、PPT/文字页/图表/排行榜截图为主、手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面）、大面积马赛克、片头片尾和转场、频道订阅页、黑屏或严重模糊、大面积硬字幕/弹幕/贴纸/台标遮挡画面、游戏/动画/CG（除非口播就是讲这些）、与口播明显无关的内容、广告。
 新闻、纪录片里真实存在的人物的脸部特写，除非该镜头要求此人物，否则尽量不选（容易被当成口播里讲的人）；影视剧、短剧里的演员不受此限。
-优先选有明显动作或镜头运动的视频画面；静态插画、照片、幻灯片式的画面尽量不选（口播在讲这幅画、这件文物时除外）。"""
+优先选有明显动作或镜头运动的视频画面；静态插画、照片、幻灯片式的画面尽量不选（口播在讲这幅画、这件文物时除外）。
+画面干净比贴题更重要：画面上有后加的大字、花字、标题条、水印、表情包、贴纸，或是竖屏、两边黑边/模糊边的，不选；宁可选大致相关但干净的画面。"""
 
 PERSON_RULES = """
 本组是具名人物镜头，要求出现的人物：{names}。这些格子来自标题含该姓名的视频。
@@ -435,9 +442,14 @@ class Matcher:
         for g in groups:
             picked, seen = [], set()
             bili_quota = PERSON_PER_QUERY if g.get("person") else BILI_PER_QUERY
+            local_taken = {}
             for kind, queries, quota in (("local", g["zh"][:2], LOCAL_PER_QUERY), ("bili", g["zh"][:2], bili_quota),
                                          ("pixa", g["en"][:2] if self.pixa else [], PIXA_PER_QUERY)):
                 for q in queries:
+                    if kind == "bili" and not g.get("person") and local_taken.get(q, 0) >= LOCAL_PER_QUERY:
+                        quota = BILI_AFTER_LOCAL
+                    elif kind == "bili":
+                        quota = bili_quota
                     ranked = []
                     for rank, row in enumerate(results.get((kind, q), [])):
                         score = self.score(row, g, shots_by_id)
@@ -458,7 +470,9 @@ class Matcher:
                         taken += 1
                         if taken >= quota:
                             break
-            chosen[g["id"]] = picked
+                    if kind == "local":
+                        local_taken[q] = taken
+            chosen[g["id"]] = picked[:GROUP_SOURCES]
         return chosen
 
     def oriented(self, source) -> bool:
@@ -529,7 +543,7 @@ class Matcher:
         if express_clean.available():
             try:
                 frames = self.sprite_frames(row, picked[0]["t"] if picked else 0)
-                frames = frames[::max(1, len(frames) // 120)]
+                frames = frames[::max(1, len(frames) // 48)]    # the median of 48 shows a fixed mark as well as 120
                 size = (express_clean.WIDTH, round(express_clean.WIDTH * 9 / 16))
                 profile = express_clean.profile([im for _, im in frames], size)
                 with self.lock:
@@ -681,7 +695,11 @@ class Matcher:
             sheets.append(sheet)
             labels.update(part)
         if group.get("topic"):
-            lines = [f"S1：{TOPIC_SHOT}（主题：{'、'.join(group['zh'])}）"]
+            # The film-wide reserve: lines without footage of their own take these before any clip is shown
+            # again or a marked one is used, so it should be wide and clean (the client, 10-27: "less on topic is
+            # fine, but clean and not repeated").
+            lines = [f"S1：{TOPIC_SHOT}（主题：{'、'.join(group['zh'])}）。这一项多选，最多12个，尽量来自不同的视频；"
+                     "只选画面干净的（没有大字、花字、水印、竖屏黑边、表情包）"]
             ids = {"S1": "TOPIC"}
         else:
             lines, ids = [], {}
@@ -722,7 +740,7 @@ class Matcher:
             if key == "_ctx":
                 ctx = values
             elif key in ids:
-                picks[ids[key]] = [labels[v] for v in dict.fromkeys(values)][:6]
+                picks[ids[key]] = [labels[v] for v in dict.fromkeys(values)][:12 if group.get("topic") else 6]
         return picks, {"ctx": [labels[v] for v in dict.fromkeys(ctx)]}
 
     def stock_options(self, shots, groups, results, final) -> dict:

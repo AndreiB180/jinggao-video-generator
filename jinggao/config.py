@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import threading
 from decimal import Decimal, InvalidOperation
@@ -61,6 +62,9 @@ def bundled() -> dict:
 def read() -> dict:
     p = paths.DATA / "settings.json"
     data = DEFAULTS | bundled() | (json.loads(p.read_text("utf-8")) if p.exists() else {})
+    for key in SECRETS:          # a key saved by an older version with a stray space still works
+        if isinstance(data.get(key), str):
+            data[key] = clean_key(data[key])
     for key, value in bundled().items():
         if not data.get(key):       # an empty saved field does not hide the bundled key
             data[key] = value
@@ -101,10 +105,36 @@ def public() -> dict:
     }
 
 
+# Keys pasted from a web page or a chat often carry a space, a line break, quotes or an invisible character;
+# the provider then answers 401 and every queued video fails at once (the client, 10-27).
+_KEY_JUNK = re.compile(r"[\s\u200b-\u200f\u2060\ufeff\u3000\"'“”‘’]")
+
+
+def clean_key(value: str) -> str:
+    return _KEY_JUNK.sub("", value or "")
+
+
+def check_model_key(base_url: str, key: str) -> None:
+    """Ask the model service whether it knows this key (a cheap model list); refuse a key it rejects."""
+    import httpx
+    from . import network
+    try:
+        with network.client(timeout=8) as client:
+            r = client.get(base_url.rstrip("/") + "/models", headers={"Authorization": "Bearer " + key})
+    except Exception:   # noqa: BLE001 — offline or slow: the key is saved and tried when videos are made
+        return
+    if r.status_code in (401, 403):
+        hint = "（百炼的 Key 以 sk- 开头）" if "dashscope" in base_url and not key.startswith("sk-") else ""
+        raise ValueError(f"模型服务不认这个 API Key（HTTP {r.status_code}）{hint}：请到百炼控制台复制一个有效的 Key 再保存")
+
+
 def update(values: dict) -> dict:
     unknown = set(values) - set(DEFAULTS)
     if unknown:
         raise ValueError("未知设置字段")
+    values = {k: clean_key(v) if k in SECRETS and isinstance(v, str) else v for k, v in values.items()}
+    if values.get("model_api_key"):
+        check_model_key(values.get("model_base_url") or read().get("model_base_url") or "", values["model_api_key"])
     for key, value in values.items():
         if not isinstance(value, str) or len(value) > 4000:
             raise ValueError("设置内容无效")

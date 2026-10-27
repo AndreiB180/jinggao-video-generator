@@ -17,6 +17,13 @@ def private_output_folder(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_key_check(monkeypatch):
+    """Saving a model key asks the provider whether it knows it; tests never call out."""
+    from jinggao import config
+    monkeypatch.setattr(config, "check_model_key", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def no_graphics_card(monkeypatch):
     """Tests never run the real NVIDIA check: the card is absent unless a test says otherwise."""
     from jinggao import gpu

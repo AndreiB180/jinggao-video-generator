@@ -646,3 +646,26 @@ def test_meme_captions_and_vertical_videos_on_blurred_sides_are_caught():
     assert express_clean.blurred_sides([np.array(mix)] * 3, (0, 0, 1, 1))
     assert not express_clean.blurred_sides([np.array(sharp)] * 3, (0, 0, 1, 1))
     assert express_match._boxed(mix.convert("RGB")) and not express_match._boxed(sharp.convert("RGB"))
+
+
+def test_pasted_keys_are_cleaned_and_a_rejected_key_is_refused_and_requeued(data, monkeypatch):
+    from fastapi.testclient import TestClient
+    from jinggao import api, config
+    assert config.clean_key(" sk-abc​123 \n") == "sk-abc123" and config.clean_key("“sk-1”") == "sk-1"
+    config.update({"model_api_key": " sk-abc123 \n"})
+    assert config.read()["model_api_key"] == "sk-abc123"
+    def refuse(base, key):
+        raise ValueError("模型服务不认这个 API Key（HTTP 401）")
+    monkeypatch.setattr(config, "check_model_key", refuse)
+    with pytest.raises(ValueError):
+        config.update({"model_api_key": "wrong"})
+    assert config.read()["model_api_key"] == "sk-abc123"          # the old key stays
+    # A failed queue from a refused key goes back when a new key is saved.
+    monkeypatch.setattr(config, "check_model_key", lambda *a, **k: None)
+    project = store.new_project("片子", "第一句。")
+    job = store.enqueue(project["id"], "produce", {})
+    store.job_update(job["id"], status="failed", error="模型 API Key 无效或已过期，请在设置中更换（HTTP 401）")
+    with TestClient(api.create_app()) as client:
+        r = client.patch("/api/settings", json={"model_api_key": "sk-new"})
+    assert r.status_code == 200 and r.json()["requeued"] == 1
+    assert store.jobs(project["id"])[0]["status"] == "queued"
