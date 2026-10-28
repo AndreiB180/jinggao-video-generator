@@ -818,6 +818,37 @@ class Matcher:
                 return sid
         return None
 
+    def any_clean(self, shot, final, files):
+        """The last resort before nothing: a clean clip of this film for a line borrow() found no donor for (too
+        short, too near, every clip lent out). Longer first (a short one holds its last frame), then not the
+        neighbour, then lent out least; a line about a named person takes no one else's footage."""
+        position = self.position[shot["id"]]
+        need = float(shot["duration"])
+        lent = {}
+        for choice in final.values():
+            if choice.get("repeat_of"):
+                lent[choice["repeat_of"]] = lent.get(choice["repeat_of"], 0) + 1
+        best = None
+        for sid, choice in final.items():
+            if sid not in files or choice.get("lane") in ("card", "reuse") or sid not in self.position:
+                continue
+            if str(choice.get("qa", "")).startswith("rejected_kept") or self.flags(choice.get("job")) & {"wm", "narrow"}:
+                continue
+            donor_shot = self.shots_by_id_all.get(sid) or {}
+            if shot.get("persons"):
+                if not (self.names_in_source(shot, choice["tile"]["source"]) or choice.get("lane") in CONTEXT_LANES):
+                    continue
+            elif donor_shot.get("persons") and choice.get("lane") in ("pick", "person", "person_near"):
+                continue
+            try:
+                length = es.probe_duration(files[sid])
+            except ValueError:
+                continue
+            key = (length < need - 0.2, abs(self.position[sid] - position) < 2, lent.get(sid, 0), abs(self.position[sid] - position))
+            if best is None or key < best[0]:
+                best = (key, sid)
+        return best[1] if best else None
+
     # ------------------------------------------------------------- library
     def library_jobs(self, pending, final, reserved, streams) -> list:
         """Lines still without footage: a fresh window from a video of the local library whose described
@@ -2273,7 +2304,9 @@ class Matcher:
         if lent_more:
             self.notes.append(f"{lent_more} 镜没有干净的新画面，多借用了几次干净画面（不用带水印、花字的）")
         marked = 0
-        for shot in list(cards):
+        # The client (10-28): "can't they just never be used?" — by default a clip with a watermark, 花字 or a
+        # vertical picture is never used; the setting lets them in as a last resort before a borrowed clip.
+        for shot in list(cards) if self.cfg.get("marked_clips", "never") == "last_resort" else []:
             # Nothing else: a clip with a watermark (edge marks first, then text across the middle) beats a card.
             sid = shot["id"]
             for wanted in (lambda r: r == MARKED, lambda r: r == NARROW,
@@ -2313,14 +2346,19 @@ class Matcher:
                     reused_more += 1
         if reused_more:
             self.notes.append(f"{reused_more} 镜实在没有别的画面，又借用了已经用过的画面")
-        for shot in cards:
-            # Background: a frame of the nearest accepted clip (blurred), so the card belongs to the video.
-            near = min(footage, key=lambda item: abs(item[0] - self.position[shot["id"]]), default=None)
-            final[shot["id"]] = {"tile": {"source": {"provider": "card", "id": "card", "title": "文字卡片"}, "t": 0},
-                                 "start": 0, "lane": "card", "rank": 0, "qa": "card"}
-            files[shot["id"]] = self.title_card(shot, near[1] if near else None)
+        # No title cards at all (the client, 10-28): the last lines take any clean clip of this film.
+        last = 0
+        for shot in list(cards):
+            donor = self.any_clean(shot, final, files)
+            if donor:
+                final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
+                files[shot["id"]] = files[donor]
+                cards.remove(shot)
+                last += 1
+        if last:
+            self.notes.append(f"{last} 镜实在没有别的画面，用了片子里别处的干净画面（不出文字卡）")
         if cards:
-            self.notes.append(f"{len(cards)} 镜没有可用实拍素材，使用文字卡片补位")
+            raise ValueError(f"有 {len(cards)} 个镜头找不到任何可用画面（B站可能暂时不让访问），没有用文字卡凑；请稍后重试")
         self.progress(92, "保存选片")
         self.save(final, files)
         unmatched = [s["id"] for s in self.shots if s["id"] not in final]

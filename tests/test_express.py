@@ -703,3 +703,25 @@ def test_lines_without_footage_get_a_fresh_library_video_at_its_matching_moment(
     first = project["shots"][0]["id"]
     assert picked == [(first, "BVnew1", 89.0), (first, "BVnew2", 54.0)]
     assert all(j[2]["lane"] == "library" for j in jobs)
+
+
+def test_marked_clips_are_never_used_unless_the_setting_allows_them(data):
+    assert config.read()["marked_clips"] == "never"
+    config.update({"marked_clips": "last_resort"})
+    assert config.read()["marked_clips"] == "last_resort"
+    with pytest.raises(ValueError):
+        config.update({"marked_clips": "sometimes"})
+
+
+def test_lines_without_footage_take_a_clean_clip_never_a_title_card(data, monkeypatch, tmp_path):
+    shots = [planner.new_shot(t) | {"duration": 5.0} for t in ("一。", "二。", "三。", "四。")]
+    project = store.new_project("t", "x")
+    project = store.mutate(project["id"], lambda p: p.update(shots=shots))
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    ids = [s["id"] for s in project["shots"]]
+    clip = lambda sid, lane="pick": {"tile": {"source": {"provider": "bilibili", "id": "BV" + sid[:4]}}, "lane": lane, "qa": "pass"}
+    final = {ids[0]: clip(ids[0]), ids[1]: clip(ids[1], "pick") | {"qa": "rejected_kept:有去不掉的水印或文字"}}
+    files = {ids[0]: tmp_path / "a.mp4", ids[1]: tmp_path / "b.mp4"}
+    monkeypatch.setattr(express_match.es, "probe_duration", lambda path: 2.0)    # shorter than the line: still usable
+    assert m.any_clean(project["shots"][3], final, files) == ids[0]            # the marked clip is never taken
+    assert m.any_clean(project["shots"][3], {ids[1]: final[ids[1]]}, files) is None

@@ -153,6 +153,8 @@ export function BatchPanel({close,openProject,onCreated}:{close:()=>void;openPro
   <div className="field-grid">
    <label>同时制作<select value={String(Math.min(workers,limit))} onChange={e=>change('video_workers',e.target.value)}>{[1,2,3,4,5,6].map(n=><option key={n} value={n} disabled={n>limit}>{n} 条{n===recommended?'（这台电脑最多）':n>limit?'（这台电脑带不动）':''}</option>)}</select>
     <small className="field-hint">{system.cores?`这台电脑 ${system.cores} 个线程、${Math.round(system.memory_gb||0)} GB 内存，最多同时 ${limit} 条；再多每条都会变慢，第一条要等很久才出来。`:''}</small></label>
+   <label>带水印、花字、竖屏的片段<select value={settings.marked_clips||'never'} onChange={e=>change('marked_clips',e.target.value)}><option value="never">一律不用（默认）</option><option value="last_resort">实在没有画面时才用</option></select>
+    <small className="field-hint">一律不用：缺画面的镜头借用片子里别处的干净画面，再没有就用文字卡片。</small></label>
    <label>B站限流时<select value={settings.bili_limit_mode||'wait'} onChange={e=>change('bili_limit_mode',e.target.value)}><option value="wait">等几分钟再做（画面好）</option><option value="continue">不等，继续做（缺的画面用素材库、相关图片补）</option></select>
     <small className="field-hint">B站一下子被访问太多次会暂时不让这台电脑下载视频。选“等”：这台电脑停 5 分钟再接着做，之后半小时一条一条做；选“不等”：照常做，画面里B站视频会少一些。</small></label>
    <label>清晰度<select value={resolution} onChange={e=>setResolution(e.target.value)}><option value="1080p">1080p 高清</option><option value="720p">720p · 更快</option></select></label>
