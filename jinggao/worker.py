@@ -1044,8 +1044,9 @@ def _report_waits(name: str) -> None:
 
 CRASH_RETRIES = 2
 BILI_RETRIES = 4        # a video Bilibili refused is made again this many times...
-BILI_WAIT = 300         # ...after this many seconds each; meanwhile no other video starts on this computer
-BILI_CALM = 1800        # and for half an hour after a refusal it makes one video at a time
+BILI_WAIT = 120         # ...after this many seconds each; meanwhile no other video starts on this computer
+BILI_CALM = 600         # and for ten minutes after a refusal it makes two videos at a time (a night's run on
+                        # the dorm PC spent a third of its time paused or at one video: Bilibili lets go sooner)
 
 
 def bili_refused_at() -> float:
@@ -1126,7 +1127,7 @@ def loop(stop=None, lane="main", slot=0, shared=None, recover=True) -> None:
         if recover:
             store.recover(lane)
         while stop is None or not stop.is_set():
-            if slot and (slot >= video_workers() or time.time() - bili_refused_at() < BILI_CALM):
+            if slot and (slot >= video_workers() or (slot >= 2 and time.time() - bili_refused_at() < BILI_CALM)):
                 time.sleep(1)
                 continue
             if not run_once(stop, lane):

@@ -871,6 +871,7 @@ class Matcher:
         groups = {sid: g for g in self.plan.get("groups", []) for sid in g.get("shots", [])}
         used = {c["tile"]["source"].get("id") for c in final.values()}
         planned = []
+        per_line = 1 if len(pending) > 12 else 2      # many open lines: one window each, half the downloads
         for shot in pending:
             words = " ".join([shot.get("visual") or "", *((groups.get(shot["id"]) or {}).get("zh") or [])[:1]])
             try:
@@ -917,7 +918,7 @@ class Matcher:
                     "tile": {"source": row, "t": float(start) + 1.0, "hash": None}, "start": round(start, 2),
                     "lane": "library", "base_lane": base, "rank": tries}))
                 tries += 1
-                if tries >= 2:                 # two candidates a line: one usually passes QA
+                if tries >= per_line:          # two candidates a line when few are open: one usually passes QA
                     break
         if not planned:
             return []
@@ -2217,7 +2218,20 @@ class Matcher:
                     files[sid] = got[job_id]
             pending = [s for s in pending if s["id"] not in final]
             stamp("repeat", began)
+        picture_thread, early_lines, early_pictures = None, [], {}
         if pending:
+            # Pictures are looked for at the same time as the library windows download (one after the other
+            # they added about two minutes a film); only lines the library leaves open take them.
+            early_lines = list(pending)
+            def pictures_early():
+                try:
+                    early_pictures.update(self.image_fill(early_lines))
+                except (media.Cancelled, Budget):
+                    pass     # the main line stops on its own check
+                except Exception as exc:   # noqa: BLE001 — borrowing follows
+                    self.notes.append(f"相关图片补位失败：{type(exc).__name__}")
+            picture_thread = threading.Thread(target=pictures_early, name="pictures", daemon=True)
+            picture_thread.start()
             # Fresh windows from the library before any clip is shown again (the client: "the library is big,
             # don't repeat; less on topic is fine if it is clean").
             began = time.monotonic()
@@ -2289,13 +2303,21 @@ class Matcher:
             # Related pictures with slow motion before any clip is shown again (the client saw one piggy-bank
             # clip twenty times when Bilibili gave nothing).
             began = time.monotonic()
-            try:
-                pictured = self.image_fill(cards)
-            except (media.Cancelled, Budget):
-                raise
-            except Exception as exc:   # noqa: BLE001 — borrowing and cards still follow
-                self.notes.append(f"相关图片补位失败：{type(exc).__name__}")
-                pictured = {}
+            open_ids = {s["id"] for s in cards}
+            early_ids = {s["id"] for s in early_lines}
+            pictured = {}
+            if picture_thread is not None:
+                picture_thread.join()
+                self.check()
+                pictured = {sid: v for sid, v in early_pictures.items() if sid in open_ids}
+            later = [s for s in cards if s["id"] not in early_ids]
+            if later:
+                try:
+                    pictured.update(self.image_fill(later))
+                except (media.Cancelled, Budget):
+                    raise
+                except Exception as exc:   # noqa: BLE001 — borrowing still follows
+                    self.notes.append(f"相关图片补位失败：{type(exc).__name__}")
             for sid, (choice, path) in pictured.items():
                 final[sid], files[sid] = choice, path
             cards = [s for s in cards if s["id"] not in pictured]
