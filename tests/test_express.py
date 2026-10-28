@@ -738,3 +738,16 @@ def test_a_slowed_clip_counts_its_slowed_length():
     project["shots"][0]["playback_slow"] = 1.7
     assert curation.composition(project)["short_video_shots"] == [] and media.playback_slow(project["shots"][0]) == 1.7
     assert media.playback_slow({"playback_slow": 9}) == 2.0 and media.playback_slow({}) == 1.0
+
+
+def test_a_film_short_of_footage_waits_alone_without_pausing_the_computer(data, monkeypatch):
+    from jinggao import worker
+    project = store.new_project("片子", "第一句。")
+    store.enqueue(project["id"], "produce", {})
+    def starved(job, stop=None):
+        raise express_match.FootageStarved("只拿到 2 段可用画面")
+    monkeypatch.setattr(worker, "process", starved)
+    assert worker.run_once()
+    jobs = store.jobs(project["id"])
+    assert jobs[0]["status"] == "queued" and "重新找一次" in jobs[0]["message"]
+    assert worker.bili_refused_at() == 0.0                         # other videos keep going

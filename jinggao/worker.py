@@ -967,17 +967,23 @@ def run_once(stop=None, lane="main") -> bool:
     except (costs.BudgetExceeded, costs.PricingUnavailable) as exc:
         store.job_update(job["id"], status="failed", message="费用保护已停止模型请求，进度已保存", error=str(exc))
     except express_match.BiliUnavailable as exc:
-        express_match._mark("bili-refused.json", str(exc))
+        starved = isinstance(exc, express_match.FootageStarved)
+        if not starved:      # a refusal pauses the computer; one film short of footage only waits itself
+            express_match._mark("bili-refused.json", str(exc))
         tries = int((job.get("payload") or {}).get("bili_retries", 0))
+        wait = 2 * BILI_WAIT if starved else BILI_WAIT
         if tries >= BILI_RETRIES:
             store.job_update(job["id"], status="failed", error=str(exc),
-                             message="B站一直限制这台电脑访问；请过一段时间再点重试，或在批量设置里把“B站限流时”改成继续做")
+                             message=("这条稿子找了几次都没有足够的可用画面；可以换个说法改稿后重试" if starved else
+                                      "B站一直限制这台电脑访问；请过一段时间再点重试，或在批量设置里把“B站限流时”改成继续做"))
         else:
             store.job_update(job["id"], status="interrupted", error=str(exc),
-                             message=f"B站暂时限制访问，{BILI_WAIT // 60} 分钟后自动重做（第 {tries + 1} 次）")
+                             message=(f"可用画面太少，{wait // 60} 分钟后自动重新找（第 {tries + 1} 次）" if starved else
+                                      f"B站暂时限制访问，{wait // 60} 分钟后自动重做（第 {tries + 1} 次）"))
             again = store.enqueue(job["project_id"], job["kind"], (job.get("payload") or {}) | {
-                "bili_retries": tries + 1, "not_before": time.time() + BILI_WAIT})
-            store.job_update(again["id"], message=f"B站暂时限制访问，等 {BILI_WAIT // 60} 分钟后自动重做")
+                "bili_retries": tries + 1, "not_before": time.time() + wait})
+            store.job_update(again["id"], message=(f"这条可用画面太少，{wait // 60} 分钟后自动重新找一次" if starved
+                                                   else f"B站暂时限制访问，等 {wait // 60} 分钟后自动重做"))
     except Exception as exc:
         store.job_update(job["id"], status="failed", message="任务未完成，可重试", error=str(exc)[:2200])
     finally:

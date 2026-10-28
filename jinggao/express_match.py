@@ -65,8 +65,8 @@ SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in gre
 # Footage a line about a named person may borrow as background: it was chosen as context, not as someone else
 # (a 70-line film about two named people got 19 title cards while library and picture fill were off limits).
 CONTEXT_LANES = ("ctx", "topic", "library", "image", "stock")
-PICTURE_SECONDS = 60    # time the picture fallback may take per film (searches and downloads)
-PICTURE_LINES = 16      # lines it looks for pictures for
+PICTURE_SECONDS = 90    # time the picture fallback may take per film (searches and downloads)
+PICTURE_LINES = 30      # lines it looks for pictures for
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -167,6 +167,11 @@ def _mark(name: str, why: str) -> None:
 class BiliUnavailable(RuntimeError):
     """Bilibili refused this computer (searches all empty, or play addresses refused): a film made now would
     be a few stock clips over and over, so the video waits and is made again later."""
+
+
+class FootageStarved(BiliUnavailable):
+    """This one film found almost no usable footage (a niche topic, or downloads refused just for it): it is
+    made again later on its own, without pausing the rest of the computer's videos."""
 
 
 class Budget(RuntimeError):
@@ -922,6 +927,7 @@ class Matcher:
     # ------------------------------------------------------------ pictures
     IMAGE_PICK = """每一行是一句口播（行首黄色编号）和几张网上找来的候选图片（行内从左到右是第1、2、3、4张）。
 为每句挑一张放在这句话下面的图片。这是没有视频时的补位画面：和口播讲的人、事、地方、话题大致相关就可以选，画面干净清楚最重要。
+口播讲到某个具名人物时，优先选这个人本人的照片（新闻照、会议照、肖像都可以），不要选明显是别人的照片。
 不要：文字多的图（海报、截图、图表、聊天记录）；带明显水印、网站logo或二维码的；表情包、漫画、卡通；
 画质很差或模糊的；人脸打了马赛克的；口播讲中国的人和事却明显是外国人或外国街景的。都不合适就填 0。
 只输出 JSON：{"S3":2,"S5":0}"""
@@ -940,12 +946,15 @@ class Matcher:
         root.mkdir(exist_ok=True)
         groups = {sid: g for g in self.plan.get("groups", []) for sid in g.get("shots", [])}
         def queries(shot):
-            words = []
+            # A line about a named person: photos of that person first (an editor's answer when there is little
+            # footage of someone; a film about two named people borrowed one clip 23 times instead).
+            names = [p["name"] for p in shot.get("persons") or [] if p.get("name")]
+            words = [f"{names[0]} 照片", names[0]] if names else []
             for q in (groups.get(shot["id"]) or {}).get("zh", [])[:2] + [shot.get("visual") or ""]:
                 q = " ".join(self.IMAGE_WORDS.sub(" ", q).split())
                 if q and q not in words:
                     words.append(q)
-            return words[:2]
+            return words[:3 if names else 2]
         seen_hashes = []
         lock = threading.Lock()
         # A time budget: the client's machines spent up to four and a half minutes here for a few pictures.
@@ -998,8 +1007,9 @@ class Matcher:
                 pictures.append((row, image, h))
             return shot, pictures
         found = {}
+        ordered = sorted(shots, key=lambda shot: not shot.get("persons"))   # person lines first
         with execution.ThreadPoolExecutor(max_workers=8) as pool:
-            for shot, pictures in pool.map(candidates, shots[:PICTURE_LINES]):
+            for shot, pictures in pool.map(candidates, ordered[:PICTURE_LINES]):
                 if pictures:
                     found[shot["id"]] = pictures
         if not found:
@@ -2375,7 +2385,7 @@ class Matcher:
             footage_lines = sum(1 for c in final.values() if c.get("lane") not in ("reuse", "card"))
             if footage_lines < 0.3 * len(self.shots):
                 # Hardly any footage at all: Bilibili is refusing downloads for now; made again a few minutes later.
-                raise BiliUnavailable(f"只拿到 {footage_lines} 段可用画面（共 {len(self.shots)} 个镜头），多半是B站暂时限制下载")
+                raise FootageStarved(f"只拿到 {footage_lines} 段可用画面（共 {len(self.shots)} 个镜头），稍后重新找一次")
             raise ValueError(f"有 {len(cards)} 个镜头找不到任何可用画面，没有用文字卡凑；请稍后重试")
         self.progress(92, "保存选片")
         self.save(final, files)
