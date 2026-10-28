@@ -965,7 +965,7 @@ class Matcher:
             for q in queries(shot):
                 for search in (sources.bing_images, publisher_videos.chinanews_images):
                     try:
-                        rows += search(q)[:8]
+                        rows += search(q)[:12]
                     except Exception:   # noqa: BLE001 — one search less
                         continue
             pictures = []
@@ -985,7 +985,7 @@ class Matcher:
                         image = ImageOps.exif_transpose(raw).convert("RGB")
                 except Exception:   # noqa: BLE001 — broken or refused picture
                     continue
-                if min(image.size) < 400 or not 0.45 <= image.width / image.height <= 2.6:
+                if min(image.size) < 360 or not 0.45 <= image.width / image.height <= 2.6:
                     continue
                 if self.project.get("aspect", "16:9") != "9:16" and image.width < image.height * 1.15:
                     continue    # a tall picture in a landscape film would sit between blurred side bands
@@ -2136,7 +2136,7 @@ class Matcher:
             pending = [s for s in pending if s["id"] not in final]
         # Other moments of accepted videos before the same clip is shown again: a second pass lets a long video
         # give a few more windows (the client saw one clip eight times in a film where borrowing filled in).
-        for repeat_pass in range(2):
+        for repeat_pass in range(3):
             if not pending:
                 break
             # Last resort without unchecked footage: reuse a window that already passed QA,
@@ -2162,8 +2162,14 @@ class Matcher:
                     if person and not (self.names_in_source(shot, donor["tile"]["source"])
                                        or donor["lane"] in CONTEXT_LANES):
                         continue
-                    if not person and shots_from.get(key_of(donor)[0], 0) >= hard_cap + 1:
-                        continue    # that video already fills its share of the film (plus one): try another
+                    long_source = float(donor["tile"]["source"].get("duration") or 0) >= 180
+                    # Second pass: a long video gives three more windows; third pass: as many non-overlapping
+                    # windows as the film needs. Other moments of a long video look like other footage, the same
+                    # clip again does not (a 70-line film with seven sources borrowed 57 lines).
+                    cap = (10 ** 6 if repeat_pass == 2 and long_source else
+                           hard_cap + 1 + (3 if repeat_pass == 1 and long_source else 0))
+                    if not person and shots_from.get(key_of(donor)[0], 0) >= cap:
+                        continue    # that video already fills its share of the film: try another
                     if donor_id not in self.position:
                         continue
                     if FUNERAL.search(donor["tile"]["source"].get("title", "")) and not DEATH_LINE.search(shot["narration"]):
