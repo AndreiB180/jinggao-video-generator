@@ -65,6 +65,8 @@ SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in gre
 # Footage a line about a named person may borrow as background: it was chosen as context, not as someone else
 # (a 70-line film about two named people got 19 title cards while library and picture fill were off limits).
 CONTEXT_LANES = ("ctx", "topic", "library", "image", "stock")
+PICTURE_SECONDS = 60    # time the picture fallback may take per film (searches and downloads)
+PICTURE_LINES = 16      # lines it looks for pictures for
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -946,6 +948,8 @@ class Matcher:
             return words[:2]
         seen_hashes = []
         lock = threading.Lock()
+        # A time budget: the client's machines spent up to four and a half minutes here for a few pictures.
+        deadline = time.monotonic() + PICTURE_SECONDS
         def candidates(shot):
             rows = []
             for q in queries(shot):
@@ -956,14 +960,14 @@ class Matcher:
                         continue
             pictures = []
             for row in rows:
-                if len(pictures) >= 4:
+                if len(pictures) >= 3 or time.monotonic() > deadline:
                     break
                 url = row.get("url") or ""
                 if not url or self.IMAGE_SKIP_HOSTS.search(url + " " + str(row.get("source_url") or row.get("source") or "")):
                     continue
                 self.check()
                 try:
-                    with network.client(timeout=12, follow_redirects=True) as client:
+                    with network.client(timeout=6, follow_redirects=True) as client:
                         response = client.get(url, headers={"User-Agent": BROWSER})
                     if response.status_code != 200 or len(response.content) > 12 * 2**20:
                         continue
@@ -994,8 +998,8 @@ class Matcher:
                 pictures.append((row, image, h))
             return shot, pictures
         found = {}
-        with execution.ThreadPoolExecutor(max_workers=4) as pool:
-            for shot, pictures in pool.map(candidates, shots):
+        with execution.ThreadPoolExecutor(max_workers=8) as pool:
+            for shot, pictures in pool.map(candidates, shots[:PICTURE_LINES]):
                 if pictures:
                     found[shot["id"]] = pictures
         if not found:
@@ -2368,7 +2372,11 @@ class Matcher:
         if last:
             self.notes.append(f"{last} 镜实在没有别的画面，用了片子里别处的干净画面（不出文字卡）")
         if cards:
-            raise ValueError(f"有 {len(cards)} 个镜头找不到任何可用画面（B站可能暂时不让访问），没有用文字卡凑；请稍后重试")
+            footage_lines = sum(1 for c in final.values() if c.get("lane") not in ("reuse", "card"))
+            if footage_lines < 0.3 * len(self.shots):
+                # Hardly any footage at all: Bilibili is refusing downloads for now; made again a few minutes later.
+                raise BiliUnavailable(f"只拿到 {footage_lines} 段可用画面（共 {len(self.shots)} 个镜头），多半是B站暂时限制下载")
+            raise ValueError(f"有 {len(cards)} 个镜头找不到任何可用画面，没有用文字卡凑；请稍后重试")
         self.progress(92, "保存选片")
         self.save(final, files)
         unmatched = [s["id"] for s in self.shots if s["id"] not in final]
