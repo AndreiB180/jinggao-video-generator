@@ -649,7 +649,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         prefix = f"crop=iw:trunc(ih*{1-crop:.3f}/2)*2:0:0," if measured and 0 < crop < .3 else ""
         if measured and shot.get("frame_crop"):
             # Express footage: blur leftover logos, then show the watermark/subtitle-free rectangle.
-            clean = express_clean.video_filter(shot["frame_crop"])
+            clean = express_clean.video_filter(shot["frame_crop"], (asset.get("width"), asset.get("height")))
             prefix = clean + "," if clean else prefix
         if shot.get("fit") == "contain":
             # Preserve all source pixels in the foreground. A dim, blurred
@@ -710,8 +710,15 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         args += (["-an"] if full_audio else
                  ["-map", "1:a:0", "-af", "apad", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"])
         def encode(way):
-            run(args + ["-t", str(duration), *(gpu.NVENC_RENDER if way == "nvenc" else gpu.X264_RENDER),
-                        "-movflags", "+faststart", str(work / filename)], cwd=shot_work, check=check)
+            command = args + ["-t", str(duration), *(gpu.NVENC_RENDER if way == "nvenc" else gpu.X264_RENDER),
+                              "-movflags", "+faststart", str(work / filename)]
+            try:
+                run(command, cwd=shot_work, check=check)
+            except ValueError as exc:
+                if "delogo" not in str(exc) and "Logo area" not in str(exc):
+                    raise
+                # A logo box FFmpeg will not paint must not cost the film: the shot again without painting.
+                run([re.sub(r",delogo=[^,;\[\]]*", "", a) for a in command], cwd=shot_work, check=check)
         # Slots are shared by every video being made: NVENC sessions on the card, CPU encodes on the cores.
         way = gpu.mode("render")
         if way == "nvenc":

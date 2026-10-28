@@ -751,3 +751,13 @@ def test_a_film_short_of_footage_waits_alone_without_pausing_the_computer(data, 
     jobs = store.jobs(project["id"])
     assert jobs[0]["status"] == "queued" and "重新找一次" in jobs[0]["message"]
     assert worker.bili_refused_at() == 0.0                         # other videos keep going
+
+
+def test_painting_follows_the_rendered_files_size_and_never_runs_past_its_edge():
+    import subprocess
+    from jinggao import express_clean, paths
+    result = {"crop": [0.0, 0.0, 1.0, 1.0], "size": [1920, 1080], "residual": [{"kind": "logo", "box": [0.86, 0.02, 0.98, 0.1]}]}
+    vf = express_clean.video_filter(result, (854, 480))           # the rendered file is smaller than the one analysed
+    done = subprocess.run([paths.binary("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "testsrc=size=854x480",
+                           "-vf", vf, "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+    assert "delogo" in vf and done.returncode == 0, done.stderr

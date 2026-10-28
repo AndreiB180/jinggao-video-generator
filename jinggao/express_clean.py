@@ -832,7 +832,7 @@ def from_view(box, rect) -> list[float]:
     return [round(x + box[0] * w, 4), round(y + box[1] * h, 4), round(x + box[2] * w, 4), round(y + box[3] * h, 4)]
 
 
-def video_filter(result: dict) -> str:
+def video_filter(result: dict, size: tuple | None = None) -> str:
     """FFmpeg filter prefix: crop to the clean rectangle, then paint out small logos near the edges that the
     crop could not remove (delogo fills them from the pixels around them; the client saw corner watermarks
     left in view). Text across the middle is never painted over (it looked like random mosaic): such clips
@@ -844,7 +844,9 @@ def video_filter(result: dict) -> str:
     if w < 0.995 or h < 0.995:
         parts.append(f"crop=w='trunc(iw*{w:.4f}/2)*2':h='trunc(ih*{h:.4f}/2)*2'"
                      f":x='trunc(iw*{x:.4f})':y='trunc(ih*{y:.4f})'")
-    size = result.get("size")
+    # The file being rendered may not be the one analysed at its size (a re-encode): its own size, when given,
+    # places the painted boxes (a box past the edge made FFmpeg refuse the whole shot).
+    size = size if size and all(size) else result.get("size")
     if size and len(size) == 2:
         iw, ih = int(size[0]), int(size[1])
         cw, ch = int(iw * w / 2) * 2 if w < 0.995 or h < 0.995 else iw, int(ih * h / 2) * 2 if w < 0.995 or h < 0.995 else ih

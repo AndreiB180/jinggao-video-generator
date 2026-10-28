@@ -389,7 +389,8 @@ def source_frames(project: dict, count: int = 8) -> list[Image.Image]:
         except ValueError:
             continue
         at = float(shot.get("clip_start") or 0) + float(shot.get("duration") or 4) / 2
-        crop = express_clean.video_filter(shot.get("frame_crop")) if shot.get("frame_crop") else ""
+        crop = (express_clean.video_filter(shot["frame_crop"], (asset.get("width"), asset.get("height")))
+                if shot.get("frame_crop") else "")
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "frame.jpg"
             done = subprocess.run([paths.binary("ffmpeg"), "-v", "error", "-y", "-ss", f"{at:.2f}", "-i", str(source),
