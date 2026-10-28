@@ -722,6 +722,19 @@ def test_lines_without_footage_take_a_clean_clip_never_a_title_card(data, monkey
     clip = lambda sid, lane="pick": {"tile": {"source": {"provider": "bilibili", "id": "BV" + sid[:4]}}, "lane": lane, "qa": "pass"}
     final = {ids[0]: clip(ids[0]), ids[1]: clip(ids[1], "pick") | {"qa": "rejected_kept:有去不掉的水印或文字"}}
     files = {ids[0]: tmp_path / "a.mp4", ids[1]: tmp_path / "b.mp4"}
-    monkeypatch.setattr(express_match.es, "probe_duration", lambda path: 2.0)    # shorter than the line: still usable
-    assert m.any_clean(project["shots"][3], final, files) == ids[0]            # the marked clip is never taken
+    monkeypatch.setattr(express_match.es, "probe_duration", lambda path: 3.0)    # shorter than the 5 s line
+    assert m.any_clean(project["shots"][3], final, files) == (ids[0], 1.7)     # slowed to fill it; never the marked clip
     assert m.any_clean(project["shots"][3], {ids[1]: final[ids[1]]}, files) is None
+    monkeypatch.setattr(express_match.es, "probe_duration", lambda path: 2.0)    # would need more than half speed
+    assert m.any_clean(project["shots"][3], final, files) is None
+
+
+def test_a_slowed_clip_counts_its_slowed_length():
+    from jinggao import curation, media
+    project = {"media_policy": "video_preferred", "assets": [{"id": "a", "kind": "video", "duration": 3.0, "width": 1920, "height": 1080}],
+               "shots": [{"duration": 5.0, "selected_asset": "a", "clip_start": 0,
+                          "verification": {"visual_quality": {"representation": "live_action"}}}]}
+    assert curation.composition(project)["short_video_shots"] == [1]
+    project["shots"][0]["playback_slow"] = 1.7
+    assert curation.composition(project)["short_video_shots"] == [] and media.playback_slow(project["shots"][0]) == 1.7
+    assert media.playback_slow({"playback_slow": 9}) == 2.0 and media.playback_slow({}) == 1.0

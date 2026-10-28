@@ -844,10 +844,15 @@ class Matcher:
                 length = es.probe_duration(files[sid])
             except ValueError:
                 continue
-            key = (length < need - 0.2, abs(self.position[sid] - position) < 2, lent.get(sid, 0), abs(self.position[sid] - position))
+            if length * 2.0 < need + 0.1:
+                continue                     # even at half speed it would not fill the line
+            key = (length < need - 0.1, abs(self.position[sid] - position) < 2, lent.get(sid, 0), abs(self.position[sid] - position))
             if best is None or key < best[0]:
-                best = (key, sid)
-        return best[1] if best else None
+                best = (key, sid, length)
+        if not best:
+            return None
+        _, sid, length = best
+        return sid, (round(min(2.0, (need + 0.1) / length), 3) if length < need - 0.1 else 1.0)
 
     # ------------------------------------------------------------- library
     def library_jobs(self, pending, final, reserved, streams) -> list:
@@ -1771,6 +1776,10 @@ class Matcher:
                 shot.update(selected_asset=asset["id"], clip_start=0, verification=verification, approved=True,
                             search_note=verification["reason"],
                             fit=curation.preferred_fit(shot, framed, p.get("aspect", "16:9")))
+                if choice.get("slow", 1.0) > 1.0:
+                    shot["playback_slow"] = choice["slow"]   # a borrowed clip shorter than the line, slowed
+                else:
+                    shot.pop("playback_slow", None)
         store.mutate(self.pid, apply, internal=True)
 
     # -------------------------------------------------------------------- run
@@ -2349,9 +2358,10 @@ class Matcher:
         # No title cards at all (the client, 10-28): the last lines take any clean clip of this film.
         last = 0
         for shot in list(cards):
-            donor = self.any_clean(shot, final, files)
-            if donor:
-                final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
+            found = self.any_clean(shot, final, files)
+            if found:
+                donor, slow = found
+                final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor, "slow": slow}
                 files[shot["id"]] = files[donor]
                 cards.remove(shot)
                 last += 1

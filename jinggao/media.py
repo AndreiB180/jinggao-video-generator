@@ -56,6 +56,14 @@ def probe(file: Path) -> dict:
                            "-of", "json", str(file)], timeout=30))
 
 
+def playback_slow(shot: dict) -> float:
+    """How much slower than real time a shot plays its clip (1 = real time, at most 2)."""
+    try:
+        return min(2.0, max(1.0, float(shot.get("playback_slow") or 1.0)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def inspect_asset(project_id: str, path: Path, title: str, **metadata) -> dict:
     root = paths.project_dir(project_id)
     asset_id = store.uid()
@@ -670,6 +678,10 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
                       f"z='1.13':x='(iw-iw/zoom)*(1-on/{n})':y='ih/2-ih/zoom/2'"][i % 4]
             visual += f",scale={w*2}:{h*2},zoompan={motion}:d=1:s={w}x{h}:fps=25"
         visual = prefix + visual
+        slow = playback_slow(shot) if asset["kind"] == "video" else 1.0
+        if slow > 1.0:
+            # A borrowed clip shorter than its line plays slowed down to fill it (never a frozen last frame).
+            visual += f",setpts={slow:.3f}*PTS"
         visual += f",setsar=1,fps=25,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}"
         args = [paths.binary("ffmpeg"), "-v", "error", "-y", "-filter_threads", "2"]
         if asset["kind"] == "image":
@@ -678,7 +690,7 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
             start = float(shot.get("clip_start", 0))
             if start >= asset["duration"]:
                 raise ValueError(f"镜头 {i+1} 的截取起点超出素材时长")
-            if project.get("media_policy", "mixed") != "mixed" and duration > asset["duration"]-start+.16:
+            if project.get("media_policy", "mixed") != "mixed" and duration > (asset["duration"]-start) * playback_slow(shot)+.16:
                 raise ValueError(f"镜头 {i+1} 视频短于实际配音，需补足片段后导出")
             args += ["-threads", "2", "-ss", str(start), "-i", str(source)]
         if full_audio:

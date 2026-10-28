@@ -243,7 +243,8 @@ def composition(project: dict) -> dict:
         if not asset:
             missing += duration
         elif asset["kind"] == "video":
-            playable = max(0, float(asset.get("duration") or 0)-float(shot.get("clip_start") or 0))
+            from .media import playback_slow
+            playable = max(0, float(asset.get("duration") or 0)-float(shot.get("clip_start") or 0)) * playback_slow(shot)
             used = min(duration, playable)
             quality = (shot.get("verification") or {}).get("visual_quality")
             if quality is None:
