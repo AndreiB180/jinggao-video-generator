@@ -59,9 +59,11 @@ SCENE_SECONDS = 20.0   # two windows of one video closer than this show the same
 # a video already shown.
 SOURCE_MAX = 2
 SCENE_GAP = 30.0
-LIB_PER_LEVEL = (2, 1)  # library videos offered to the picker per line: from its specific words, from its broader ones
+LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from its specific words, from its broader ones
+                        # (each costs a B站 preview call; two from the first words made previews 60-75 s a film)
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
+AUDIT_SECONDS = 40      # download time the final repeat check's replacements get (one video alone)
 FRONTIER = 3            # options per line whose play addresses are asked for before the first round
 SIMILAR_BITS = 8        # two shots whose frames differ by at most this many dHash bits (2 of 3 frame pairs) look alike
 # Lines that are about another country may show foreigners; elsewhere frames described as foreign are skipped.
@@ -968,9 +970,18 @@ class Matcher:
         "wide" = each of its words alone (vague ones last), "topic" = the film's topic and domain words."""
         from . import express_plan
         planned = express_plan.library_words(shot) if hasattr(express_plan, "library_words") else []
-        if levels == "wide":
+        if levels in ("wide", "all"):
             words = list(dict.fromkeys(w for ws in reversed(planned) for w in ws))
-            return [[w] for w in sorted(words, key=lambda w: w in self.VAGUE)]
+            wide = [[w] for w in sorted(words, key=lambda w: w in self.VAGUE)]
+            if levels == "wide":
+                return wide
+            # Every level at once, specific first: one download round instead of one per level (four rounds that
+            # each waited their whole time limit made a film three minutes slower).
+            out = []
+            for ws in [p for p in planned if p] + wide:
+                if ws not in out:
+                    out.append(ws)
+            return out
         if levels == "topic":
             topic = self.plan.get("topic") or {}
             found = [w for q in (topic.get("zh") or []) + [self.plan.get("domain") or ""]
@@ -979,7 +990,8 @@ class Matcher:
             return [words[:2]] * (len(words) >= 2) + [[w] for w in words if w not in self.VAGUE]
         return [planned[level] for level in levels if level < len(planned) and planned[level]]
 
-    def library_jobs(self, pending, final, reserved, streams, levels=(0, 1), tag="a") -> list:
+    def library_jobs(self, pending, final, reserved, streams, levels=(0, 1), tag="a", per_line=LIB_FILL_PER_LINE,
+                     per_set=2) -> list:
         """Lines still without footage: a window from a library video the film does not show yet, whose described
         frame (a filmed one between filmed neighbours, footage_index.find) carries the line's words, at that
         moment. No previews or picker: the library's descriptions choose, QA and the clean-up check the window.
@@ -996,12 +1008,15 @@ class Matcher:
             need = float(shot["duration"]) + MARGIN
             tries = 0
             for words in self.library_words(shot, levels):
-                if tries >= LIB_FILL_PER_LINE:
+                if tries >= per_line:
                     break
                 self.check()
-                rows = footage_index.find(words, limit=LIB_FILL_PER_LINE + 4, exclude=used, penalize=penalize,
+                rows = footage_index.find(words, limit=per_set + 4, exclude=used, penalize=penalize,
                                           foreign_ok=self.foreign_ok(shot))
+                from_set = 0
                 for row in rows:
+                    if from_set >= per_set:
+                        break
                     key = f"{row.get('provider')}:{row.get('id')}"
                     if row.get("provider") != "bilibili" or key in used or row.get("contact"):
                         continue
@@ -1023,7 +1038,8 @@ class Matcher:
                         "lane": "library", "base_lane": base, "rank": tries, "moment": moment,
                         "words": " ".join(words)}))
                     tries += 1
-                    if tries >= LIB_FILL_PER_LINE:
+                    from_set += 1
+                    if tries >= per_line:
                         break
         if not planned:
             return []
@@ -2461,12 +2477,12 @@ class Matcher:
             picture_thread = threading.Thread(target=pictures_early, name="pictures", daemon=True)
             picture_thread.start()
         library_filled = 0
-        def fill_from_library(tag, levels):
+        def fill_from_library(tag, levels, per_line=LIB_FILL_PER_LINE, seconds=None):
             nonlocal carried
             for _, _, choice in self.drop_queued():
                 release(choice)
             try:
-                jobs = self.library_jobs(pending, final, reserved, streams, levels=levels, tag=tag)
+                jobs = self.library_jobs(pending, final, reserved, streams, levels=levels, tag=tag, per_line=per_line)
             except (media.Cancelled, Budget):
                 raise
             except Exception as exc:   # noqa: BLE001 — the next fills still follow
@@ -2475,8 +2491,8 @@ class Matcher:
             if not jobs:
                 return 0
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
-            got, failed, bad, running = self.download(jobs, streams, qa=checking,
-                                                       deadline=time.monotonic() + (60 + 0.3 * len(jobs)) * self.share())
+            limit = seconds if seconds is not None else (60 + 0.3 * len(jobs)) * self.share()
+            got, failed, bad, running = self.download(jobs, streams, qa=checking, deadline=time.monotonic() + limit)
             failures.update(failed)
             qa_bad.update(bad)
             carried = settle(carried, got, bad, running, last=True)   # late clips of the main rounds win
@@ -2492,13 +2508,11 @@ class Matcher:
                 self.place(sid, choice, key_of(choice)[0])
                 filled += 1
             return filled
-        for tag, levels in (("a", (0, 1)), ("b", (2,)), ("c", "wide")):
-            if not pending:
-                break
+        if pending:
             began = time.monotonic()
-            library_filled += fill_from_library(tag, levels)
+            library_filled += fill_from_library("a", "all", per_line=LIB_FILL_PER_LINE + 1)
             pending = [s for s in pending if s["id"] not in final]
-            stamp(f"library_{tag}", began)
+            stamp("library", began)
         if library_filled:
             self.notes.append(f"{library_filled} 镜用素材库里描述相符的新视频补上，没有重复已经用过的画面")
         if pending:
@@ -2649,7 +2663,7 @@ class Matcher:
             self.abandon.clear()
             began = time.monotonic()
             pending = list(cards)
-            filled = fill_from_library("d", "topic")
+            filled = fill_from_library("d", "topic", seconds=AUDIT_SECONDS * self.share())
             failures.update(self.stop_downloads())
             if filled:
                 self.notes.append(f"{filled} 镜用素材库里同一主题的新视频补上")
@@ -2737,11 +2751,9 @@ class Matcher:
             kept = {sid: (final.pop(sid), files.pop(sid, None)) for sid in redo}
             self.abandon.clear()
             pending = [s for s in self.shots if s["id"] in redo]
-            for tag, levels in (("x", (0, 1)), ("y", (2,)), ("z", "wide"), ("t", "topic")):
-                if not pending:
-                    break
-                replaced += fill_from_library(tag, levels)
-                pending = [s for s in pending if s["id"] not in final]
+            # One round with a short limit: the film is otherwise done, the replacements must not hold it up.
+            replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS * self.share())
+            pending = [s for s in pending if s["id"] not in final]
             failures.update(self.stop_downloads())
             for sid, (choice, path) in kept.items():
                 if sid not in final:
