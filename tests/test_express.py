@@ -863,3 +863,22 @@ def test_stock_site_watermarks_and_corner_pictures_are_caught():
     for f in letterbox:
         f[35:235, :] = 100       # a wide film's bars top and bottom: content_rect trims those
     assert not express_clean.small_picture(letterbox)
+
+
+def test_groups_the_library_already_covers_search_bilibili_less(data, monkeypatch):
+    shots = [planner.new_shot(t) | {"duration": 5.0} for t in ("一。", "二。", "三。")]
+    m = _matcher(data, shots)
+    ids = [s["id"] for s in m.shots]
+    asked = []
+    class Bili:
+        def search(self, q):
+            asked.append(q)
+            return [{"provider": "bilibili", "id": "BV" + q}]
+    m.bili, m.pixa = Bili(), None
+    groups = [{"id": "G1", "zh": ["甲 乙", "丙 丁"], "en": [], "shots": ids[:2]},
+              {"id": "G2", "zh": ["戊 己", "庚 辛"], "en": [], "shots": ids[2:]}]
+    row = lambda n: {"provider": "bilibili", "id": f"BVlib{n}", "duration": 120}
+    monkeypatch.setattr(m, "library_options", lambda gs: {"G1": [row(1), row(2)]})
+    m.search(groups)
+    assert sorted(asked) == ["庚 辛", "戊 己", "甲 乙"]     # every line of G1 has its own library video: one query
+    assert m.library_rich == {"G1"}

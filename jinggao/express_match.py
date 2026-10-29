@@ -63,7 +63,8 @@ LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from it
                         # (each costs a B站 preview call; two from the first words made previews 60-75 s a film)
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
-AUDIT_SECONDS = 40      # download time the final repeat check's replacements get (one video alone)
+AUDIT_SECONDS = 40      # download time the final repeat check's replacements and the topic round get, flat
+LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at once it waited up to three minutes)
 FRONTIER = 3            # options per line whose play addresses are asked for before the first round
 SIMILAR_BITS = 8        # two shots whose frames differ by at most this many dHash bits (2 of 3 frame pairs) look alike
 # Lines that are about another country may show foreigners; elsewhere frames described as foreign are skipped.
@@ -327,6 +328,7 @@ class Matcher:
         self.ancient = set(self.plan.get("ancient") or [])   # people from before photography (no real footage can exist)
         self.host_hits, self.host_sources = {}, set()   # sources whose windows keep showing a presenter on camera
         self.presenter_sources = set()                  # presenter-led videos found from their preview frames
+        self.library_rich = set()   # groups whose lines all found library videos of their own (fewer live searches)
         self.fill_errors = {}   # job id -> why its download or text check failed (written back to the library's checks)
         self.window_notes = []  # library moments judged here, for footage_index.record_checks
         self.similar = []       # sizes of the groups of alike-looking shots in the finished film (audit)
@@ -391,8 +393,15 @@ class Matcher:
         quiet = time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET
         if quiet:
             self.notes.append("B站搜索刚被限流，这条先用本地素材库的视频")
+        # The library first (no network): a group whose every line already has library videos of its own searches
+        # Bilibili with one query, not two (every live result costs preview calls, and the calls got the dorm PC
+        # refused: one film read 256 candidates' previews in 11 minutes).
+        library = self.library_options(groups)
+        self.library_rich = {g["id"] for g in groups if not g.get("person") and g.get("shots")
+                             and len(library.get(g["id"], [])) >= len(g["shots"])}
         for g in groups:
-            for q in g["zh"][:2] if not quiet else []:
+            live = 1 if g.get("id") in self.library_rich else 2
+            for q in g["zh"][:live] if not quiet else []:
                 tasks.append(("bili", q))
             if self.pixa:
                 for q in g["en"][:2]:
@@ -414,15 +423,16 @@ class Matcher:
         refused = len(asked) >= 4 and not any(asked)
         if refused:
             _mark("bili-search-refused.json", f"B站的 {len(asked)} 次搜索全部没有结果")
-        # The local index: videos found and described before (no network), with the matching moments.
+        # The group's long queries in the library as well, where its lines found little of their own (bigrams of a
+        # long query match loosely: the lines' own words come first).
         from . import footage_index
-        for q in dict.fromkeys(q for g in groups for q in g["zh"][:2]):
+        for q in dict.fromkeys(q for g in groups if g.get("id") not in self.library_rich for q in g["zh"][:2]):
             try:
                 results[("local", q)] = footage_index.search(q, limit=8)
             except Exception as exc:   # a missing or damaged index only costs this lane
                 self.notes.append(f"本地素材库检索失败: {type(exc).__name__}")
                 break
-        for gid, rows in self.library_options(groups).items():
+        for gid, rows in library.items():
             results[("lib", gid)] = rows
         local = sum(1 for (kind, _), rows in results.items() if kind in ("local", "lib") and rows)
         if (refused or quiet) and local < max(2, len(groups) // 3) and self.cfg.get("bili_limit_mode", "wait") == "wait":
@@ -547,7 +557,7 @@ class Matcher:
                 if key not in seen and title_key not in seen and self.score(row, g, shots_by_id) is not None:
                     seen.update((key, title_key))
                     picked.append(row)
-            if len(library) >= 2 * len(g["shots"]) and not g.get("person"):
+            if g["id"] in self.library_rich:
                 bili_quota = BILI_AFTER_LOCAL
             for kind, queries, quota in (("local", g["zh"][:2], LOCAL_PER_QUERY), ("bili", g["zh"][:2], bili_quota),
                                          ("pixa", g["en"][:2] if self.pixa else [], PIXA_PER_QUERY)):
@@ -2493,7 +2503,7 @@ class Matcher:
             if not jobs:
                 return 0
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
-            limit = seconds if seconds is not None else (60 + 0.3 * len(jobs)) * self.share()
+            limit = seconds if seconds is not None else min(LIBRARY_SECONDS, (60 + 0.3 * len(jobs)) * self.share())
             got, failed, bad, running = self.download(jobs, streams, qa=checking, deadline=time.monotonic() + limit)
             failures.update(failed)
             qa_bad.update(bad)
@@ -2665,7 +2675,7 @@ class Matcher:
             self.abandon.clear()
             began = time.monotonic()
             pending = list(cards)
-            filled = fill_from_library("d", "topic", seconds=AUDIT_SECONDS * self.share())
+            filled = fill_from_library("d", "topic", seconds=AUDIT_SECONDS)
             failures.update(self.stop_downloads())
             if filled:
                 self.notes.append(f"{filled} 镜用素材库里同一主题的新视频补上")
@@ -2754,7 +2764,7 @@ class Matcher:
             self.abandon.clear()
             pending = [s for s in self.shots if s["id"] in redo]
             # One round with a short limit: the film is otherwise done, the replacements must not hold it up.
-            replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS * self.share())
+            replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
             pending = [s for s in pending if s["id"] not in final]
             failures.update(self.stop_downloads())
             for sid, (choice, path) in kept.items():
