@@ -422,6 +422,30 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.6.0：素材库优先、一片一源、出片前查重复、干净体检（2026-10-29，sha256 7b38eec0…）
+
+客户 10-28：同一画面一条片里出现 6–8 次（粉衣女孩、校门、暗屋）、竖屏带 B 站水印、"不能靠重复空镜"、成片要按批分文件夹。
+宿舍机 158 条报告的诊断：模型自己选中的画面只占 15%，0.5.2 对比轮 78% 镜头是同源补位（near/neighbor/repeat/reuse），18 万库只补 2–6%；
+库窗口九成被 QA 判跑题（长句二字 OR 检索）。
+- 规划 `express_plan` 每镜 `k`：3 组库画面词（具体→宽，人物+动作/表情/地点，不许整组只有物件或地点、不许空镜词），`library_words(shot)`。
+- `footage_index.find(words)`：按帧描述全词命中（同义词表 `SYNONYMS`/`expand`），只取实拍/影视剧且前后帧也是的时刻，外国画面、
+  讲人的词不出动物、跳过主持人/文字多的视频、`checks` 里坏的时刻；本机 SSD 平均 31 ms。`record_checks/checks_for`，种子带 checks。
+- `Matcher.library_options`：每句按自己的词从库里取不同视频（`LIB_PER_LEVEL` 1+1）进选片；补位顺序：自己的选片 → 库一轮（各层一起，
+  每句 3 个候选）→ 同源别段（`SOURCE_MAX`=2、`SCENE_GAP`=30 秒、不相邻）→ 图片 → 库主题词 → 借用（最多到 2 次）。删掉 repeat 不限段。
+- `audit()`：成片前三帧 dHash 比对，像的超过 2 个、相邻同源、借用（reuse）、没做过水印分析的 B 站片段 → 库里换（`AUDIT_SECONDS` 40）；
+  B 站限流换不了且剩 ≥max(3, 8%) → `TooRepetitive` 稍后重做（`repeat_retries` 最多 2 次，之后照存）。
+- 补位 QA：讲人的句子风景/空镜/航拍判跑题。素材站水印（`screen_text.STOCK_SITE`：光厂素材等）当联系方式扔；`express_clean.small_picture`
+  （角落小画面四周黑）算竖屏。
+- B 站接口：`Bilibili.view` 缓存 30 天、`stream` 播放地址缓存 80 分钟，只给分到的视频要地址（`FRONTIER`=3 先要），`resolve` 2 路。
+  10-29 第一轮一条片要 76–106 个地址被全拒，改后能做完。
+- 每批一个文件夹（`media.batch_folder`「10月29日 14点05分 批量50条」，单条 `day_folder`），`launch.keep_log` 写 %APPDATA%\Jinggao\镜稿日志.txt
+  （含原生崩溃栈）。同一台电脑开两个文件夹的镜稿，后开的会关掉先开的（客户"后台自己关"多半是这个）。
+- 体检 `jinggao/footage_check.py` + `scripts/footage_check.py`：在库时刻下 7 秒 480p 用生产规则判 clean/crop/text/mark/narrow…；
+  宿舍机 `library\run.ps1` 已换成 `run-check.ps1`（建库脚本留在 `run-build.ps1`），3 路实测约 1,800 段/小时，约四成库片段带字/竖屏。
+- 宿舍机实测（12 篇，含客户两篇新稿；建库停着、测试包用 26.9 万库）：不同视频/镜 0.34 → 0.77–0.83；同一视频第三次起 323/802 → 7/523；
+  相邻同源 155 → 0；"开学在即"51 镜 47 个视频，"江西赣州"39 镜 32 个。单条（26 镜）打包版 290 秒；同时 3 条每条 8–13 分钟（B 站限流时更久）。
+- 仍弱：B 站限流时个别片剩一两对相同镜头；冷门稿（老钞票）重复多；有些补位画面偏（外国图库人物、偶尔暧昧剧情）。
+
 ## 0.5.2：不出文字卡、脏片段一律不用、提速、18.1 万素材库（2026-10-28，sha256 0256b369…）
 
 客户 10-28：不要任何文字卡；带水印/花字/竖屏的“就不能不用吗”；打新素材库；嫌慢、怕再出现整批卡住。
