@@ -107,6 +107,7 @@ class Bilibili:
         self.search_gate = threading.Semaphore(3)
         self.api_gate = threading.Semaphore(3)
         self.blocked = 0              # signed API calls (_api): stream() etc.
+        self.cooled = 0.0             # seconds this client waited for B站 to accept calls again
         self.search_refused = 0       # searches refused in a row (risk control or network)
         self.shots_blocked = 0        # videoshot (preview) calls refused in a row
         self.shots_blocked_at = 0.0
@@ -166,9 +167,19 @@ class Bilibili:
                 "dm_img_inter": json.dumps({"ds": [], "wh": [2 * 1920 + 2 * 1080 + 3 * r1, 4 * 1920 - 1080 + r1, r1],
                                             "of": [30 + r2, 40 + 2 * r2, r2]}, separators=(",", ":"))}
 
+    COOL_DOWN = 60          # seconds a refused film waits before asking again (it keeps everything it has)
+    PATIENCE = 600          # ...and at most this long in all, then it gives up on B站 for this round
+
     def _api(self, url: str, params: dict) -> dict:
         if self.blocked >= 3:
-            raise ValueError("B站接口持续风控，本轮跳过B站来源")
+            # Refused again and again: wait for B站 to calm down and go on, instead of giving up on B站 for the
+            # round (the film then filled its lines with clips it already showed).
+            if self.cooled >= self.PATIENCE:
+                raise ValueError("B站接口持续风控，本轮跳过B站来源")
+            throttle.bili_refused(self.COOL_DOWN)
+            throttle.bili_wait()
+            self.cooled += self.COOL_DOWN
+            self.blocked = 0
         with self.api_gate:
             for attempt in range(3):
                 self._warm()
@@ -184,6 +195,7 @@ class Bilibili:
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 self.blocked = 0
+                throttle.bili_answered()
                 return body
         self.blocked += 1
         raise ValueError("B站接口暂时限制访问（风控），请稍后重试或扫码登录B站")

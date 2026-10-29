@@ -2,6 +2,8 @@ import multiprocessing
 import threading
 import time
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from jinggao import config, paths, store, throttle, worker
@@ -250,3 +252,45 @@ def test_a_video_whose_worker_died_is_requeued_twice_then_stopped(tmp_path, monk
     assert "重新排队" in crash(again["id"])
     third = store.claim()
     assert "停止" in crash(third["id"]) and store.claim() is None      # a video that keeps crashing is not looped forever
+
+
+def test_bilibili_is_asked_at_an_even_pace_that_slows_after_a_refusal(monkeypatch):
+    import time as _time
+    monkeypatch.setattr(throttle, "_gap", throttle._Local(0.05))
+    monkeypatch.setattr(throttle, "_next", throttle._Local(0.0))
+    monkeypatch.setattr(throttle, "_pause", throttle._Local(0.0))
+    began = _time.monotonic()
+    for _ in range(4):
+        throttle.bili_pace()
+    assert _time.monotonic() - began >= 0.14                  # four calls, three gaps of 50 ms
+    throttle.bili_refused(0.0)
+    assert abs(throttle._gap.value - 0.1) < 1e-9              # a refusal doubles the gap
+    throttle._gap.value = throttle.BILI_GAP[1]
+    throttle.bili_refused(0.0)
+    assert throttle._gap.value == throttle.BILI_GAP[1]        # never past the slowest pace
+    throttle.bili_answered()
+    assert throttle._gap.value < throttle.BILI_GAP[1]          # answers speed it up again
+
+
+def test_a_refused_film_waits_for_bilibili_instead_of_giving_up(monkeypatch):
+    from jinggao import express_sources as es
+    monkeypatch.setattr(throttle, "_pause", throttle._Local(0.0))
+    monkeypatch.setattr(throttle, "_gap", throttle._Local(0.0))
+    monkeypatch.setattr(throttle, "_next", throttle._Local(0.0))
+    monkeypatch.setattr(es.Bilibili, "COOL_DOWN", 0.01)
+    monkeypatch.setattr(es.Bilibili, "PATIENCE", 0.03)
+    bili = es.Bilibili()
+    answers = []
+    class Response:
+        status_code = 200
+        def json(self):
+            return answers.pop(0) if answers else {"code": 0, "data": {}}
+    monkeypatch.setattr(bili, "_warm", lambda *a, **k: None)
+    monkeypatch.setattr(bili, "_sign", lambda params: params)
+    monkeypatch.setattr(bili.client, "get", lambda url, params=None: Response())
+    bili.blocked = 3
+    assert bili._api("https://api.bilibili.com/x", {})["code"] == 0     # waited, asked again, answered
+    assert bili.blocked == 0 and bili.cooled > 0
+    bili.blocked, bili.cooled = 3, 1.0
+    with pytest.raises(ValueError):                                     # waited long enough: gives up this round
+        bili._api("https://api.bilibili.com/x", {})

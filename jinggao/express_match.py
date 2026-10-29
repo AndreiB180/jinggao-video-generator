@@ -64,6 +64,7 @@ LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from it
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
 AUDIT_SECONDS = 40      # download time the final repeat check's replacements and the topic round get, flat
+REFUSED_WAIT = 90       # seconds a film waits in place for B站 before its repeats get one more fresh round
 TOPIC_SECONDS = 25      # the topic round, a last fill before borrowing
 LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at once it waited up to three minutes)
 FRONTIER = 1            # options per line whose play addresses are asked for before the first round (the rest when
@@ -2861,6 +2862,16 @@ class Matcher:
             # One round with a short limit: the film is otherwise done, the replacements must not hold it up.
             replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
             pending = [s for s in pending if s["id"] not in final]
+            refused_now = self.bili.blocked > 0 or self.bili.cooled > 0
+            if pending and refused_now and len(pending) >= max(2, 0.05 * len(self.shots)):
+                # B站 refused the new videos: the film waits for it here, keeping everything it has, and looks again
+                # (no half-finished film with repeats, no whole film made again).
+                self.progress(89, f"B站限流：原地等 {REFUSED_WAIT} 秒后再补 {len(pending)} 个镜头")
+                throttle.bili_refused(REFUSED_WAIT)
+                throttle.bili_wait(self.check)
+                self.bili.blocked = 0
+                replaced += fill_from_library("x2", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
+                pending = [s for s in pending if s["id"] not in final]
             failures.update(self.stop_downloads())
             for sid, (choice, path) in kept.items():
                 if sid not in final:

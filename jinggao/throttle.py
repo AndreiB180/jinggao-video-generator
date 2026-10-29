@@ -117,6 +117,10 @@ _pause = _Pause()
 
 
 # Worker seats for first come, first served: main slots 0..MAX_VIDEOS-1, the background lane after them.
+# api.bilibili.com is asked at an even pace, one call this many seconds after the last on this computer: B站 refuses
+# bursts (three films asking for 80 play addresses at once were refused) while an even 2,000 calls an hour went
+# through for hours. A refusal doubles the gap, a run of answers narrows it again.
+BILI_GAP = (0.5, 4.0)
 SEATS = MAX_VIDEOS + 1
 _NAMES = list(LIMITS)
 _started = None    # per seat: when its current video started (0: idle); the background lane counts as latest
@@ -130,6 +134,7 @@ def shared(context, sizes: dict | None = None) -> dict:
     limits = LIMITS | (sizes or {})
     return {"slots": {name: context.BoundedSemaphore(n) for name, n in limits.items()},
             "bili_pause": context.Value("d", 0.0), "sizes": limits,
+            "bili_gap": context.Value("d", BILI_GAP[0]), "bili_next": context.Value("d", 0.0),
             "started": context.Array("d", SEATS), "wanting": context.Array("i", SEATS * len(_NAMES))}
 
 
@@ -138,6 +143,9 @@ def install(objects: dict | None, seat: int | None = None) -> None:
     if objects:
         _slots = dict(objects["slots"])
         _pause = objects["bili_pause"]
+        if objects.get("bili_gap") is not None:
+            global _gap, _next
+            _gap, _next = objects["bili_gap"], objects["bili_next"]
         LIMITS.update(objects.get("sizes") or {})
         _started, _wanting, _seat = objects.get("started"), objects.get("wanting"), None
         if seat is not None and _started is not None and 0 <= seat < SEATS:
@@ -271,14 +279,53 @@ def _bili_wait(check=None) -> None:
         time.sleep(min(left, .5))
 
 
+class _Local:
+    """A Value stand-in for one process (tests, scripts): the launcher shares real ones between processes."""
+    def __init__(self, value):
+        self.value = value
+        self._lock = threading.Lock()
+
+    def get_lock(self):
+        return self._lock
+
+
+_gap, _next = _Local(BILI_GAP[0]), _Local(0.0)
+
+
 def bili_refused(seconds: float = 3.0) -> None:
     with _pause.get_lock():
         _pause.value = max(_pause.value, time.time() + seconds)
+    with _gap.get_lock():
+        _gap.value = min(BILI_GAP[1], _gap.value * 2)
+
+
+def bili_answered() -> None:
+    with _gap.get_lock():
+        _gap.value = max(BILI_GAP[0], _gap.value * 0.97)
+
+
+def bili_pace(check=None) -> None:
+    """Wait for this computer's next turn at api.bilibili.com (an even pace shared by every video)."""
+    began = time.monotonic()
+    while True:
+        with _next.get_lock():
+            now = time.time()
+            if _next.value <= now:
+                with _gap.get_lock():
+                    _next.value = now + _gap.value
+                break
+            left = _next.value - now
+        if check:
+            check()
+        time.sleep(min(left, .25))
+    if time.monotonic() - began > 0.05:
+        _note_wait("bili_paced", time.monotonic() - began)
 
 
 @contextmanager
 def bili_call(check=None):
-    """One request to api.bilibili.com: waits out a shared pause, then takes one of the shared slots."""
+    """One request to api.bilibili.com: waits out a shared pause and its turn, then takes one of the shared slots."""
     bili_wait(check)
+    bili_pace(check)
     with slot("bili_api", check):
         yield
