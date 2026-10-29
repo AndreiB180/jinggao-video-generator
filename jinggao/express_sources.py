@@ -309,12 +309,43 @@ class Bilibili:
             paths.publish(tmp, path)
         return path
 
+    VIEW_TTL = 30 * 24 * 3600   # a video's cid, length and title do not change
+    STREAM_TTL = 80 * 60        # play addresses carry a deadline about two hours out
+    LOWRES_TTL = 24 * 3600
+
+    def view(self, bvid: str) -> dict:
+        """The video's info (cid, pages, length, title), cached: every play address needs it, and library-first
+        films ask for many more videos, which B站 answered with risk control (10-29: 76 of 76 refused)."""
+        path = _cache("bili-view") / f"{bvid}.json"
+        data = _read_json(path, self.VIEW_TTL)
+        if data is None:
+            view = self._api("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid})
+            if view.get("code") != 0:
+                raise ValueError(f"B站视频信息不可用：{view.get('message', '')}")
+            full = view["data"]
+            data = {"cid": full["cid"], "pages": [{"duration": p.get("duration")} for p in (full.get("pages") or [])[:1]],
+                    "duration": full.get("duration"), "title": full.get("title", ""), "desc": (full.get("desc") or "")[:500],
+                    "owner": {"name": (full.get("owner") or {}).get("name", "")}}
+            _write_json(path, data)
+        return data
+
     def stream(self, bvid: str, min_height: int = 720) -> dict | None:
-        """Smallest AVC video-only DASH stream with short edge >= min_height (max 1080)."""
-        view = self._api("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid})
-        if view.get("code") != 0:
-            raise ValueError(f"B站视频信息不可用：{view.get('message', '')}")
-        data = view["data"]
+        """Smallest AVC video-only DASH stream with short edge >= min_height (max 1080). Answers are kept for a
+        while (a film made again after a refusal asks for the same videos)."""
+        path = _cache("bili-stream") / f"{bvid}-{min_height}-{int(bool(self.logged_in))}.json"
+        kept = _read_json(path, self.STREAM_TTL)
+        if kept is None:
+            kept = _read_json(path, self.LOWRES_TTL)
+            kept = kept if kept is not None and not kept.get("available") else None
+        if kept is not None:
+            return kept
+        found = self._stream(bvid, min_height)
+        if found and (found.get("available") or not found.get("voucher")):
+            _write_json(path, found)
+        return found
+
+    def _stream(self, bvid: str, min_height: int) -> dict | None:
+        data = self.view(bvid)
         params = {"bvid": bvid, "cid": data["cid"], "qn": 80, "fnval": 4048, "fourk": 1, **self._dm()}
         if not self.logged_in:
             params["try_look"] = 1
@@ -351,10 +382,7 @@ class Bilibili:
     def audio(self, bvid: str) -> dict | None:
         """The smallest audio-only DASH stream of a video ({urls, headers, duration}), for transcribing what a
         news report says (news_pool); None when the video has none."""
-        view = self._api("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid})
-        if view.get("code") != 0:
-            raise ValueError(f"B站视频信息不可用：{view.get('message', '')}")
-        data = view["data"]
+        data = self.view(bvid)
         params = {"bvid": bvid, "cid": data["cid"], "qn": 16, "fnval": 16, **self._dm()}
         if not self.logged_in:
             params["try_look"] = 1

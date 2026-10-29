@@ -825,3 +825,21 @@ def test_painting_follows_the_rendered_files_size_and_never_runs_past_its_edge()
     done = subprocess.run([paths.binary("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "testsrc=size=854x480",
                            "-vf", vf, "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
     assert "delogo" in vf and done.returncode == 0, done.stderr
+
+
+def test_video_info_and_play_addresses_are_asked_for_once(data, monkeypatch):
+    calls = []
+    def api(self, url, params):
+        calls.append(url.rsplit("/", 1)[-1])
+        if url.endswith("view"):
+            return {"code": 0, "data": {"cid": 7, "pages": [{"duration": 300}], "duration": 300, "title": "t"}}
+        return {"code": 0, "data": {"dash": {"video": [{"width": 1280, "height": 720, "codecs": "avc1", "bandwidth": 1,
+                                                        "baseUrl": "https://u/v.m4s", "SegmentBase": {}}]}}}
+    monkeypatch.setattr(es.Bilibili, "_api", api)
+    bili = es.Bilibili()
+    first = bili.stream("BVcache1", 720)
+    again = bili.stream("BVcache1", 720)
+    assert first["available"] and again == first
+    assert calls == ["view", "playurl"]          # a film made again after a refusal asks B站 nothing new
+    bili.stream("BVcache1", 480)
+    assert calls == ["view", "playurl", "playurl"]  # another sharpness needs its own address, not the video's info

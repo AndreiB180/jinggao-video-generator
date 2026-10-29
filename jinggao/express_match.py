@@ -62,6 +62,7 @@ SCENE_GAP = 30.0
 LIB_PER_LEVEL = (2, 1)  # library videos offered to the picker per line: from its specific words, from its broader ones
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
+FRONTIER = 3            # options per line whose play addresses are asked for before the first round
 SIMILAR_BITS = 8        # two shots whose frames differ by at most this many dHash bits (2 of 3 frame pairs) look alike
 # Lines that are about another country may show foreigners; elsewhere frames described as foreign are skipped.
 FOREIGN_LINE = re.compile(r"美国|美军|美方|日本|韩国|朝鲜|欧洲|欧盟|英国|法国|德国|意大利|西班牙|俄罗斯|俄方|乌克兰|印度|"
@@ -1397,7 +1398,8 @@ class Matcher:
             except Exception as exc:
                 self.notes.append(f"播放地址失败 {bvid}: {str(exc)[:100]}")
                 return bvid, None
-        with execution.ThreadPoolExecutor(max_workers=4) as pool:
+        # Two at a time: with three films at once B站 counts every call from this computer together.
+        with execution.ThreadPoolExecutor(max_workers=2) as pool:
             for bvid, stream in pool.map(run, list(sources.items())):
                 streams[bvid] = stream
                 if stream and stream.get("available") and stream.get("duration"):
@@ -2215,24 +2217,58 @@ class Matcher:
             options[sid] = merged
         began = time.monotonic()
         self.progress(42, "确认清晰度与播放地址")
-        referenced = {}
+        # Play addresses only for the videos each line is likely to take (its first options): every address costs
+        # two B站 API calls, and asking for all of a film's 80-100 candidate videos at once, three films at a time,
+        # got the computer refused (10-29). The rest are asked for when a round actually allocates them.
+        referenced, frontier = {}, {}
         for rows in options.values():
-            for tile, _ in rows:
+            for rank, (tile, _) in enumerate(rows):
                 if tile["source"]["provider"] == "bilibili":
                     referenced[tile["source"]["id"]] = tile["source"]
-        streams = self.resolve(referenced)
-        refused = sum(1 for bvid in referenced if not streams.get(bvid))
-        if len(referenced) >= 8 and refused >= 0.8 * len(referenced) and self.cfg.get("bili_limit_mode", "wait") == "wait":
-            raise BiliUnavailable(f"B站 {len(referenced)} 个视频里有 {refused} 个拿不到播放地址（多半是被限流）")
+                    if rank < FRONTIER:
+                        frontier[tile["source"]["id"]] = tile["source"]
+        streams = self.resolve(frontier)
+        refused = sum(1 for bvid in frontier if not streams.get(bvid))
+        if len(frontier) >= 8 and refused >= 0.8 * len(frontier) and self.cfg.get("bili_limit_mode", "wait") == "wait":
+            raise BiliUnavailable(f"B站 {len(frontier)} 个视频里有 {refused} 个拿不到播放地址（多半是被限流）")
         landscape = self.project.get("aspect", "16:9") != "9:16"
         def usable(tile):
             source = tile["source"]
             if source["provider"] != "bilibili":
                 return self.oriented(source)
+            if source["id"] not in streams:
+                return True          # not asked yet: the round that allocates it asks (settle_streams)
             stream = streams.get(source["id"]) or {}
             w, h = stream.get("width") or 0, stream.get("height") or 0
             # A portrait re-upload of landscape footage is a small picture between caption bars.
             return bool(stream.get("available")) and (not (w and h) or (w >= h) == landscape)
+        def settle_streams(chosen) -> set:
+            """Ask for the play addresses of allocated videos not asked yet; the lines whose video turned out
+            unusable (no sharp stream, portrait, refused) are returned and its tiles leave every line's options."""
+            ask = {c["tile"]["source"]["id"]: c["tile"]["source"] for c in chosen.values()
+                   if c["tile"]["source"]["provider"] == "bilibili" and c["tile"]["source"]["id"] not in streams}
+            if ask:
+                streams.update(self.resolve(ask))
+            gone = {sid for sid, c in chosen.items() if not usable(c["tile"])}
+            if gone:
+                bad = {chosen[sid]["tile"]["source"]["id"] for sid in gone}
+                for sid in options:
+                    options[sid] = [(t, lane) for t, lane in options[sid]
+                                    if t["source"]["provider"] != "bilibili" or t["source"]["id"] not in bad]
+            return gone
+        def allocate_usable(lines, exclude):
+            """allocate(), then the play addresses of what it chose; lines whose video is unusable choose again."""
+            chosen = self.allocate(options, reserved, usage, lines, exclude=exclude)
+            for _ in range(2):
+                gone = settle_streams(chosen)
+                if not gone:
+                    break
+                for sid in gone:
+                    release(chosen.pop(sid))
+                chosen.update(self.allocate(options, reserved, usage, [s for s in lines if s["id"] in gone], exclude=exclude))
+            for sid in [sid for sid, c in chosen.items() if not usable(c["tile"])]:
+                release(chosen.pop(sid))
+            return chosen
         low = sum(1 for st in streams.values() if st and not st.get("available"))
         soft = sum(1 for bvid in streams if referenced[bvid].get("low_res"))
         if soft:
@@ -2342,12 +2378,11 @@ class Matcher:
             # parallel downloads), except in the last round.
             busy = {sid for _, sid, _ in carried}
             fresh = pending if round_no == 2 else [s for s in pending if s["id"] not in busy]
-            primary = self.allocate(options, reserved, usage, fresh, exclude=tried)
+            primary = allocate_usable(fresh, tried)
             for sid, choice in primary.items():
                 tried[sid].add(key_of(choice))
             videos = self.share()
-            backup = self.allocate(options, reserved, usage,
-                                   [s for s in fresh if self.wants_backup(s, primary.get(s["id"]), videos)], exclude=tried)
+            backup = allocate_usable([s for s in fresh if self.wants_backup(s, primary.get(s["id"]), videos)], tried)
             for sid, choice in backup.items():
                 tried[sid].add(key_of(choice))
             # Job ids must be unique across rounds: per-job analysis and QA results are keyed by them.
