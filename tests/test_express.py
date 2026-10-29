@@ -1,6 +1,7 @@
 """Offline checks for the express pipeline (no network, no paid calls)."""
 import hashlib
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -59,16 +60,19 @@ def _matcher(data, shots):
 def test_allocation_never_overlaps_windows_in_one_source(data):
     shots = [planner.new_shot(f"镜头{i}。") | {"duration": 8.0} for i in range(4)]
     m = _matcher(data, shots)
-    source = {"provider": "bilibili", "id": "BV1", "duration": 40.0}
-    tiles = [{"source": source, "t": t} for t in (6.0, 16.0, 26.0, 34.0)]
+    source = {"provider": "bilibili", "id": "BV1", "duration": 120.0}
+    tiles = [{"source": source, "t": t} for t in (6.0, 16.0, 26.0, 34.0, 70.0, 100.0)]
     options = {s["id"]: [(tile, "pick") for tile in tiles] for s in m.shots}
     assigned = m.allocate(options, {}, {}, m.shots)
     windows = sorted((c["start"], c["start"] + 8.0 + express_match.MARGIN) for c in assigned.values())
-    assert len(windows) == express_match.HARD_MIN     # one source fills at most this many shots of a short film
+    assert len(windows) == express_match.SOURCE_MAX   # one source fills at most this many shots of a film
     # Every window contains the frame the model actually judged.
     assert all(c["start"] <= c["tile"]["t"] <= c["start"] + 8.0 for c in assigned.values())
-    assert all(b[0] >= a[1] + express_match.WINDOW_GAP - 1e-6 for a, b in zip(windows, windows[1:], strict=False))
-    assert all(0 <= start and end <= 40.0 for start, end in windows)
+    # Another moment of one video is another scene only well apart, and never in the neighbouring shot.
+    assert all(b[0] - a[0] >= express_match.SCENE_GAP - 1e-6 for a, b in zip(windows, windows[1:], strict=False))
+    assert all(0 <= start and end <= 120.0 for start, end in windows)
+    places = sorted(m.position[sid] for sid in assigned)
+    assert all(b - a >= 2 for a, b in zip(places, places[1:], strict=False))
 
 
 def test_allocation_spreads_shots_over_sources_and_skips_reuploaded_pictures(data):
@@ -678,31 +682,91 @@ def test_big_letters_in_the_middle_of_the_scene_are_not_花字():
 
 
 def test_lines_without_footage_get_a_fresh_library_video_at_its_matching_moment(data, monkeypatch):
-    from jinggao import footage_index
+    from jinggao import express_plan, footage_index
     shots = [planner.new_shot(t) | {"duration": 5.0, "visual": "超市 收银台 顾客"} for t in ("一。", "二。")]
     project = store.new_project("t", "x")
     project = store.mutate(project["id"], lambda p: p.update(shots=shots))
     m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
-    m.plan = {"groups": [{"shots": [s["id"] for s in project["shots"]], "zh": ["超市 收银"]}]}
     used = {"tile": {"source": {"provider": "bilibili", "id": "BVused"}}}
-    rows = [{"provider": "bilibili", "id": "BVused", "duration": 300, "moments": [40.0], "avoid": []},
-            {"provider": "bilibili", "id": "BVnew1", "duration": 300, "moments": [12.0, 90.0], "avoid": [10.0]},
-            {"provider": "bilibili", "id": "BVnew2", "duration": 300, "moments": [55.0], "avoid": []}]
-    kinds = {"BVused": [(40.0, "实拍")],
-             "BVnew1": [(0.0, "实拍"), (12.0, "实拍"), (30.0, "主持人出镜"), (75.0, "实拍"), (90.0, "实拍"), (105.0, "影视剧")],
-             "BVnew2": [(40.0, "实拍"), (55.0, "实拍"), (70.0, "实拍")],
-             "BVtalk": [(10.0, "主持人出镜"), (20.0, "主持人出镜"), (30.0, "实拍")]}
-    rows.insert(1, {"provider": "bilibili", "id": "BVtalk", "duration": 300, "moments": [30.0], "avoid": []})
-    monkeypatch.setattr(footage_index, "search", lambda q, limit=8: [dict(r) for r in rows])
-    monkeypatch.setattr(footage_index, "frame_kinds", lambda row: kinds[row["id"]])
+    rows = {"收银员 扫码": [{"provider": "bilibili", "id": "BVnew1", "duration": 300, "moments": [90.0, 12.0]},
+                          {"provider": "bilibili", "id": "BVshort", "duration": 6, "moments": [3.0]}],
+            "超市": [{"provider": "bilibili", "id": "BVnew2", "duration": 300, "moments": [55.0]},
+                    {"provider": "bilibili", "id": "BVnew3", "duration": 300, "moments": [20.0]}]}
+    asked = []
+    def find(words, limit=6, exclude=None, penalize=None, foreign_ok=False, people=None):
+        asked.append((" ".join(words), set(exclude or ())))
+        return [dict(r) for r in rows.get(" ".join(words), []) if f"bilibili:{r['id']}" not in (exclude or ())]
+    monkeypatch.setattr(footage_index, "find", find, raising=False)
+    monkeypatch.setattr(express_plan, "library_words", lambda shot: [["收银员", "扫码"], ["超市"], ["收银台"]], raising=False)
     monkeypatch.setattr(m, "resolve", lambda sources: {k: {"available": True} for k in sources})
     jobs = m.library_jobs(project["shots"], {"x": used}, {}, {})
     picked = [(j[1], j[2]["tile"]["source"]["id"], j[2]["start"]) for j in jobs]
-    # Unused videos only, not the commentary one; a filmed frame between filmed neighbours (12 s sits next to a
-    # presenter frame); two candidates for the first line, nothing new left for the second.
-    first = project["shots"][0]["id"]
-    assert picked == [(first, "BVnew1", 89.0), (first, "BVnew2", 54.0)]
-    assert all(j[2]["lane"] == "library" for j in jobs)
+    first, second = (s["id"] for s in project["shots"])
+    # Videos the film does not show yet, at the matching moment (a second early, the frame inside the window); a video
+    # too short for the line is skipped; every line takes different videos.
+    assert picked == [(first, "BVnew1", 89.0), (first, "BVnew2", 54.0), (second, "BVnew3", 19.0)]
+    assert all(j[2]["lane"] == "library" and j[2]["moment"] == j[2]["tile"]["t"] for j in jobs)
+    assert "bilibili:BVused" in asked[0][1]
+
+
+def test_lines_without_their_own_words_take_single_words_then_the_film_topic(data, monkeypatch):
+    from jinggao import express_plan
+    shot = planner.new_shot("一。") | {"duration": 5.0}
+    m = _matcher(data, [shot])
+    m.plan = {"topic": {"zh": ["家庭教育 孩子 手机 电视剧片段"]}, "domain": "家庭教育"}
+    monkeypatch.setattr(express_plan, "library_words", lambda s: [["中年男子", "摔手机"], ["男子", "愤怒"], ["手机"]],
+                        raising=False)
+    assert m.library_words(m.shots[0], (0, 1)) == [["中年男子", "摔手机"], ["男子", "愤怒"]]
+    wide = m.library_words(m.shots[0], "wide")
+    assert wide[0] == ["手机"] and wide[-1] == ["男子"]          # the vague word alone comes last
+    assert m.library_words(m.shots[0], "topic")[0] == ["家庭教育", "孩子"]
+
+
+def test_the_finished_film_is_checked_for_alike_shots_and_overused_videos(data, monkeypatch, tmp_path):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(6)]
+    m = _matcher(data, shots)
+    ids = [s["id"] for s in m.shots]
+    def clip(n, video, lane="pick"):
+        return {"tile": {"source": {"provider": "bilibili", "id": video}, "t": 10.0 * n}, "lane": lane, "job": f"j{n}"}
+    final = {ids[0]: clip(0, "BVa"), ids[1]: clip(1, "BVb"), ids[2]: clip(2, "BVc", "library"),
+             ids[3]: clip(3, "BVd", "repeat"), ids[4]: clip(4, "BVe", "near"), ids[5]: clip(5, "BVf")}
+    files = {sid: tmp_path / f"{sid}.mp4" for sid in ids}
+    for job in ("j0", "j1", "j2", "j3", "j4", "j5"):
+        m.clean[job] = {"crop": [0, 0, 1, 1], "zoom": 1.0}
+    # Shots 0, 2, 3 and 4 show one picture (a drama's girl in pink); 1 and 5 are other footage.
+    girl, other = [0b1010] * 3, [(1 << 63) - 1] * 3
+    looks = {ids[0]: girl, ids[1]: other, ids[2]: girl, ids[3]: girl, ids[4]: girl, ids[5]: [123456789] * 3}
+    monkeypatch.setattr(express_match.express_clean, "available", lambda: True)
+    monkeypatch.setattr(express_match.Matcher, "looks_of", staticmethod(lambda path, d: looks[Path(path).stem]))
+    redo = m.audit(final, files)
+    # The pick and the library window stay; the repeat and the near window of that picture go.
+    assert set(redo) == {ids[3], ids[4]}
+    assert m.similar == [4]
+    # One video in more than SOURCE_MAX shots: the extra ones go too.
+    final = {sid: clip(n, "BVsame") for n, sid in enumerate(ids[:3])}
+    looks.update({ids[0]: [0] * 3, ids[1]: [(1 << 64) - 1] * 3, ids[2]: [0xAAAAAAAAAAAAAAAA] * 3})
+    m.looked.clear()
+    assert set(m.audit(final, files)) == {ids[2]}
+    assert m.similar == []
+
+
+def test_windows_taken_from_the_library_teach_it_what_they_showed(data, monkeypatch):
+    from jinggao import footage_index
+    shot = planner.new_shot("一。") | {"duration": 5.0}
+    m = _matcher(data, [shot])
+    source = {"provider": "bilibili", "id": "BVx", "indexed": True, "moments": [40.0, 80.0]}
+    m.job_choice = {"a": {"tile": {"source": source, "t": 40.0}, "start": 39.0, "moment": 40.0},
+                    "b": {"tile": {"source": source, "t": 80.5}, "start": 79.0},
+                    "c": {"tile": {"source": source, "t": 120.0}, "start": 119.0},
+                    "d": {"tile": {"source": source, "t": 40.0}, "start": 39.0, "moment": 40.0}}
+    m.clean = {"a": {"crop": [0, 0, 1, 1], "zoom": 1.0}, "b": {"crop": [0, 0, 1, 1], "zoom": 1.0, "narrow": True},
+               "c": {"crop": [0, 0, 1, 1], "zoom": 1.0}}
+    m.fill_errors = {"d": "ConnectError: timed out"}
+    monkeypatch.setattr(express_match.screen_text, "installed", lambda: True)
+    written = []
+    monkeypatch.setattr(footage_index, "record_checks", lambda items: written.extend(items) or len(items), raising=False)
+    assert m.record_windows({"a": "画面出现主持人对着镜头讲话"}) == 2
+    assert {(w["t"], w["status"]) for w in written} == {(40.0, "presenter"), (80.0, "narrow")}
 
 
 def test_marked_clips_are_never_used_unless_the_setting_allows_them(data):

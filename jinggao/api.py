@@ -394,9 +394,10 @@ def create_app() -> FastAPI:
         if body.workers:
             config.update({"video_workers": str(body.workers)})
         batch, result = store.uid()[:12], []
+        folder = media.batch_folder(len(body.projects))
         for item in body.projects:
             p = store.new_project(**item.model_dump())
-            store.mutate(p["id"], lambda p: p.update(requirements=body.requirements))
+            store.mutate(p["id"], lambda p: p.update(requirements=body.requirements, save_folder=folder))
             job = store.enqueue(p["id"], "produce", {"resolution": body.resolution, "mode": "model", "batch": batch})
             result.append({"project_id": p["id"], "title": p["title"], "job_id": job["id"]})
         return {"batch": batch, "projects": result}
@@ -420,7 +421,10 @@ def create_app() -> FastAPI:
         except Exception:
             store.discard_project(project["id"])
             raise
+        # Every file of one audio batch goes to the folder of its first file.
+        folder = store.batch_folder(batch) if batch else None
         batch = batch or store.uid()[:12]
+        store.mutate(project["id"], lambda p: p.update(save_folder=folder or media.batch_folder(kind="音频批量")))
         job = store.enqueue(project["id"], "produce", {"resolution": resolution, "mode": "model", "batch": batch})
         return {"batch": batch, "project_id": project["id"], "title": name, "job_id": job["id"]}
 

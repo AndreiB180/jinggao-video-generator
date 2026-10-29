@@ -2,7 +2,7 @@
 
 Each pack is a list of Bilibili searches (2-4 words, often with 实拍/纪录片/航拍/空镜 to favour real
 footage over talking heads). The index also widens each pack with the tags its results carry
-(footage_index.expand), so these lists are seeds, not the whole vocabulary.
+(footage_index.tag_searches), so these lists are seeds, not the whole vocabulary.
 """
 
 

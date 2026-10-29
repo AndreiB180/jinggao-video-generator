@@ -65,6 +65,65 @@ def test_a_line_moving_sideways_between_frames_is_scrolling_text():
     assert not screen_text.classify([a, a])["moving"]
 
 
+def test_花字_is_told_from_subtitles_and_watermarks_by_the_size_of_its_characters():
+    # Boxes read on real B站 windows (footage-check calibration): the uploader's watermark at the top and plain
+    # subtitles at the bottom are as tall as 花字 boxes, their characters are not as wide. Both are cut away.
+    for ordinary in ([line("影视共享天堂 bilibili", (0.76, 0.02, 0.98, 0.11)), line("你当我是傻子吗", (0.36, 0.85, 0.64, 0.941))],
+                     [line("猫爷的渔场 Lilibili", (0.78, 0.01, 0.98, 0.098)), line("没有正规的培训", (0.28, 0.79, 0.71, 0.935))]):
+        result = screen_text.classify([ordinary])
+        assert not result["dense"] and sorted(m["kind"] for m in result["marks"]) == ["caption", "logo"], ordinary
+    # The meme's huge caption, a title card across the middle, an italic "凌晨" over a cut: 花字.
+    for big in (line("不要视奸我", (0.05, 0.82, 0.9, 0.95)), line("黄岩岛", (0.64, 0.44, 1.0, 0.72)),
+                line("凌晨", (0.12, 0.47, 0.28, 0.62)), line("笑死我了！", (0.32, 0.37, 0.64, 0.544))):
+        assert screen_text.classify([[big]])["dense"], big["text"]
+    # A card held up to the camera is footage; so is a short sign of ordinary size.
+    assert not screen_text.classify([[line("社会保障卡", (0.3, 0.4, 0.7, 0.52))]])["dense"]
+    assert not screen_text.classify([[line("中国南海", (0.67, 0.3, 0.98, 0.42))]])["dense"]
+    # A quote twice the size of the subtitles under it is 花字; the same subtitle in two frames is no quote.
+    quote = [[line("他是个蹩脚演员", (0.03, 0.74, 0.44, 0.877)), line("哎但是我要告诉唐纳德", (0.36, 0.88, 0.65, 0.955))]]
+    assert screen_text.classify(quote)["dense"]
+    same = [[line("这件事吵了一轮又一轮", (0.27, 0.87, 0.73, 0.98))], [line("这件事吵了一轮又一轮", (0.27, 0.87, 0.73, 0.98))]]
+    assert not screen_text.classify(same)["dense"]
+
+
+def test_an_account_name_is_a_watermark_wherever_it_is():
+    result = screen_text.classify([[line("@情感剧场", (0.36, 0.53, 0.64, 0.66))]])
+    assert not result["dense"] and result["marks"] == [{"kind": "logo", "box": [0.36, 0.53, 0.64, 0.66]}]
+    # In the middle the crop cannot take it off: the window stays dirty.
+    clean = {"content": [0, 0, 1, 1], "overlays": [], "central": [], "crop": [0, 0, 1, 1], "zoom": 1.0, "residual": [],
+             "src_aspect": 16 / 9, "size": [854, 480]}
+    assert express_clean.dirty(express_clean.recrop(clean, result["marks"], 16 / 9))
+    assert not screen_text.account(line("他在抖音上发了一段视频"))
+
+
+def test_whatever_is_written_in_the_caption_band_goes_with_the_crop():
+    # A handwritten vlog caption read badly, and the pinyin over it read word by word (a real window).
+    lines = [line("還里看不體满雳！", (0.26, 0.78, 0.7, 0.97), score=0.635), line("zhè", (0.29, 0.83, 0.33, 0.86))]
+    assert [m["kind"] for m in screen_text.classify([lines])["marks"]] == ["caption", "caption"]
+    assert screen_text.classify([[line("城市夜景", (0.4, 0.4, 0.6, 0.46), score=0.65)]])["marks"] == []
+
+
+def _scene(seed, size=(320, 180)):
+    import random
+    random.seed(seed)
+    image = Image.new("RGB", size, (90, 110, 70))
+    draw = ImageDraw.Draw(image)
+    for _ in range(80):
+        x, y = random.randrange(size[0]), random.randrange(size[1])
+        draw.rectangle((x, y, x + 30, y + 20), fill=tuple(random.randrange(256) for _ in range(3)))
+    return image
+
+
+def test_text_that_pops_in_over_a_steady_shot_or_stays_put_over_a_cut_is_an_overlay():
+    popup = line("太扎心了", (0.38, 0.42, 0.62, 0.52))      # ordinary size: the size rule alone says scenery
+    shot, other = _scene(1), _scene(2)
+    assert not screen_text.classify([[popup], []])["dense"]                       # without the frames
+    assert screen_text.classify([[popup], []], images=[shot, shot])["dense"]      # gone a second later, same shot
+    assert not screen_text.classify([[popup], []], images=[shot, other])["dense"] # a cut: the sign may have left
+    assert not screen_text.classify([[popup], [dict(popup)]], images=[shot, shot])["dense"]   # a sign stays
+    assert screen_text.classify([[popup], [dict(popup)]], images=[shot, other])["dense"]      # pinned over a cut
+
+
 def _picture(lines, size=(960, 540)):
     image = Image.new("RGB", size, (40, 90, 120))
     draw = ImageDraw.Draw(image)

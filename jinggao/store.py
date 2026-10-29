@@ -203,6 +203,21 @@ def job_update(job_id: str, **changes) -> None:
                     (*changes.values(), job_id))
 
 
+def batch_folder(batch: str) -> str | None:
+    """The dated output subfolder of a batch's earlier films (an audio batch arrives one file at a time)."""
+    with connection() as con:
+        rows = con.execute("SELECT p.body FROM jobs j JOIN projects p ON p.id=j.project_id "
+                           "WHERE json_extract(j.payload, '$.batch')=? ORDER BY j.created LIMIT 5", (batch,)).fetchall()
+    for row in rows:
+        try:
+            folder = json.loads(row[0]).get("save_folder")
+        except (ValueError, TypeError):
+            continue
+        if folder:
+            return folder
+    return None
+
+
 def cancel_all(batch: str | None = None) -> dict:
     """Cancel every queued and running video job at once (or one batch's): queued ones stop now, running
     ones at their next check. The footage index build (background lane) is left alone."""

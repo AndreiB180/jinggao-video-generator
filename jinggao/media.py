@@ -334,12 +334,27 @@ def export_name(project: dict) -> str:
     return first or str(project.get("title") or "")
 
 
+def batch_folder(count: int | None = None, when: float | None = None, kind: str = "批量") -> str:
+    """The subfolder one batch's films go to, named by when it was started ("10月28日 14点05分 批量50条"): the client
+    makes about a hundred a day and could not tell today's from yesterday's in one folder."""
+    t = time.localtime(when if when is not None else time.time())
+    return f"{t.tm_mon}月{t.tm_mday}日 {t.tm_hour:02d}点{t.tm_min:02d}分 {kind}" + (f"{count}条" if count else "")
+
+
+def day_folder(when: float | None = None) -> str:
+    """Films made one at a time share one folder a day."""
+    t = time.localtime(when if when is not None else time.time())
+    return f"{t.tm_mon}月{t.tm_mday}日 单条"
+
+
 def deliver(project: dict, result: dict) -> str:
-    """Copy a finished export to the output folder as <title>.mp4; the subtitle file goes one level down so
-    players that auto-load a same-named .srt do not show the subtitles twice."""
+    """Copy a finished export to the output folder as <title>.mp4, inside the batch's dated subfolder (films made
+    one at a time: one folder a day); the subtitle file goes one level down so players that auto-load a
+    same-named .srt do not show the subtitles twice."""
     if config.read().get("auto_save_exports", "1") != "1":
         return ""
-    folder = output_folder()
+    sub = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", str(project.get("save_folder") or day_folder())).strip(" .")[:60]
+    folder = output_folder() / (sub or day_folder())
     folder.mkdir(parents=True, exist_ok=True)
     name = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", export_name(project)).strip(" .")[:60] or "成片"
     stem, n = name, 2

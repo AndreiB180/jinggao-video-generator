@@ -82,12 +82,56 @@ def _close_copy(port: int, info: dict) -> None:
     print(f"已关闭正在运行的镜稿 {info.get('version', '旧版本')}（端口 {port}），改为启动 {__version__}", flush=True)
 
 
+def keep_log() -> None:
+    """Everything this window prints also goes to 镜稿日志.txt in the shared %APPDATA%\\Jinggao folder (every
+    unpacked copy on this computer writes there, so a copy closed by another one is seen too), and a native crash
+    leaves its traceback there: a client whose service "closes by itself" sends that file instead of photos of a
+    window that is gone."""
+    import atexit
+    import faulthandler
+    import sys
+    folder = paths.KEEP or paths.DATA
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / "镜稿日志.txt"
+        if path.exists() and path.stat().st_size > 2_000_000:
+            path.replace(path.with_name("镜稿日志-旧.txt"))
+        log = open(path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    class Tee:
+        def __init__(self, stream):
+            self.stream = stream
+        def write(self, text):
+            for target in (self.stream, log):
+                try:
+                    if target is not None:
+                        target.write(text)
+                except (OSError, ValueError):
+                    pass
+            return len(text)
+        def flush(self):
+            for target in (self.stream, log):
+                try:
+                    if target is not None:
+                        target.flush()
+                except (OSError, ValueError):
+                    pass
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+    log.write(f"\n==== {time.strftime('%Y-%m-%d %H:%M:%S')} 镜稿 {__version__} 启动，进程 {os.getpid()}，文件夹 {paths.ROOT}\n")
+    sys.stdout, sys.stderr = Tee(sys.stdout), Tee(sys.stderr)
+    faulthandler.enable(file=log, all_threads=True)
+    atexit.register(lambda: log.write(f"==== {time.strftime('%Y-%m-%d %H:%M:%S')} 进程 {os.getpid()} 正常退出\n"))
+
+
 def main():
     parser = argparse.ArgumentParser(description="镜稿本地视频工作台")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     paths.prepare()
+    keep_log()
     config.migrate()
     ownership = instance.acquire()
     if ownership is None:

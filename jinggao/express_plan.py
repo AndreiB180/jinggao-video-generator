@@ -3,23 +3,38 @@
 The script is split locally into one subtitle line per shot (every character kept),
 then a cheap text request (one per ~100 shots) groups shots that can share footage
 searches and returns Chinese (Bilibili) and English (stock) queries, a short visual
-target per shot, and the named people that must really appear.
+target per shot, words to find the shot in the local footage library ("k"), and the
+named people that must really appear.
 """
 from __future__ import annotations
 
+import functools
 import math
 import re
 
-from . import captions, identity, planner, subtitle_style
+from . import captions, footage_index, identity, planner, subtitle_style
 
 MAX_SHOTS = 400
 BATCH = 100
+
+# The local library (footage_index.find) is searched by words that must all be on one described frame, each
+# widened through the describer's own vocabulary (footage_index.expand: 父亲 → 父子/中年男…, 摔手机 → 砸东西/摔碎…).
+# Its describer writes what it sees: people by look (中年男子 far more often than 父亲), plain actions, objects
+# and places. These are words it wrote on filmed frames of the seed (assets/footage-index, 886k filmed frames,
+# counted 2026-10-28): each is on 100+ frames, most on thousands. The plan prompt lists them so a cheap model
+# asks in words the library has, not in ideas (教育, 透支) or search wording (空镜, 短剧片段).
+LIBRARY_PEOPLE = ("男子 女子 男孩 女孩 少年 男生 女生 学生 小孩 年轻男子 年轻女子 中年男子 中年女子 老人 情侣 男女 夫妻 "
+                  "一家三口 母子 父子 老师 医生 警察 工人 顾客 人群")
+LIBRARY_ACTS = ("看手机 玩手机 打电话 交谈 争吵 争执 哭泣 拥抱 牵手 微笑 愤怒 低头 沉思 疲惫 无奈 吃饭 做饭 洗碗 写字 学习 "
+                "看书 写作业 睡觉 行走 背影 排队 购物 上课 考试 开会 数钱")
+LIBRARY_THINGS = ("手机 电脑 书包 行李箱 书本 试卷 台灯 钞票 餐桌 沙发 床上 卧室 客厅 厨房 宿舍 教室 校园 校门 操场 图书馆 "
+                  "走廊 街道 医院 病房 办公室 超市 餐厅 车内 地铁 法庭 工厂 农村 小区 阳台")
 
 SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的镜头，请为找“实拍视频素材”做检索规划。
 只输出 JSON：
 {"domain":"..","ancient":[],"event":[],"topic":{"zh":["..",".."],"en":["..",".."]},
  "groups":[{"id":"G1","zh":["..",".."],"en":["..",".."],"person":""}],
- "shots":[{"id":"S1","g":"G1","v":"..","p":[]}]}
+ "shots":[{"id":"S1","g":"G1","v":"..","k":["..","..",".."],"p":[]}]}
 规则：
 1. groups：把画面内容相近、可以共用同一批素材的镜头归为一组（每组2-4个镜头，可以不相邻），组数不少于镜头数的四分之一、不超过镜头数的一半，最多20组。组分得太粗，全片只有几批素材，画面会翻来覆去重复。
 2. zh：2个B站检索词，每个2-4个短词、用空格分隔。必须带上这组口播里出现的具体名称（国家、地区、城市、组织、人名、品牌、型号之一），再写具体可见的画面主体，例如“也门 胡塞 导弹 袭击”“沙特 联军 空袭”“红海 驱逐舰”“集装箱码头 岸桥 吊装”。时事新闻（战争冲突、外交、政治、社会事件）加“新闻”或“现场”；历史题材可加“纪录片/历史影像”；只有泛泛的场景（城市、自然、生活）才用“航拍/空镜/素材”。讲人的镜头（官员、领导人、民众、士兵、当事人、开会、讲话、抗议）检索词写人物和场景（如“也门 总理 讲话”“萨那 街头 民众”“沙特 王储 会见”），不要写武器装备；同一篇里各组的检索词要互相错开，不要几组都搜同一类画面。情感、婚姻、家庭、职场、社会故事（没有真实新闻画面的个人经历）的镜头，检索词写情节加“电视剧片段”或“短剧”，如“夫妻 吵架 电视剧片段”“妻子 查看 丈夫手机 短剧”“婆媳 争执 电视剧”，这类片段有真人有情绪，比空镜好。不要写抽象概念、观点或整句，也不要只写“导弹”“军舰”“港口”这种不带名称的泛词（会搜到别国别处的画面）。
@@ -31,7 +46,15 @@ SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的�
 9. ancient：口播里出现的、生活在照相术出现（约1840年）以前的具名古人姓名（如范仲淹、包拯、李白），没有就空数组；这些人不可能有真实影像。
 8. domain：整篇所属的宽泛领域，2-6字（如“乒乓球”“集装箱港口”“兰州牛肉面”“宋朝历史”“人工智能”）。不要用文章标题、具体事件或人物（讲范仲淹救灾写“宋朝历史”，不能写“范仲淹荒政”）。时事新闻写事件所在的国家或地区（如“也门”“俄乌”“台海”“日本”），不要写“局势”“形势”“问题”“风云”这类抽象词（搜不到画面）。除带具体人名的检索词外，每个 zh 检索词都要包含这个领域词，避免搜到同名的其他领域（例如讲乒乓球世界排名，要写“乒乓球 世界排名”，不能只写“世界排名”）。
 10. 古人（ancient 里的人）：他们没有真实影像，组的 zh 检索词写能搜到影视剧、纪录片片段的词，如“范仲淹 电视剧 片段”“范仲淹 纪录片”；普通历史画面的组写朝代场景，如“宋朝 市井 影视剧”“古代 粮仓 纪录片”“宋代 西湖 画舫”，尽量是有动作的视频画面，少用静态插画。
-11. event：若整篇讲的是一件具体的新闻事件（有明确的当事方、地点或时间，例如某次袭击、某场会谈、某起案件），给 2-3 个能在 B 站搜到这件事新闻报道视频的检索词，每个 3-5 个短词，写当事方 + 地点 + 事件（如“胡塞 导弹 袭击 亚丁 总统府”“也门 内阁 会议 遇袭”“沙特 联军 空袭 萨那”）；讲的是泛泛的话题、个人故事、历史或科普，给空数组。"""
+11. event：若整篇讲的是一件具体的新闻事件（有明确的当事方、地点或时间，例如某次袭击、某场会谈、某起案件），给 2-3 个能在 B 站搜到这件事新闻报道视频的检索词，每个 3-5 个短词，写当事方 + 地点 + 事件（如“胡塞 导弹 袭击 亚丁 总统府”“也门 内阁 会议 遇袭”“沙特 联军 空袭 萨那”）；讲的是泛泛的话题、个人故事、历史或科普，给空数组。
+12. k：每个镜头 3 组“素材库画面词”，从具体到宽泛，用来在本地素材库里按词找画面。库里每一帧都配了一句看图写的短描述（如“中年男子坐在摊位前低头看手机”“一男一女在室内争执”），一组里的词要能同时出现在一句这样的描述里，所以只写镜头拍得到的人、动作、表情、物件、地点：
+- 每组 1-3 个词，词和词之间空格隔开（写“男孩 玩手机”，不写“男孩玩手机”），每个词 2-4 个字。第1组最具体（人物+动作或物件），第2组放宽（换成更常见的说法或组合，如人物+表情、人物+地点），第3组最宽：这句的主要人物，或人物+表情、动作。不要整组只有物件或地点：单写“手机”搜到的是手机评测，单写“卧室”“城市”“校园”是空镜；物件最好连着动作写（玩手机、摔手机、拖行李箱），“中年男子 手机”搜到的也多是手机评测。
+- 人物写镜头里看得出的人，不写名字：父亲、母亲、儿子、女儿、丈夫、妻子、大学生、老人这样的称呼可以直接写（库会换成看图描述里的说法）；恋人、男友、女友写“情侣”，丈夫和妻子在一起写“夫妻”，一家人写“一家三口”。
+- 尽量用库里常见的词。人物：""" + LIBRARY_PEOPLE + "；动作表情：" + LIBRARY_ACTS + "；物件地点：" + LIBRARY_THINGS + """。其他题材也用这样朴素的画面词（如 士兵 坦克 爆炸 废墟 港口 集装箱 农田 古装）。
+- 不写人名和化名（小夏、老周、张女士）、数字、金额、比例；不写抽象词（教育、底线、成长、压力、关系、透支）和屏幕画面（截图、文字、数据）；不写检索用语和风景（电视剧片段、短剧、新闻、现场、素材、空镜、航拍、风景、夜景）。只有这句讲的就是某个地方、里面没有人时，才只写地点。
+- 讲观点、数据、道理的句子，写这个故事主角的一个具体场景（讲大学生同居写“情侣 争吵”“大学生 学习”，讲孩子沉迷手机写“男孩 玩手机”）。
+- 讲中国的人和事不要写“外国”。
+例：“父亲一时火起把手机摔了个稀碎”→"k":["男子 摔手机","摔手机","父亲 愤怒"]；“大学生情侣拖着行李箱搬进校外出租屋”→"k":["情侣 行李箱","大学生 行李箱","情侣 搬家"]；“每三对校园情侣里，就有一对选择了校外同居”→"k":["情侣 校园","情侣 牵手","情侣"]。"""
 
 
 def _text(value, limit) -> str:
@@ -58,6 +81,222 @@ def _queries(values, limit, ascii_only=False) -> list[str]:
         if text not in result:
             result.append(text)
     return result[:2]
+
+
+# More words the describer writes, for plans made before "k" existed and for a visual the user typed (their
+# sets come from the text), kept apart as people, actions and things: a set needs a person or an action, since a
+# lone thing or place finds the thing itself (手机 phone reviews, 城市 skylines, 卧室 empty rooms).
+MORE_WHO = "孩子 年轻人 大学生 父母 少女 小男孩 小女孩 婴儿 护士 农民 厨师 司机 行人 同学 朋友 士兵 老板 员工"
+MORE_ACTS = ("聊天 搬家 搬运 开车 骑车 跑步 奔跑 喝酒 抽烟 喝水 化妆 讲课 讲话 演讲 握手 鼓掌 跪地 倒地 摔倒 受伤 手术 "
+             "输液 紧张 惊讶 担忧 失落 孤独 焦虑 大笑 皱眉 看电视 打游戏 玩游戏 摔手机 摔东西 打架 下棋 跳舞 钓鱼 唱歌 "
+             "打扫 干活 劳作 上班 加班 工作 打球 游泳 散步 逛街 熬夜 发呆 洗澡 摆摊 吃药 爆炸 签字 会议 古装")
+MORE_THINGS = ("外卖 快递 礼物 蛋糕 红包 现金 平板 耳机 冰箱 家具 装修 汽车 轿车 电动车 自行车 公交车 火车 高铁 飞机 机场 "
+               "车站 学校 大学 小学 幼儿园 食堂 房间 出租屋 公寓 公园 河边 路边 天台 商场 夜市 菜市场 酒吧 会议室 车间 工地 "
+               "田间 村庄 城市 街头 楼道 电梯 诊室 病床 黑板 讲台 校服 窗边 门口 镜子 电视 小吃 小狗 小猫 小船 小镇 小巷 "
+               "老街 坦克 废墟 港口 集装箱 农田 导弹 军舰")
+LIBRARY_WHO = frozenset((LIBRARY_PEOPLE + " " + MORE_WHO).split())
+LIBRARY_DOING = frozenset((LIBRARY_ACTS + " " + MORE_ACTS).split())
+LIBRARY_STUFF = frozenset((LIBRARY_THINGS + " " + MORE_THINGS).split())
+LIBRARY_VOCAB = LIBRARY_WHO | LIBRARY_DOING | LIBRARY_STUFF
+# People seen together: a frame of a couple is described as 情侣 or 一男一女, not as two 学生.
+LIBRARY_PAIRS = ("情侣", "男女", "夫妻", "一家三口", "母子", "父子")
+# footage_index.expand widens a word to the describer's (父亲 → 父子/中年男…, 男友 → 情侣/恋人…, 丈夫 → 夫妻/夫妇,
+# 家长 → 父母/母子/中年女…), so a word its table knows is kept as the model wrote it: rewriting 男友 as 年轻男子
+# or 丈夫 as 男子 here would lose the couple. These are role words its table lacks, as the closest word it knows.
+ROLES = {"男孩子": "男孩", "女孩子": "女孩", "小伙": "小伙子", "孩子们": "孩子", "爸爸妈妈": "父母", "宝妈": "母亲",
+         "宝爸": "父亲", "老两口": "老人", "老夫妻": "老人", "小夫妻": "夫妻", "年轻夫妻": "夫妻", "夫妻俩": "夫妻",
+         "情侣们": "情侣", "年轻情侣": "情侣", "男大学生": "大学生", "女大学生": "大学生", "父子俩": "父子",
+         "母子俩": "母子", "一家子": "一家人"}
+# Words no frame description carries, or that match footage of anything: search wording, screen pictures,
+# and the ideas a cheap model reaches for on opinion lines (unless footage_index knows them: 同居 → 情侣).
+NOT_SEEN = frozenset("""空镜 素材 画面 镜头 视频 片段 实拍 影视剧 电视剧 电视剧片段 短剧 剧照 新闻 现场 特写 近景 远景 全景
+高清 航拍 风景 夜景 天际线 截图 网页 评论区 弹幕 聊天记录 字幕 文字 图表 数据 数字 比例 调研 调查 教育 成长 未来 青春 压力
+底线 困局 观点 现象 社会 问题 关系 心理 情绪 爱情 感情 价值 意义 概念 信任 沟通 妥协 理解 矛盾 同居 透支 代价 选择 自由
+责任 独立 习惯 目标 计划 机会 现实 时间 金钱 道理 结果 影响 事件 事情 故事 生活 日常""".split())
+# A word with search wording or scenery in it asks for that, whatever else it holds (校园空镜, 城市航拍, 短剧片段).
+SEARCH_WORDING = re.compile(r"空镜|素材|片段|航拍|风景|全景|夜景|天际线|景色|美景|新闻|短剧|电视剧|影视剧|现场|特写|镜头|截图")
+# A count or an amount in a word (十六岁, 三对情侣, 八千块钱, 16岁男孩); 一 and 两 alone are in 一家, 一起, 两口子.
+COUNTED = re.compile(r"[0-9零〇一二两三四五六七八九十百千万亿几半]+[岁块元角年月日天号个次倍成对位名部台张件层]|[0-9]"
+                     r"|[零〇二三四五六七八九十百千万亿几]{2,}")
+# The describer marks foreigners ("外国男子"); a line about China asking for them finds the wrong people.
+FOREIGN = re.compile(r"外国|国外|海外|欧美|西方|老外|洋人")
+HAN_WORD = re.compile(r"[\u4e00-\u9fff]{2,6}")
+# A person with a phone is filmed looking at it: "person + 手机" finds phone reviews and unboxings (中年男子 手机,
+# 家长 手机: mostly reviewers), "person + 看手机" people on their phones (4 of 4 each, measured 2026-10-28).
+HELD = {"手机": "看手机"}
+# Lines no picture of a lone thing or place goes with: people are in them, or they give figures.
+PEOPLE_LINE = re.compile(r"[我你他她]|[%％]|百分之|比例|调查|统计|数据|报告显示|研究显示")
+
+
+@functools.lru_cache(maxsize=8192)
+def _alternatives(word: str) -> tuple:
+    """footage_index's alternatives for a word, the word first (just the word when its table lacks it)."""
+    return tuple(footage_index.expand(word)) or (word,)
+
+
+def _known(word: str) -> bool:
+    return len(_alternatives(word)) > 1
+
+
+def _role(word: str) -> str:
+    return word if _known(word) else ROLES.get(word, word)
+
+
+# The words the text fallback finds: the lists above, the role words, and the words footage_index's table
+# widens (沉迷游戏, 摔手机, 家长, 出租屋 …); single characters (家, 哭) would match inside anything.
+_VOCAB = LIBRARY_VOCAB | set(ROLES) | {w for w in getattr(footage_index, "_SYN", {})
+                                       if HAN_WORD.fullmatch(w) and not SEARCH_WORDING.search(w)}
+_LONGEST = max(map(len, _VOCAB))
+
+
+@functools.lru_cache(maxsize=8192)
+def _kind(word: str) -> str:
+    """What one word (or "/" alternatives) shows, "who", "doing" or "thing": by the lists above, the word
+    itself first, then its footage_index alternatives. A word in none that names no person counts as a thing,
+    so it does not hold up a set alone on a line about people (江西 校园 is campus scenery)."""
+    pieces = [p for p in word.split("/") if p]
+    for lists in ((p,) for p in pieces), (_alternatives(p) for p in pieces):
+        alternatives = [a for alts in lists for a in alts]
+        for kind, vocab in (("who", LIBRARY_WHO), ("doing", LIBRARY_DOING), ("thing", LIBRARY_STUFF)):
+            if any(a in vocab for a in alternatives):
+                return kind
+    if any(footage_index.PEOPLE.search(p) and not footage_index.NO_PEOPLE.search(p) for p in pieces):
+        return "who"        # 中年夫妻, 外国男子
+    return "thing"
+
+
+def _pair(word: str) -> bool:
+    return word in LIBRARY_PAIRS or any(a in ("情侣", "夫妻", "男女", "一家三口") for a in _alternatives(word))
+
+
+def _vocab_words(text: str) -> list[str]:
+    """Library words in a text, in order, the longest at each place (大学生, never 大学)."""
+    found, i = [], 0
+    while i < len(text):
+        for size in range(min(_LONGEST, len(text) - i), 1, -1):
+            piece = text[i:i + size]
+            if piece in _VOCAB:
+                found.append(_role(piece))
+                i += size
+                break
+        else:
+            i += 1
+    return list(dict.fromkeys(found))
+
+
+def _usable(word: str, avoid, narration: str) -> bool:
+    known = _known(word)
+    return bool(HAN_WORD.fullmatch(word) and not SEARCH_WORDING.search(word)
+                and (known or (word not in NOT_SEEN and not COUNTED.search(word)))
+                and (known or word in LIBRARY_VOCAB or not placeholder(word))   # 小夏/老周/张女士, but 小孩/阿姨
+                and not any(len(name) >= 2 and name in word for name in avoid)
+                and not (FOREIGN.search(word) and not FOREIGN.search(narration)))
+
+
+def _library_word(raw: str, avoid, narration: str) -> list[str]:
+    """One word as the model wrote it → the words to keep: itself; its usable "/" alternatives; for library
+    words written together (男孩玩手机, 情侣争吵, 中年男子摔手机) each of them, since find() wants the whole word
+    on one frame and the describer puts other words between (each part still matches the joined text, so this
+    only loosens); for a word with a count or a name in it (十六岁男孩, 钱学森讲课), the library words inside
+    it; for a phrase around one library word (中年夫妻, 校外同居), the phrase or that word."""
+    raw = raw.strip(" \"'“”‘’[]【】()（）《》<>.:：;；!！?？。·")
+    if "/" in raw:
+        kept = [w for w in dict.fromkeys(_role(w) for w in raw.split("/")) if _usable(w, avoid, narration)]
+        return ["/".join(kept[:3])] if kept else []
+    word = _role(raw)
+    if SEARCH_WORDING.search(word) or (word in NOT_SEEN and not _known(word)):   # 聊天记录 is a screenshot
+        return []
+    if word in _VOCAB:
+        return [word] if _usable(word, avoid, narration) else []
+    inside = [w for w in _vocab_words(word) if _usable(w, avoid, narration)]
+    if len(inside) >= 2 or not _usable(word, avoid, narration):
+        return inside
+    return ["/".join([word] + inside)]
+
+
+def _unique_sets(sets) -> list[list[str]]:
+    out, seen = [], set()
+    for words in sets:
+        words = list(dict.fromkeys(words))[:3]
+        if words and frozenset(words) not in seen:
+            seen.add(frozenset(words))
+            out.append(words)
+    return out[:3]
+
+
+def _as_seen(words: list[str]) -> list[str]:
+    """A set with a person: a thing they hold as they are seen with it (男孩 手机 → 男孩 看手机), unless another
+    word already says what is done with it (男子 摔手机 手机)."""
+    if not any(_kind(w) == "who" for w in words):
+        return words
+    return [HELD[w] if w in HELD and not any(w in o for o in words if o != w) else w for w in words]
+
+
+def only_things(words) -> bool:
+    """A word set of only things and places, no person and nothing done: searched alone it finds the thing
+    itself (手机 phone reviews, 城市 skylines, 卧室 empty rooms), not the line's people."""
+    return all(_kind(w) == "thing" for w in words)
+
+
+def _people_line(narration: str, avoid=()) -> bool:
+    return bool(PEOPLE_LINE.search(narration) or any(len(n) >= 2 and n in narration for n in avoid)
+                or any(_kind(w) == "who" for w in _vocab_words(narration)))
+
+
+def library_sets(value, avoid=(), narration: str = "") -> list[list[str]]:
+    """The plan's "k" for one shot, cleaned: at most 3 word sets (specific first) of at most 3 words, each
+    2-6 Chinese characters, or up to 3 such alternatives joined by "/". Also takes what cheap models send
+    instead of a list of strings: lists of lists, or one string with the sets split by commas. Names in
+    avoid (real people, a story's stand-ins), numbers, abstract and search words are dropped, and so is a set
+    of only things or places when the line has people or figures in it (it would be an empty-room 空镜)."""
+    if isinstance(value, str):
+        value = re.split(r"[，,;；|｜\n]+", value)
+    sets = []
+    for item in value if isinstance(value, list) else []:
+        words = []
+        for part in item if isinstance(item, list) else [item]:
+            if isinstance(part, str):
+                for raw in re.split(r"[\s、，,+＋]+", part):
+                    words += _library_word(raw, avoid, narration)
+        sets.append(_as_seen(words))
+    if _people_line(narration, avoid):
+        sets = [words for words in sets if words and not only_things(words)]
+    return _unique_sets(sets)
+
+
+def _text_sets(text: str, avoid=(), most: int = 3, things: bool = False) -> list[list[str]]:
+    """Word sets from a visual or narration text: one person (a pair first) with up to most-1 other library
+    words (things done before things seen), then fewer words. A narration line holds several scenes, so its
+    words are not asked for together (most=2): 父母 手机 书包 from "parents bought a phone, the boy took his
+    schoolbag" is on no frame. Without a person, something done leads; a text of only things and places gives
+    nothing (things=True: a visual the user typed, which may ask for a place)."""
+    words = [w for w in _vocab_words(text) if _usable(w, avoid, text)]
+    who = ([w for w in words if _pair(w)] or [w for w in words if _kind(w) == "who"])[:1]
+    other = [w for w in words if _kind(w) == "doing"] + [w for w in words if _kind(w) == "thing"]
+    if not who:
+        who = [w for w in other if _kind(w) != "thing"][:1] or (other[:1] if things else [])
+        other = [w for w in other if w not in who]
+    if not who:
+        return []
+    return _unique_sets(_as_seen(words) for words in (who + other[:most - 1], who + other[:1], who))
+
+
+def library_words(shot: dict) -> list[list[str]]:
+    """Word sets to look a shot up in the local footage library (footage_index.find takes one set), specific
+    first: the plan's "k", topped up from the visual text. A plan made before "k" existed gets them from
+    the visual alone (the narration when the visual holds no library word). A visual the user typed leads:
+    it corrects what the plan read into the narration."""
+    express = shot.get("express") if isinstance(shot.get("express"), dict) else {}
+    names = {str(p.get("name") or "") for p in shot.get("persons") or [] if isinstance(p, dict)}
+    narration = str(shot.get("narration") or "")
+    planned = library_sets(express.get("k"), names, narration)
+    visual = str(shot.get("visual") or "")
+    typed = shot.get("visual_origin") == "manual"
+    # A plan's visual is one scene of 6-14 characters; a longer one is the narration standing in for it.
+    seen = _text_sets(visual, names, 3 if len(visual) <= 16 else 2, things=typed)
+    if typed:
+        return _unique_sets(seen + planned + _text_sets(narration, names, 2))
+    return _unique_sets(planned + (seen or _text_sets(narration, names, 2)))
 
 
 # A shot shorter than about this many full-width characters flashes past (about 2 s at 4.5 characters a
@@ -161,10 +400,11 @@ def _ask(shots: list[dict], requirements: str, check=None, opening: bool = False
     least, most = max(1, math.ceil(len(shots) / 4)), min(20, max(1, len(shots) // 2))
     content = ("用户画面要求：" + (requirements.strip() or "无") + f"\n\n共 {len(shots)} 个镜头，groups 分 {least}-{most} 组。"
                + (OPENING if opening else "") + "\n镜头：\n" + "\n".join(lines))
-    max_tokens = min(8000, 900 + 70 * len(shots))
+    # About 70 tokens a shot for its row and its group's queries, plus about 25 for its library words ("k").
+    max_tokens = min(12000, 900 + 95 * len(shots))
     if check:
         check()
-    return planner.chat(SYSTEM, content, max_tokens=max_tokens, timeout=120, task="express_plan")
+    return planner.chat(SYSTEM, content, max_tokens=max_tokens, timeout=150, task="express_plan")
 
 
 def annotate(shots: list[dict], script: str, requirements: str = "", check=None) -> dict:
@@ -264,6 +504,10 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
         if group:
             shot.update(query=(group["zh"] or [shot["visual"]])[0], search_queries=list(group["zh"]))
             shot["express"]["zh"] = list(group["zh"])
+    # Local library words: no names (the describer never writes them; a stand-in's name only finds strangers).
+    avoid = known | stand_ins
+    for i, shot in enumerate(shots):
+        shot["express"]["k"] = library_sets(rows.get(f"S{i+1}", {}).get("k"), avoid, shot["narration"])
     if not topic["zh"]:
         topic["zh"] = [q for g in groups.values() if not g["person"] for q in g["zh"]][:2]
     if domain:

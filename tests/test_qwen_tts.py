@@ -158,13 +158,17 @@ def test_finished_export_is_copied_with_subtitles_one_level_down(tmp_path, monke
     export.mkdir(parents=True)
     (export / "video.mp4").write_bytes(b"mp4")
     (export / "subtitles.srt").write_text("1", "utf-8")
-    project = {"id": pid, "title": "范仲淹/荒政:三策"}
+    project = {"id": pid, "title": "范仲淹/荒政:三策", "save_folder": "10月28日 14点05分 批量50条"}
     result = {"path": "exports/e1/video.mp4"}
     first = media.deliver(project, result)
     second = media.deliver(project, result)
     assert Path(first).name == "范仲淹 荒政 三策.mp4" and Path(second).name == "范仲淹 荒政 三策（2）.mp4"
-    assert (out / media.SUBTITLE_FOLDER / "范仲淹 荒政 三策.srt").exists()
-    assert not list(out.glob("*.srt"))
+    batch = out / "10月28日 14点05分 批量50条"      # each batch in its own dated folder (the client, 10-28)
+    assert Path(first).parent == batch
+    assert (batch / media.SUBTITLE_FOLDER / "范仲淹 荒政 三策.srt").exists()
+    assert not list(batch.glob("*.srt"))
+    single = media.deliver({"id": pid, "title": "单条"}, result)
+    assert Path(single).parent == out / media.day_folder()     # films made one at a time: one folder a day
     plain = media.deliver(project, result | {"subtitles": False})
     assert Path(plain).name == "范仲淹 荒政 三策（3）.mp4"             # no "（无字幕）" in the name (client 10-25)
     scripted = media.deliver(project | {"script": "范仲淹为什么要抬高米价？\n第二句。"}, result)
@@ -219,3 +223,11 @@ def test_output_folder_follows_a_moved_videos_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(media, "_windows_videos", lambda: tmp_path / "gone")
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     assert media.output_folder() == tmp_path / "home" / "镜稿成片"
+
+
+def test_batch_folders_are_named_by_when_the_batch_started():
+    import time as _time
+    when = _time.mktime((2026, 10, 28, 9, 5, 0, 0, 0, -1))
+    assert media.batch_folder(50, when) == "10月28日 09点05分 批量50条"
+    assert media.batch_folder(when=when, kind="音频批量") == "10月28日 09点05分 音频批量"
+    assert media.day_folder(when) == "10月28日 单条"

@@ -330,7 +330,9 @@ class Bilibili:
             rows.append((0 if str(v.get("codecs", "")).startswith("avc") else 1, short, v.get("bandwidth") or 0, v))
         best_short = max((min(int(v.get("width") or 0), int(v.get("height") or 0)) for v in videos), default=0)
         if not rows:
-            return {"available": False, "best_short_edge": best_short}
+            # No DASH video at all under load comes with a v_voucher (risk control), not a verdict on the video.
+            return {"available": False, "best_short_edge": best_short,
+                    "voucher": bool((play.get("data") or {}).get("v_voucher"))}
         rows.sort(key=lambda row: row[:3])
         v = rows[0][3]
         urls = [v.get("baseUrl") or v.get("base_url")] + list(v.get("backupUrl") or v.get("backup_url") or [])

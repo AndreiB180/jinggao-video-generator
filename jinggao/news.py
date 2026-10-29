@@ -173,7 +173,9 @@ def make_project(item_id: str, *, aspect: str = "16:9", minutes: float | None = 
     project = store.new_project(title, "" if auto else draft, aspect)
     news = {key: item.get(key, "") for key in ("id", "title", "text", "url", "source", "published", "koubo", "koubo_title")} \
         | {"minutes": minutes}
-    project = store.mutate(project["id"], lambda p: p.update(news=news))
+    from .media import batch_folder
+    folder = (store.batch_folder(batch) or batch_folder(kind="新闻批量")) if batch else None
+    project = store.mutate(project["id"], lambda p: p.update(news=news, **({"save_folder": folder} if folder else {})))
     payload = {"resolution": resolution, "mode": "model"} | ({"batch": batch} if batch else {})
     job = store.enqueue(project["id"], "produce", payload) if auto else None
     _mark(item_id, project["id"])

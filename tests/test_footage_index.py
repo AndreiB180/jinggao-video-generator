@@ -154,7 +154,7 @@ def test_matcher_prefers_indexed_videos_and_their_matching_frames(data, monkeypa
 
 def test_tags_shared_by_a_topics_results_become_new_searches():
     rows = [row(f"BV{n}", "x", tags="漕运,运河,纪录片,宋朝,古代运输") for n in range(4)] + [row("BV9", "y", tags="漕运,游戏")]
-    more = fi.expand({"历史": rows}, {"运河"})
+    more = fi.tag_searches({"历史": rows}, {"运河"})
     assert ("历史", "漕运") in more and ("历史", "古代运输") in more
     assert not any(q in ("运河", "纪录片", "游戏") for _, q in more)       # used, generic or skipped words
     assert [fi.frame_count(d) for d in (60, 600, 3600)] == [8, 12, 16]

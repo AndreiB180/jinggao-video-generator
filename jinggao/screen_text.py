@@ -266,11 +266,47 @@ NOT_CONTACT = re.compile(r"[A-Z]{3}[UJZ]\s?\d{6,7}|bili[_ ]?\d+|0x[0-9a-f]{6,}|\
                          r"(?<!\d)(19|20)\d{2}[年/.-]\d{1,2}([月/.-]\d{1,2}日?)?|\d{1,2}月\d{1,2}日?|\d{1,2}:\d{2}(:\d{2})?", re.I)
 CJK = re.compile(r"[㐀-鿿]")
 TOP, BOTTOM = 0.22, 0.62      # within the picture: above TOP is the title/watermark band, below BOTTOM captions
-BIG_TEXT = 0.085              # a line this tall (share of the picture height) is 花字, not a subtitle (about 0.05)
+# 花字 is told from burned subtitles by the size of its characters, not by the height of its box: on 165 real
+# B站 windows (footage-check calibration, 10-28) subtitle boxes reached 0.15 of the picture height and the
+# "<UP主> bilibili" watermark 0.11, yet no subtitle character was wider than 0.14 picture heights; the meme's
+# "不要视奸我" is 0.30. Box heights alone (0.085) had turned 69 of 89 subtitled windows into 花字.
+BIG_TEXT = 0.085              # 花字 boxes in the title or caption band are at least this tall (share of the
+BIG_CHAR = 0.16               # picture height), with characters at least this wide (in picture heights)
+# Across the middle there are no subtitles to tell apart, only signs in the scene: a box this tall with
+# characters this wide is a title card or 花字 ("中国南海 黄岩岛", an italic "凌晨" over a cut); a 社保卡 held up
+# to the camera is 0.12 tall.
+MID_TEXT, MID_CHAR = 0.14, 0.12
+TALLER = 1.5                  # a caption-band line this much taller than the window's other caption lines (and with
+WIDER = 1.4                   # characters this much wider) is a 花字 quote above the subtitles
+# Account names and platform marks: "@情感剧场", "<UP主> bilibili" (OCR: Lilibili, bilisili, bi山…), "西瓜视频".
+# A watermark wherever it is: the crop or painting takes it off an edge; across the middle it stays in view.
+ACCOUNT = re.compile(r"[@＠]\s*\S|bili|bibi|libi|bilb|bi山|哔哩|头条号|百家号|视频号|企鹅号|(?:西瓜|好看|腾讯|搜狐)视频",
+                     re.I)
+PINYIN = re.compile(r"[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]")     # pinyin over a 花字 caption ("zhè lǐ yǒu"), read word by word
+SAME_SHOT, NEW_SHOT = 9.0, 28.0   # mean grey difference (0-255) of two read frames outside their text: one
+                                  # steady shot below the first, a cut or a big camera move above the second
 
 
 def _cjk(text: str) -> int:
     return len(CJK.findall(text))
+
+
+def account(line: dict) -> bool:
+    """An uploader's or platform's name (a short line): a watermark, not a caption or 花字."""
+    return _cjk(line["text"]) <= 12 and len(line["text"]) <= 28 and bool(ACCOUNT.search(line["text"]))
+
+
+def _size(line: dict, content, aspect: float) -> tuple[float, float]:
+    """(box height, width per character) of a line in heights of the picture inside content; a column of
+    characters (a box much taller than wide) gets 0 per character: its height is its length."""
+    x0, y0, x1, y1 = line["box"]
+    height = max(1e-6, content[3] - content[1])
+    h, w = (y1 - y0) / height, (x1 - x0) * aspect / height
+    if h > 1.5 * w:
+        return h, 0.0
+    text = line["text"]
+    units = _cjk(text) + 0.5 * len(re.sub(r"[㐀-鿿\s]", "", text))
+    return h, w / max(1.0, units)
 
 
 def contact(line: dict) -> bool:
@@ -301,35 +337,49 @@ def _union(boxes):
     return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
 
 
-def classify(frames: list[list[dict]], content=(0.0, 0.0, 1.0, 1.0)) -> dict:
-    """frames: read() of a few frames of one window (or of a source's previews).
+def classify(frames: list[list[dict]], content=(0.0, 0.0, 1.0, 1.0), aspect: float = 16 / 9,
+             images: list | None = None) -> dict:
+    """frames: read() of a few frames of one window (or of a source's previews); aspect: their width/height;
+    images: the frames themselves (frames_of), which lets overlays be told by how they behave over the scene.
 
     Returns {"contact": [texts], "marks": [{"kind", "box"}], "dense": bool, "moving": bool}: marks are
-    caption lines (kind "caption", cut away or blurred), title/watermark text at the top (kind "logo") and
-    text across the middle of the picture (kind "center"; the clip counts as dirty)."""
+    caption lines (kind "caption", cut away or blurred), title/watermark text at the top and account names
+    anywhere (kind "logo") and text across the middle of the picture (kind "center"; the clip counts as
+    dirty)."""
     found, marks, middle = [], [], []
+    big = _quotes(frames, content, aspect) | (_overlaid(frames, images, content) if images else set())
     for lines in frames:
         mid_lines = []
         for line in lines:
             if line["score"] < 0.7:
+                if len(line["text"]) >= 2 and _relative(line["box"], content)[0] >= BOTTOM:
+                    # Whatever is written in the caption band goes with the crop, read clearly or not: a
+                    # handwritten vlog caption (read as "還里看不體满雳", 0.64) stayed in view of a "crop" window.
+                    marks.append({"kind": "caption", "box": line["box"]})
                 continue
             if contact(line):
                 found.append(line["text"])
                 marks.append({"kind": "center", "box": line["box"]})
                 continue
+            if account(line):
+                marks.append({"kind": "logo", "box": line["box"]})
+                continue
             cjk, text = _cjk(line["text"]), line["text"]
             words = len(text.split())
             top, bottom = _relative(line["box"], content)
-            if cjk >= 2 and bottom - top >= BIG_TEXT and (bottom <= TOP + 0.08 or top >= BOTTOM - 0.05):
-                # Characters this tall in the title or caption band are 花字 or a meme caption (the client got
-                # a crying meme face over a huge red "不要视奸我", cropped as if it were a subtitle). In the middle,
-                # big letters are usually part of the scene (a 社保卡, a sign): the rules below judge those.
+            h, char = _size(line, content, aspect)
+            band = bottom <= TOP + 0.08 or top >= BOTTOM - 0.05
+            if cjk >= 2 and (id(line) in big or (char >= BIG_CHAR and h >= BIG_TEXT if band
+                                                 else char >= MID_CHAR and h >= MID_TEXT)):
+                # Characters this big are 花字, a title card or a meme caption, wherever they are (the client got
+                # a crying meme face over a huge red "不要视奸我", cropped as if it were a subtitle); so is text
+                # that comes and goes over a steady shot, or stays put while the scene changes under it.
                 marks.append({"kind": "center", "box": line["box"]})
                 middle.append(True)
                 continue
             if bottom <= TOP and (cjk >= 2 or len(text) >= 4):
                 marks.append({"kind": "logo", "box": line["box"]})
-            elif top >= BOTTOM and (cjk >= 2 or words >= 3):
+            elif top >= BOTTOM and (cjk >= 2 or words >= 3 or PINYIN.search(text)):
                 marks.append({"kind": "caption", "box": line["box"]})
             elif cjk >= 2:
                 mid_lines.append(line)
@@ -343,6 +393,79 @@ def classify(frames: list[list[dict]], content=(0.0, 0.0, 1.0, 1.0)) -> dict:
     if moving:
         marks.append({"kind": "center", "box": _union(moving)})
     return {"contact": sorted(set(found)), "marks": marks, "dense": bool(middle), "moving": bool(moving)}
+
+
+def _quotes(frames, content, aspect) -> set:
+    """ids of caption-band lines much bigger than the window's other caption lines: a 花字 quote or title over
+    the subtitles (the subtitles themselves are cut away). The same subtitle read in two frames is no other."""
+    from difflib import SequenceMatcher
+    from statistics import median
+    band = []
+    for lines in frames:
+        for line in lines:
+            if line["score"] < 0.7 or _cjk(line["text"]) < 3 or account(line) or contact(line):
+                continue
+            h, char = _size(line, content, aspect)
+            if _relative(line["box"], content)[0] >= BOTTOM - 0.05 and char:
+                band.append((line, h, char))
+    out = set()
+    for line, h, char in band:
+        others = [(oh, oc) for other, oh, oc in band if SequenceMatcher(None, other["text"], line["text"]).ratio() < 0.6]
+        if (others and h >= max(0.10, TALLER * median(o[0] for o in others))
+                and char >= WIDER * median(o[1] for o in others)):
+            out.add(id(line))
+    return out
+
+
+def _overlap_share(a, b) -> float:
+    w, h = min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1])
+    if w <= 0 or h <= 0:
+        return 0.0
+    return w * h / max(1e-9, min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1])))
+
+
+def _overlaid(frames, images, content) -> set:
+    """ids of lines across the middle that behave like an overlay, not like a sign in the scene: read in one
+    frame and gone in another of the same steady shot (花字 popping in and out), or the same words at the same
+    place in two frames whose scene changed under them (text pinned over a cut or a camera move)."""
+    from difflib import SequenceMatcher
+    if np is None or not images or len(images) != len(frames) or len(frames) < 2:
+        return set()
+    gw, gh = 64, 36
+    grey = [np.asarray(im.convert("L").resize((gw, gh), Image.BILINEAR), dtype=np.float32) for im in images]
+    inside = np.zeros((gh, gw), dtype=bool)
+    inside[int(content[1] * gh):math.ceil(content[3] * gh), int(content[0] * gw):math.ceil(content[2] * gw)] = True
+
+    aspect = images[0].width / max(1, images[0].height)
+
+    def candidate(line):
+        top, bottom = _relative(line["box"], content)
+        h, char = _size(line, content, aspect)
+        return (line["score"] >= 0.85 and _cjk(line["text"]) >= 2 and char and h >= 0.06 and bottom > TOP + 0.08
+                and top < BOTTOM - 0.05 and not account(line) and not contact(line))
+
+    out = set()
+    for i in range(len(frames)):
+        for j in range(i + 1, len(frames)):
+            keep = inside.copy()
+            for line in frames[i] + frames[j]:
+                x0, y0, x1, y1 = line["box"]
+                keep[int(y0 * gh):math.ceil(y1 * gh), int(x0 * gw):math.ceil(x1 * gw)] = False
+            if keep.mean() < 0.25:
+                continue           # mostly text: nothing left to judge the scene by
+            change = float(np.abs(grey[i] - grey[j])[keep].mean())
+            for these, those in ((frames[i], frames[j]), (frames[j], frames[i])):
+                for line in these:
+                    if not candidate(line):
+                        continue
+                    twins = [o for o in those if _overlap_share(o["box"], line["box"]) >= 0.3]
+                    if not twins and change <= SAME_SHOT:
+                        out.add(id(line))
+                    elif change >= NEW_SHOT and any(
+                            max(abs(p - q) for p, q in zip(o["box"], line["box"], strict=True)) <= 0.015
+                            and SequenceMatcher(None, o["text"], line["text"]).ratio() >= 0.8 for o in twins):
+                        out.add(id(line))
+    return out
 
 
 def _moving(frames) -> list:
