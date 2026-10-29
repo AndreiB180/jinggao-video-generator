@@ -189,6 +189,14 @@ class FootageStarved(BiliUnavailable):
     made again later on its own, without pausing the rest of the computer's videos."""
 
 
+class TooRepetitive(FootageStarved):
+    """The film would show the same pictures again and again because B站 refused the new videos it needed: made
+    again a little later instead (the client, 10-28: repeats make a film useless)."""
+
+
+REPEAT_RETRIES = 2      # films made again for too many repeats; the next time it is saved as it is, with a note
+
+
 class Budget(RuntimeError):
     pass
 
@@ -1935,6 +1943,13 @@ class Matcher:
                 for sid in sorted(members, key=keep_key)[SOURCE_MAX:]:
                     if sid not in exempt:
                         redo.setdefault(sid, f"全片有 {len(members)} 个镜头画面几乎一样")
+        for a, b in zip(sids, sids[1:]):
+            # The same video in neighbouring shots reads as one shot cut in two (S17/S18 of a dorm test film).
+            if key_of(a) == key_of(b) and b not in exempt and abs(self.position[a] - self.position[b]) == 1:
+                redo.setdefault(b, "和上一镜是同一个视频")
+        for sid in sids:
+            if final[sid].get("lane") == "reuse" and sid not in exempt:
+                redo.setdefault(sid, "同一段画面第二次出现")
         by_source = {}
         for sid in sids:
             by_source.setdefault(key_of(sid), []).append(sid)
@@ -2736,6 +2751,12 @@ class Matcher:
             if len(redo) > replaced:
                 self.notes.append(f"全片检查：还有 {len(redo) - replaced} 个镜头没找到更好的画面（"
                                   + "；".join(sorted(set(redo.values())))[:80] + "）")
+            left = len(redo) - replaced
+            refused = self.bili.blocked > 0 or any("风控" in n for n in self.notes)
+            tries = int(self.project.get("repeat_retries") or 0)
+            if refused and left >= max(3, 0.08 * len(self.shots)) and tries < REPEAT_RETRIES:
+                store.mutate(self.pid, lambda p: p.update(repeat_retries=tries + 1), internal=True)
+                raise TooRepetitive(f"B站限流中，{left} 个镜头只能用重复画面，稍后重新找一次")
             self.similar = []
             self.audit(final, files)     # the sizes reported are those of the film as saved
         stamp("audit", began)

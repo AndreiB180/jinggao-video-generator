@@ -746,7 +746,7 @@ def test_the_finished_film_is_checked_for_alike_shots_and_overused_videos(data, 
     final = {sid: clip(n, "BVsame") for n, sid in enumerate(ids[:3])}
     looks.update({ids[0]: [0] * 3, ids[1]: [(1 << 64) - 1] * 3, ids[2]: [0xAAAAAAAAAAAAAAAA] * 3})
     m.looked.clear()
-    assert set(m.audit(final, files)) == {ids[2]}
+    assert set(m.audit(final, files)) == {ids[1], ids[2]}    # never next to itself either
     assert m.similar == []
 
 

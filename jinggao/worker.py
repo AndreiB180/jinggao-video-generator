@@ -978,7 +978,9 @@ def run_once(stop=None, lane="main") -> bool:
                                       "B站一直限制这台电脑访问；请过一段时间再点重试，或在批量设置里把“B站限流时”改成继续做"))
         else:
             store.job_update(job["id"], status="interrupted", error=str(exc),
-                             message=(f"可用画面太少，{wait // 60} 分钟后自动重新找（第 {tries + 1} 次）" if starved else
+                             message=(f"B站限流，画面重复太多，{wait // 60} 分钟后自动重新找（第 {tries + 1} 次）"
+                                      if isinstance(exc, express_match.TooRepetitive) else
+                                      f"可用画面太少，{wait // 60} 分钟后自动重新找（第 {tries + 1} 次）" if starved else
                                       f"B站暂时限制访问，{wait // 60} 分钟后自动重做（第 {tries + 1} 次）"))
             again = store.enqueue(job["project_id"], job["kind"], (job.get("payload") or {}) | {
                 "bili_retries": tries + 1, "not_before": time.time() + wait})
