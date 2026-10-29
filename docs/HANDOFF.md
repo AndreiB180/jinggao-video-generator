@@ -422,6 +422,20 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.6.2：成片终审、堵不得体/外国、B站匀速不放弃（2026-10-29 夜，sha256 2d681427…）
+
+- `final_review`：合成前每镜三帧（按成片裁切）十镜一张交看图模型，只判硬伤（不得体、讲中国却是外国人、表情包式夸张/卡通/游戏/AI 图、
+  主持人/PPT/截图、水印台标素材站名花字字幕、竖屏黑边画中画模糊黑屏），具名人物和新闻镜头只判不换；其余从库里换一轮（`AUDIT_SECONDS`）。
+  第一版连"对不上"也判，一条标出三成、四分之三是对不上，换不出更好的还费时间 → 只判硬伤。
+- 堵来路：`footage_index.RACY`（描述词含内衣/泳装/亲热/浴缸/殴打/流血…，标题标签同）除非词里要；`SKIPPED_UPLOADS` 加擦边/性感/写真…；
+  讲中国人的行不用带人物的 Pixabay（`stock_people`）；补位单词不用纯物件和泛人物（`only_things`/`VAGUE`）；QA/选片提示加不得体。
+- 跨片：`penalties` 每被别的片用过一次扣 3（上限 8）。
+- B站：`throttle.bili_pace` 只给播放地址（view/playurl）全机匀速（`BILI_GAP` 0.3–2 秒，被拒翻倍、成功慢慢收回）；搜索和预览不排队
+  （先试过全排队，三条都卡在读预览 10 分钟）。`Bilibili._api` 连续被拒不再"本轮跳过B站"，原地冷却 60 秒再问，累计 `PATIENCE` 600 秒才放弃；
+  查重复后因限流没换掉的，原地等 `REFUSED_WAIT` 90 秒再补一轮。去掉整条重做（`REPEAT_RETRIES`=0）。规划每批 40 镜（67 镜超输出上限失败过）。
+- 宿舍机：r16（6 条）15.7 分钟、不同视频/镜 0.87；r18（3 条，最终代码）8.75 分钟，26/39/51 镜 6–8.5 分钟，39 镜 38 个视频、51 镜 44 个。
+  白天体检 6 路 + 测试在同一 IP 上把 B 站搞成持续限流（r15 57 分钟 6 条、每条重做两遍），之后测试时体检要停，体检改 3 路夜里跑。
+
 ## 0.6.1：提速（2026-10-29 晚，sha256 166dcd46…）
 
 用户嫌 0.6.0 慢（同时 3 条每条 8–20 分钟）。耗时大头是预览（一条读 256 个候选、11 分钟）和 B 站搜索，都卡在 B 站接口限流。
