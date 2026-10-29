@@ -830,7 +830,7 @@ def test_painting_follows_the_rendered_files_size_and_never_runs_past_its_edge()
 
 def test_video_info_and_play_addresses_are_asked_for_once(data, monkeypatch):
     calls = []
-    def api(self, url, params):
+    def api(self, url, params, paced=False):
         calls.append(url.rsplit("/", 1)[-1])
         if url.endswith("view"):
             return {"code": 0, "data": {"cid": 7, "pages": [{"duration": 300}], "duration": 300, "title": "t"}}

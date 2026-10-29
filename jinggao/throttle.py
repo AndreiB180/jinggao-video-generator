@@ -120,7 +120,7 @@ _pause = _Pause()
 # api.bilibili.com is asked at an even pace, one call this many seconds after the last on this computer: B站 refuses
 # bursts (three films asking for 80 play addresses at once were refused) while an even 2,000 calls an hour went
 # through for hours. A refusal doubles the gap, a run of answers narrows it again.
-BILI_GAP = (0.5, 4.0)
+BILI_GAP = (0.3, 2.0)
 SEATS = MAX_VIDEOS + 1
 _NAMES = list(LIMITS)
 _started = None    # per seat: when its current video started (0: idle); the background lane counts as latest
@@ -323,9 +323,11 @@ def bili_pace(check=None) -> None:
 
 
 @contextmanager
-def bili_call(check=None):
-    """One request to api.bilibili.com: waits out a shared pause and its turn, then takes one of the shared slots."""
+def bili_call(check=None, paced=False):
+    """One request to api.bilibili.com: waits out a shared pause (and, for play addresses, its turn at the even pace),
+    then takes one of the shared slots. Searches and previews are not paced: B站 refused the play addresses."""
     bili_wait(check)
-    bili_pace(check)
+    if paced:
+        bili_pace(check)
     with slot("bili_api", check):
         yield

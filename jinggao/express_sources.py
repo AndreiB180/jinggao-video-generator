@@ -170,7 +170,7 @@ class Bilibili:
     COOL_DOWN = 60          # seconds a refused film waits before asking again (it keeps everything it has)
     PATIENCE = 600          # ...and at most this long in all, then it gives up on B站 for this round
 
-    def _api(self, url: str, params: dict) -> dict:
+    def _api(self, url: str, params: dict, paced: bool = False) -> dict:
         if self.blocked >= 3:
             # Refused again and again: wait for B站 to calm down and go on, instead of giving up on B站 for the
             # round (the film then filled its lines with clips it already showed).
@@ -183,7 +183,7 @@ class Bilibili:
         with self.api_gate:
             for attempt in range(3):
                 self._warm()
-                with throttle.bili_call():
+                with throttle.bili_call(paced=paced):
                     r = self.client.get(url, params=self._sign(params))
                 if r.status_code == 412:
                     throttle.bili_refused(2.0 * (attempt + 1))
@@ -331,7 +331,7 @@ class Bilibili:
         path = _cache("bili-view") / f"{bvid}.json"
         data = _read_json(path, self.VIEW_TTL)
         if data is None:
-            view = self._api("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid})
+            view = self._api("https://api.bilibili.com/x/web-interface/wbi/view", {"bvid": bvid}, paced=True)
             if view.get("code") != 0:
                 raise ValueError(f"B站视频信息不可用：{view.get('message', '')}")
             full = view["data"]
@@ -361,7 +361,7 @@ class Bilibili:
         params = {"bvid": bvid, "cid": data["cid"], "qn": 80, "fnval": 4048, "fourk": 1, **self._dm()}
         if not self.logged_in:
             params["try_look"] = 1
-        play = self._api("https://api.bilibili.com/x/player/wbi/playurl", params)
+        play = self._api("https://api.bilibili.com/x/player/wbi/playurl", params, paced=True)
         if play.get("code") != 0:
             raise ValueError(f"B站播放地址不可用：{play.get('message', '')}")
         videos = ((play.get("data") or {}).get("dash") or {}).get("video") or []
@@ -400,7 +400,7 @@ class Bilibili:
             params["try_look"] = 1
         tracks = []
         for attempt in range(3):
-            play = self._api("https://api.bilibili.com/x/player/wbi/playurl", params)
+            play = self._api("https://api.bilibili.com/x/player/wbi/playurl", params, paced=True)
             tracks = ((play.get("data") or {}).get("dash") or {}).get("audio") or []
             if play.get("code") == 0 and tracks:
                 break
