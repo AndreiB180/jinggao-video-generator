@@ -465,6 +465,10 @@ FOREIGN = re.compile(r"外国|老外|欧美|西方|白人|黑人|金发|碧眼|�
 PEOPLE = re.compile(r"人|男|女|孩|童|婴|宝宝|学生|老师|医生|护士|警察|士兵|工人|夫妻|情侣|父|母|爸|妈|爷|奶|叔|姨|少年|"
                     r"少女|青年|顾客|乘客|游客|观众|球员|演员|歌手|选手|厨师|司机|农民|村民|员工|患者|病人|群众|他|她")
 NO_PEOPLE = re.compile(r"空无一人|无人|人民币|人行道|机器人|人造|人工")
+# Frames with sex appeal or violence: never for a marketing film (a platform limits accounts for them), unless a word
+# asks for it. The describer's own words (its top 600 include 比基尼, 内衣, 丝袜, 亲密).
+RACY = re.compile(r"比基尼|内衣|丝袜|泳装|泳衣|裸露|赤裸|半裸|光着身|赤膊|露背|性感|诱惑|暧昧|亲热|亲吻|接吻|吻|床戏|"
+                  r"擦边|走光|乳|胸部|翘臀|热裤|浴缸|洗澡|沐浴|淋浴|殴打|打人|掐|流血|鲜血|血迹|血腥|尸体|刀砍|捅")
 # Animals: a line about people searched with 母子 or 一家三口 found gorilla and giraffe mothers with their young.
 ANIMAL = re.compile(r"动物|宠物|猩猩|猴子|长颈鹿|大象|狮子|老虎|豹子|猎豹|熊猫|狗熊|黑熊|棕熊|北极熊|狼群|狐狸|鹿|斑马|河马|"
                     r"犀牛|袋鼠|企鹅|海豚|鲸|鲨鱼|猫|狗|犬|兔子|仓鼠|鹦鹉|小鸟|鸟类|飞鸟|母鸡|小鸡|鸭子|鹅|羊群|山羊|绵羊|"
@@ -591,9 +595,10 @@ def find(words: list[str], *, limit: int = 6, exclude: set[str] | None = None,
     foreign_ok = foreign_ok or any(FOREIGN.search(p) for s in specs for p in s["own"])
     period = any(PERIOD.search(a[0]) for s in specs for a in s["alternatives"])
     # Words about people never take an animal frame, unless a word asks for an animal ("男孩 遛狗").
-    if not any(ANIMAL.search(p) for s in specs for p in s["own"]) and any(
-            _people(p) for s in specs for p in s["own"]):
-        period = (period, "no_animals")
+    animals_asked = any(ANIMAL.search(p) for s in specs for p in s["own"])
+    no_animals = not animals_asked and any(_people(p) for s in specs for p in s["own"])
+    racy_ok = any(RACY.search(p) for s in specs for p in s["own"])
+    period = (period, "no_animals" if no_animals else "", racy_ok)
     wants = (people, period)
     try:
         with _conn() as con:
@@ -686,8 +691,9 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
     """(score, row) for one candidate video, or None when it or all its matching frames are unusable.
     wants: (people preference, whether a period picture was asked for)."""
     people, period = wants
-    no_animals = isinstance(period, tuple)
-    period = period[0] if no_animals else period
+    racy_ok = isinstance(period, tuple) and len(period) > 2 and period[2]
+    no_animals = isinstance(period, tuple) and period[1] == "no_animals"
+    period = period[0] if isinstance(period, tuple) else period
     row = json.loads(src["row"])
     duration = float(row.get("duration") or 0)
     if (src["flags"] == "host" or SKIP_TITLE.search(row.get("title") or "") or not 20 <= duration <= 3 * 3600
@@ -696,6 +702,8 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
     if title_spec and not _weight(" ".join(str(row.get(k) or "") for k in ("title", "tags", "query", "typename"))
                                   .lower(), "", title_spec):
         return None
+    if not racy_ok and RACY.search(str(row.get("title") or "") + str(row.get("tags") or "")):
+        return None          # a 擦边 upload: its other frames are no better
     if not foreign_ok and FOREIGN.search(str(row.get("title") or "")):
         return None          # 美国自驾、泰恐怖、留学vlog: the people in it are foreign even where a frame does not say so
     described = [m for m in moments if m["text"]]
@@ -717,6 +725,8 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
         if not foreign_ok and FOREIGN.search(low):
             continue
         if no_animals and ANIMAL.search(low):
+            continue
+        if not racy_ok and RACY.search(low):
             continue
         keywords = low.split("｜", 1)[1] if "｜" in low else ""
         weights = [_weight(low, keywords, spec) for spec in specs]

@@ -191,3 +191,15 @@ def test_a_seed_without_checks_installs_as_before(data, tmp_path, monkeypatch):
     (seed / "part-01.jsonl.gz").write_bytes(gzip.compress((json.dumps(line, ensure_ascii=False) + "\n").encode()))
     assert fi.install_seed(seed) == 1 and fi.check_stats()["windows"] == 0
     assert ids(fi.find(["情侣", "行李箱"])) == ["BV1oldseed01"]
+
+
+def test_no_sex_appeal_violence_or_animals_for_words_about_people(data):
+    video("BV1clean0001", (10, "母亲拥抱背着书包的男孩｜母子 拥抱 书包", "影视剧"), (40, "客厅", "影视剧"))
+    video("BV1racy00001", (10, "穿内衣的女子拥抱男子｜情侣 拥抱 内衣", "影视剧"), (40, "卧室", "影视剧"))
+    video("BV1bath00001", (10, "一男一女在浴缸里拥抱｜情侣 浴缸 拥抱", "影视剧"), (40, "浴室", "影视剧"))
+    video("BV1gorilla01", (10, "大猩猩妈妈拥抱小猩猩｜母子 拥抱 动物", "实拍"), (40, "丛林", "实拍"))
+    video("BV1fight0001", (10, "男子殴打另一名男子，地上有血迹｜殴打 冲突", "影视剧"), (40, "街道", "影视剧"))
+    video("BV1sexy00001", (10, "女子在室内拥抱男孩｜母子 拥抱", "影视剧"), (40, "室内", "影视剧"), title="性感美女擦边合集")
+    assert ids(fi.find(["母子", "拥抱"])) == ["BV1clean0001"]
+    assert ids(fi.find(["男子", "冲突"])) == []
+    assert "BV1bath00001" in ids(fi.find(["浴缸"]))       # a word asking for it is answered

@@ -94,7 +94,8 @@ NOISE_WORDS = re.compile(
     r"财经|行情|招聘|面试|求职|小说|有声书|电台|音乐|歌曲|BGM|bgm|伴奏")
 # Uploads that say they are sped up (re-uploaders speed clips up against duplicate checks) or are memes:
 # never used.
-SKIPPED_UPLOADS = re.compile(r"倍速|加速版|快进|变速|表情包|梗图|斗图")
+SKIPPED_UPLOADS = re.compile(r"倍速|加速版|快进|变速|表情包|梗图|斗图|擦边|性感|福利|比基尼|丝袜|写真|热舞|美腿|内衣|泳装|"
+                             r"吻戏|床戏|亲热|激情|大尺度")
 DRAMA_WORDS = re.compile(r"电视剧|电影|剧照|饰演|扮演|演员|剧情|混剪|AI|特型演员|模仿|cos|动画|动漫|漫画|手绘|配音|片段合集|"
                          r"朗诵|背景视频|LED|舞台|情景")
 PERSON_EVIDENCE = re.compile(r"影像|纪录|新闻|讲话|原声|视频|资料|珍贵|历史|现场|采访|发言|报道")
@@ -123,7 +124,7 @@ ARCHIVE_TITLE = re.compile(r"珍贵|影像|纪录片|央视|新闻|原声|档案
 PICK_SYSTEM = """你在为营销号视频挑选实拍素材。图片是若干视频的缩略图联系表，每格左上角有黄色编号。
 请为每个镜头挑出合适的格子编号（最好的在前，最多6个），只输出 JSON：{"S1":["12","7"],"S2":[]}。
 普通镜头标准：画面主体要和口播讲的对象一致（画面建议只是参考），不要求型号、年份、地点、动作逐一一致：讲人和人之间的事（夫妻、家人、同事、官员、民众、士兵），画面要有相应的人和场景，不选风景、空镜、物品；讲某个国家、组织的事，画面要是那个国家、组织的，不选别国的同类画面（讲也门战事不选中国火箭军、中国海军）；讲中国国内的人和事，不选明显是外国人或外国街景的画面。情感、家庭、社会故事可以选影视剧、短剧里情节相符的片段（有人物、有情绪）。
-必须排除：主持人或博主对镜头口播、PPT/文字页/图表/排行榜截图为主、手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面）、大面积马赛克、片头片尾和转场、频道订阅页、黑屏或严重模糊、大面积硬字幕/弹幕/贴纸/台标遮挡画面、游戏/动画/CG（除非口播就是讲这些）、与口播明显无关的内容、广告。
+必须排除：性暗示或暴露的画面（内衣、泳装、裸露身体、亲热接吻、床戏、擦边）、血腥暴力（殴打、流血）、主持人或博主对镜头口播、PPT/文字页/图表/排行榜截图为主、手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面）、大面积马赛克、片头片尾和转场、频道订阅页、黑屏或严重模糊、大面积硬字幕/弹幕/贴纸/台标遮挡画面、游戏/动画/CG（除非口播就是讲这些）、与口播明显无关的内容、广告。
 新闻、纪录片里真实存在的人物的脸部特写，除非该镜头要求此人物，否则尽量不选（容易被当成口播里讲的人）；影视剧、短剧里的演员不受此限。
 优先选有明显动作或镜头运动的视频画面；静态插画、照片、幻灯片式的画面尽量不选（口播在讲这幅画、这件文物时除外）。
 画面干净比贴题更重要：画面上有后加的大字、花字、标题条、水印、表情包、贴纸，或是竖屏、两边黑边/模糊边的，不选；宁可选大致相关但干净的画面。"""
@@ -147,7 +148,7 @@ TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体�
 
 QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
 对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
-bad：只列“明显不合格”的镜头。不合格指：任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克或打码；表情包、卡通表情、贴纸、梗图、对话气泡图标叠在画面上，或画面本身是表情包式的夸张反应镜头（对着镜头狂笑、做鬼脸）；画面上后加的大号花字、标题字（不是场景里本来就有的字）；整段画面静止不动（一张图片或定格）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
+bad：只列“明显不合格”的镜头。不合格指：任意一帧有性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），或血腥暴力（殴打、拉扯、流血）；任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克或打码；表情包、卡通表情、贴纸、梗图、对话气泡图标叠在画面上，或画面本身是表情包式的夸张反应镜头（对着镜头狂笑、做鬼脸）；画面上后加的大号花字、标题字（不是场景里本来就有的字）；整段画面静止不动（一张图片或定格）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
 wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
 股市K线和走势图、数据图表、商品和品牌logo、街道招牌、包装上的字是画面本身的内容，不算文字页，口播相关就合格。
@@ -441,7 +442,9 @@ class Matcher:
 
     def penalties(self) -> dict:
         """Library videos other recent films already show cost a little (a batch on one topic repeats itself)."""
-        return {key: min(6.0, 2.0 * count) for key, count in (self.elsewhere or {}).items()}
+        # Strong: a batch of a hundred films on a few topics must not show the same clips again (a platform reads that
+        # as re-posted content); a word score is about 1, so a video another film used comes after unused ones.
+        return {key: min(8.0, 3.0 * count) for key, count in (self.elsewhere or {}).items()}
 
     def foreign_ok(self, shot) -> bool:
         return bool(FOREIGN_LINE.search(shot.get("narration", "") + (self.plan.get("domain") or "")))
@@ -572,7 +575,8 @@ class Matcher:
                         score = self.score(row, g, shots_by_id)
                         if score is None:
                             continue
-                        if kind == "pixa" and (not self.stock_fits(row, q) or not self.oriented(row)):
+                        if kind == "pixa" and (not self.stock_fits(row, q) or not self.oriented(row)
+                                               or (self.stock_people(row) and not self.group_foreign(g))):
                             continue
                         ranked.append((score - rank * 0.04, row))
                     ranked.sort(key=lambda item: -item[0])
@@ -591,6 +595,18 @@ class Matcher:
                         local_taken[q] = taken
             chosen[g["id"]] = picked[:GROUP_SOURCES + len(library)]
         return chosen
+
+    STOCK_PEOPLE = re.compile(r"\b(man|men|woman|women|girl|boy|people|person|couple|family|child|children|kid|kids|baby|"
+                              r"student|students|businessman|lady|guy|friends|mother|father|senior|elderly|teen|teenager|"
+                              r"portrait|face|lovers|bride|groom|worker|workers|crowd)\b", re.I)
+
+    def stock_people(self, row) -> bool:
+        """Foreign stock footage of people (the dorm test films' foreign couples and silhouettes in a story about
+        Chinese students): only for lines about another country."""
+        return bool(self.STOCK_PEOPLE.search(" ".join(str(row.get(k) or "") for k in ("tags", "title", "description"))))
+
+    def group_foreign(self, group) -> bool:
+        return any(self.foreign_ok(self.shots_by_id_all[sid]) for sid in group.get("shots") or [] if sid in self.shots_by_id_all)
 
     def oriented(self, source) -> bool:
         """A portrait stock clip in a landscape project would be a thin strip; landscape stock crops fine to 9:16."""
@@ -891,7 +907,8 @@ class Matcher:
             for q in group.get("en", [])[:3]:
                 for row in results.get(("pixa", q), []):
                     if (row["id"] not in shown and row not in rows and self.stock_fits(row, q)
-                            and self.oriented(row) and float(row.get("duration") or 0) >= float(shot["duration"]) + MARGIN):
+                            and self.oriented(row) and float(row.get("duration") or 0) >= float(shot["duration"]) + MARGIN
+                            and not (self.stock_people(row) and not self.foreign_ok(shot))):
                         rows.append(row)
             if rows:
                 options[shot["id"]] = [({"source": row, "t": float(row.get("duration") or 0) / 2, "hash": None}, "stock")
@@ -982,7 +999,10 @@ class Matcher:
         planned = express_plan.library_words(shot) if hasattr(express_plan, "library_words") else []
         if levels in ("wide", "all"):
             words = list(dict.fromkeys(w for ws in reversed(planned) for w in ws))
-            wide = [[w] for w in sorted(words, key=lambda w: w in self.VAGUE)]
+            # Alone, a vague person word finds any stranger and a thing or a place finds reviews and scenery (a card
+            # reader for a line about a boy's phone): single words are people doing something, or a named role.
+            alone = getattr(express_plan, "only_things", None)
+            wide = [[w] for w in words if w not in self.VAGUE and not (alone and alone([w]))]
             if levels == "wide":
                 return wide
             # Every level at once, specific first: one download round instead of one per level (four rounds that
@@ -1832,6 +1852,79 @@ class Matcher:
             self.soft.setdefault(job_id, set()).add("wm")
 
     # ------------------------------------------------------------------- save
+    # ------------------------------------------------------------- final review
+    FINAL_SYSTEM = """你在替客户做营销号视频的成片终审：成片要直接发布，不能有任何一个镜头让观众觉得不对劲。
+图片每一行是成片里一个镜头的3张截图（左→右，就是观众看到的样子），行首黄色编号是镜头号；文字里有每个镜头的口播。
+只输出 JSON：{"bad":{"S3":"原因"}}，没有就 {"bad":{}}，原因不超过15字。
+只列明显不能直接发布的镜头：
+- 不得体：性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），血腥暴力（殴打、拉扯、流血）；
+- 口播讲中国的人和事，画面明显是外国人、外国街景或外国影视剧；
+- 和这句口播、也和整篇讲的人和事都对不上（莫名其妙的物件、无关的人群或风景；口播讲人的处境，画面却只有风景、空镜、航拍）；
+- 表情包式的夸张反应镜头（对着镜头狂哭狂笑、做鬼脸）、卡通动画、游戏画面、AI 图（口播在讲这些时除外）；
+- 主持人或博主对着镜头讲话、PPT 文字页、手机电脑屏幕截图；
+- 画面上能看到水印、台标、平台名或素材站名（如“光厂素材”）、账号名、花字、大段字幕；竖屏、黑边、画中画、严重模糊、黑屏。
+标为“要求人物”的镜头：画面是这个人本人的真实影像就合格。场景里本来就有的招牌、商品包装、钞票上的字不算。
+影视剧、短剧里演员表演口播讲的情节是合格的；细节、人物身份和口播不完全一致也合格，只要大致是这类人、这类事。"""
+    FINAL_ROWS = 10
+
+    def final_review(self, final, files) -> dict:
+        """The film as the viewer sees it, every shot against the client's bar (publish without touching it): three
+        stills of each shot as rendered, ten shots a sheet, one cheap look each. {sid: reason} of shots to replace;
+        a named person's own footage and news reports are judged but kept (no stand-in would be better)."""
+        order = [sid for _, sid in sorted((self.position[sid], sid) for sid in final if sid in files and sid in self.position)]
+        rows = []
+        for sid in order:
+            choice = final[sid]
+            if choice.get("lane") == "image":
+                continue        # a picture with slow motion: its own check chose it
+            try:
+                frames = self.qa_frames(choice.get("job") or sid, Path(files[sid]), self.shots_by_id_all[sid])
+            except Exception:   # noqa: BLE001 — an unreadable clip is left to the audit
+                continue
+            rows.append((sid, frames))
+        domain = self.plan.get("domain") or ""
+        def ask(part):
+            self.check()
+            label_w = 70
+            sheet = Image.new("RGB", (label_w + 3 * QA_W, len(part) * QA_H), (0, 0, 0))
+            draw, font, ids, lines = ImageDraw.Draw(sheet), _font(30), {}, []
+            for r, (sid, frames) in enumerate(part):
+                label = f"S{r + 1}"
+                ids[label] = sid
+                draw.rectangle((0, r * QA_H, label_w - 4, r * QA_H + 44), fill=(255, 214, 0))
+                draw.text((6, r * QA_H + 4), label, font=font, fill=(0, 0, 0))
+                for c, frame in enumerate(frames[:3]):
+                    sheet.paste(frame.resize((QA_W, QA_H)), (label_w + c * QA_W, r * QA_H))
+                shot = self.shots_by_id_all[sid]
+                names = "、".join(p["name"] for p in shot.get("persons") or [])
+                role = f"｜要求人物：{names}" if names and final[sid].get("base_lane", final[sid].get("lane")) in (
+                    "pick", "person", "person_near") else ""
+                lines.append(f"{label} 口播：{shot['narration']}{role}")
+            head = [f"全文主题：{self.project.get('title', '')}"] + ([f"整篇领域：{domain}"] if domain else [])
+            content = [{"type": "text", "text": "\n".join(head + lines)}, {"type": "image_url", "image_url": {"url": _jpeg(sheet)}}]
+            result, _ = self.chat(self.FINAL_SYSTEM, content, max_tokens=500, task="express_qa", attempts=2)
+            with self.lock:
+                self.calls["qa"] += 1
+            bad = (result or {}).get("bad") if isinstance(result, dict) else {}
+            return {ids[k]: str(v)[:40] for k, v in (bad or {}).items() if k in ids}
+        parts = [rows[i:i + self.FINAL_ROWS] for i in range(0, len(rows), self.FINAL_ROWS)]
+        verdict = {}
+        with execution.ThreadPoolExecutor(max_workers=4) as pool:
+            for found in pool.map(lambda part: self._safe_dict(ask, part), parts):
+                verdict.update(found)
+        return verdict
+
+    def _safe_dict(self, function, *args) -> dict:
+        try:
+            return function(*args)
+        except media.Cancelled:
+            raise
+        except Exception as exc:
+            if type(exc).__name__ in ("BudgetExceeded", "ModelUnavailable", "PricingUnavailable"):
+                raise
+            self.notes.append(f"成片终审失败：{type(exc).__name__}")
+            return {}
+
     # ------------------------------------------------------------- audit
     PRESENTER_REASON = re.compile(r"主持|博主|嘉宾|对着镜头|对镜|访谈|采访|口播|演播")
     CARTOON_REASON = re.compile(r"动画|卡通|游戏|CG|渲染|漫画")
@@ -1971,7 +2064,7 @@ class Matcher:
                 for sid in sorted(members, key=keep_key)[SOURCE_MAX:]:
                     if sid not in exempt:
                         redo.setdefault(sid, f"全片有 {len(members)} 个镜头画面几乎一样")
-        for a, b in zip(sids, sids[1:]):
+        for a, b in zip(sids, sids[1:], strict=False):
             # The same video in neighbouring shots reads as one shot cut in two (S17/S18 of a dorm test film).
             if key_of(a) == key_of(b) and b not in exempt and abs(self.position[a] - self.position[b]) == 1:
                 redo.setdefault(b, "和上一镜是同一个视频")
@@ -2784,6 +2877,27 @@ class Matcher:
             self.similar = []
             self.audit(final, files)     # the sizes reported are those of the film as saved
         stamp("audit", began)
+        began = time.monotonic()
+        final_bad, final_fixed = {}, 0
+        if checking:
+            # 成片终审: the film as the viewer sees it, against the client's bar ("publish it without looking").
+            self.progress(90, "成片终审：逐镜检查")
+            final_bad = self.final_review(final, files)
+            exempt = {sid for sid, c in final.items() if c.get("base_lane", c.get("lane")) in ("person", "person_near", "news")
+                      or (self.shots_by_id_all.get(sid, {}).get("persons") and not self.unfilmed_shot(self.shots_by_id_all[sid]))}
+            redo_final = {sid: why for sid, why in final_bad.items() if sid not in exempt}
+            if redo_final:
+                kept = {sid: (final.pop(sid), files.pop(sid, None)) for sid in redo_final}
+                self.abandon.clear()
+                pending = [s for s in self.shots if s["id"] in redo_final]
+                final_fixed = fill_from_library("f", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
+                failures.update(self.stop_downloads())
+                for sid, (choice, path) in kept.items():
+                    if sid not in final:
+                        final[sid], files[sid] = choice, path
+                self.notes.append(f"成片终审：{len(final_bad)} 个镜头不合格（" + "；".join(sorted(set(final_bad.values())))[:80]
+                                  + f"），{final_fixed} 个换成了素材库里的新视频")
+        stamp("final_review", began)
         self.record_windows(qa_bad)
         self.progress(92, "保存选片")
         self.save(final, files)
@@ -2802,6 +2916,7 @@ class Matcher:
                   "max_same_source": max([sum(1 for c in final.values() if key_of(c)[0] == k)
                                           for k in {key_of(c)[0] for c in final.values()}] or [0]),
                   "alike_groups": list(self.similar), "audit_replaced": replaced, "audit_found": len(redo),
+                  "final_bad": final_bad, "final_fixed": final_fixed,
                   "from_index": sum(1 for c in final.values() if c["tile"]["source"].get("indexed")),
                   "providers": {p: sum(1 for c in final.values() if c["tile"]["source"]["provider"] == p)
                                 for p in ("bilibili", "pixabay")},

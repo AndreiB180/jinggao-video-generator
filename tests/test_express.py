@@ -718,7 +718,8 @@ def test_lines_without_their_own_words_take_single_words_then_the_film_topic(dat
                         raising=False)
     assert m.library_words(m.shots[0], (0, 1)) == [["中年男子", "摔手机"], ["男子", "愤怒"]]
     wide = m.library_words(m.shots[0], "wide")
-    assert wide[0] == ["手机"] and wide[-1] == ["男子"]          # the vague word alone comes last
+    # Alone, a thing finds phone reviews and a vague person any stranger: single words are people doing something.
+    assert ["手机"] not in wide and ["男子"] not in wide and ["摔手机"] in wide and ["中年男子"] in wide
     assert m.library_words(m.shots[0], "topic")[0] == ["家庭教育", "孩子"]
 
 
@@ -882,3 +883,24 @@ def test_groups_the_library_already_covers_search_bilibili_less(data, monkeypatc
     m.search(groups)
     assert sorted(asked) == ["庚 辛", "戊 己", "甲 乙"]     # every line of G1 has its own library video: one query
     assert m.library_rich == {"G1"}
+
+
+def test_the_final_review_looks_at_every_shot_and_names_the_ones_to_replace(data, monkeypatch, tmp_path):
+    from PIL import Image as _Image
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(12)]
+    m = _matcher(data, shots)
+    ids = [s["id"] for s in m.shots]
+    final = {sid: {"tile": {"source": {"provider": "bilibili", "id": f"BV{n}"}, "t": 10.0}, "lane": "library", "job": f"j{n}"}
+             for n, sid in enumerate(ids)}
+    final[ids[5]]["lane"] = "image"
+    files = {sid: tmp_path / f"{sid}.mp4" for sid in ids}
+    monkeypatch.setattr(m, "qa_frames", lambda job, path, shot: [_Image.new("RGB", (320, 180))] * 3)
+    asked = []
+    def chat(system, content, **kw):
+        text = content[0]["text"]
+        asked.append(text.count("口播："))
+        return ({"bad": {"S2": "浴缸里的亲热镜头", "S9": "外国人"}} if text.count("口播：") == 10 else {"bad": {}}), {}
+    monkeypatch.setattr(m, "chat", chat)
+    verdict = m.final_review(final, files)
+    assert sorted(asked) == [1, 10]                    # 11 shots (the picture is left out) on two sheets
+    assert set(verdict) <= set(ids) and len(verdict) == 2 and "浴缸里的亲热镜头" in verdict.values()
