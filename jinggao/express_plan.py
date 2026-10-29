@@ -15,7 +15,7 @@ import re
 from . import captions, footage_index, identity, planner, subtitle_style
 
 MAX_SHOTS = 400
-BATCH = 100
+BATCH = 40     # shots a planning request: with three picture-word sets a shot, 67 shots ran past the output limit
 
 # The local library (footage_index.find) is searched by words that must all be on one described frame, each
 # widened through the describer's own vocabulary (footage_index.expand: 父亲 → 父子/中年男…, 摔手机 → 砸东西/摔碎…).
@@ -401,7 +401,7 @@ def _ask(shots: list[dict], requirements: str, check=None, opening: bool = False
     content = ("用户画面要求：" + (requirements.strip() or "无") + f"\n\n共 {len(shots)} 个镜头，groups 分 {least}-{most} 组。"
                + (OPENING if opening else "") + "\n镜头：\n" + "\n".join(lines))
     # About 70 tokens a shot for its row and its group's queries, plus about 25 for its library words ("k").
-    max_tokens = min(12000, 900 + 95 * len(shots))
+    max_tokens = min(12000, 1200 + 130 * len(shots))
     if check:
         check()
     return planner.chat(SYSTEM, content, max_tokens=max_tokens, timeout=150, task="express_plan")

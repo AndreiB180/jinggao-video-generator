@@ -64,8 +64,10 @@ LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from it
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
 AUDIT_SECONDS = 40      # download time the final repeat check's replacements and the topic round get, flat
+TOPIC_SECONDS = 25      # the topic round, a last fill before borrowing
 LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at once it waited up to three minutes)
-FRONTIER = 3            # options per line whose play addresses are asked for before the first round
+FRONTIER = 1            # options per line whose play addresses are asked for before the first round (the rest when
+                        # a round allocates them: every address is two B站 calls)
 SIMILAR_BITS = 8        # two shots whose frames differ by at most this many dHash bits (2 of 3 frame pairs) look alike
 # Lines that are about another country may show foreigners; elsewhere frames described as foreign are skipped.
 FOREIGN_LINE = re.compile(r"美国|美军|美方|日本|韩国|朝鲜|欧洲|欧盟|英国|法国|德国|意大利|西班牙|俄罗斯|俄方|乌克兰|印度|"
@@ -198,7 +200,8 @@ class TooRepetitive(FootageStarved):
     again a little later instead (the client, 10-28: repeats make a film useless)."""
 
 
-REPEAT_RETRIES = 2      # films made again for too many repeats; the next time it is saved as it is, with a note
+REPEAT_RETRIES = 0      # films made again for too many repeats: off — with B站 refusing, each redo was a whole film
+                        # again plus four minutes' wait (a dorm round took 57 minutes for six films)
 
 
 class Budget(RuntimeError):
@@ -1856,10 +1859,9 @@ class Matcher:
     FINAL_SYSTEM = """你在替客户做营销号视频的成片终审：成片要直接发布，不能有任何一个镜头让观众觉得不对劲。
 图片每一行是成片里一个镜头的3张截图（左→右，就是观众看到的样子），行首黄色编号是镜头号；文字里有每个镜头的口播。
 只输出 JSON：{"bad":{"S3":"原因"}}，没有就 {"bad":{}}，原因不超过15字。
-只列明显不能直接发布的镜头：
+只列有下面这些硬伤、发布出去会出事或一看就是劣质素材的镜头（画面和口播对得不够准不算，不要列）：
 - 不得体：性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），血腥暴力（殴打、拉扯、流血）；
 - 口播讲中国的人和事，画面明显是外国人、外国街景或外国影视剧；
-- 和这句口播、也和整篇讲的人和事都对不上（莫名其妙的物件、无关的人群或风景；口播讲人的处境，画面却只有风景、空镜、航拍）；
 - 表情包式的夸张反应镜头（对着镜头狂哭狂笑、做鬼脸）、卡通动画、游戏画面、AI 图（口播在讲这些时除外）；
 - 主持人或博主对着镜头讲话、PPT 文字页、手机电脑屏幕截图；
 - 画面上能看到水印、台标、平台名或素材站名（如“光厂素材”）、账号名、花字、大段字幕；竖屏、黑边、画中画、严重模糊、黑屏。
@@ -2768,7 +2770,7 @@ class Matcher:
             self.abandon.clear()
             began = time.monotonic()
             pending = list(cards)
-            filled = fill_from_library("d", "topic", seconds=AUDIT_SECONDS)
+            filled = fill_from_library("d", "topic", seconds=TOPIC_SECONDS)
             failures.update(self.stop_downloads())
             if filled:
                 self.notes.append(f"{filled} 镜用素材库里同一主题的新视频补上")
@@ -2871,7 +2873,7 @@ class Matcher:
             left = len(redo) - replaced
             refused = self.bili.blocked > 0 or any("风控" in n for n in self.notes)
             tries = int(self.project.get("repeat_retries") or 0)
-            if refused and left >= max(3, 0.08 * len(self.shots)) and tries < REPEAT_RETRIES:
+            if REPEAT_RETRIES and refused and left >= max(3, 0.08 * len(self.shots)) and tries < REPEAT_RETRIES:
                 store.mutate(self.pid, lambda p: p.update(repeat_retries=tries + 1), internal=True)
                 raise TooRepetitive(f"B站限流中，{left} 个镜头只能用重复画面，稍后重新找一次")
             self.similar = []
