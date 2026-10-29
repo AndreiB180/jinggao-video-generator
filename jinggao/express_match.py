@@ -1760,8 +1760,10 @@ class Matcher:
                 elif lane in ("topic", "near", "neighbor", "repeat"):
                     # Filler for a line without footage of its own: a fresh clean picture beats the same clip
                     # again (the client: "less on topic is fine, but clean and not repeated").
-                    role = ("｜补位画面：只要和整篇主题大致相关就合格，不要因为和这句口播对不上、是空镜或风景而判跑题；"
-                            "只按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
+                    # The client (10-28): no filler 空镜 — a line about people shows people, scenery only for a place.
+                    role = ("｜补位画面：和整篇讲的人和事大致相关就合格，不要因为和这句口播细节对不上而判跑题；"
+                            "但口播讲人、讲人的处境时，风景、空镜、航拍、田野山水判跑题；"
+                            "并按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
             lines.append(f"{label} 口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{role}")
         domain = self.plan.get("domain") or ""
         head = [f"整篇领域：{domain}"] if domain else []
