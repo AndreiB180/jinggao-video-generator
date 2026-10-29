@@ -309,8 +309,16 @@ def _size(line: dict, content, aspect: float) -> tuple[float, float]:
     return h, w / max(1.0, units)
 
 
+# Stock-footage sites print their name across the preview copies uploaders re-post ("光厂素材" half-transparent in
+# the middle of a dorm test film): a watermark wherever it sits, never scenery.
+STOCK_SITE = re.compile(r"光厂|新片场|包图|摄图|千库|觅知|视觉中国|稿定|潮点|VJ师|图虫|全景网|昵图|"
+                        r"pond5|shutterstock|storyblocks|envato|istock|gettyimages|adobe\s*stock|dreamstime", re.I)
+
+
 def contact(line: dict) -> bool:
     text = line["text"]
+    if STOCK_SITE.search(text):
+        return True
     edge = line["box"][3] <= 0.22 or line["box"][1] >= 0.78
     plain = NOT_CONTACT.sub("", text.replace(" ", ""))
     if not edge:

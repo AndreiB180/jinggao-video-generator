@@ -843,3 +843,23 @@ def test_video_info_and_play_addresses_are_asked_for_once(data, monkeypatch):
     assert calls == ["view", "playurl"]          # a film made again after a refusal asks B站 nothing new
     bili.stream("BVcache1", 480)
     assert calls == ["view", "playurl", "playurl"]  # another sharpness needs its own address, not the video's info
+
+
+def test_stock_site_watermarks_and_corner_pictures_are_caught():
+    import numpy as np
+    from jinggao import screen_text
+    assert screen_text.contact({"text": "光厂素材", "box": [0.4, 0.45, 0.6, 0.52]})
+    assert not screen_text.contact({"text": "望京SOHO", "box": [0.02, 0.05, 0.2, 0.15]})
+    # A picture in the top-left fifth of a black frame (the 望京SOHO template of a dorm test film).
+    frames = []
+    for i in range(6):
+        f = np.zeros((270, 480), dtype=np.float32)
+        f[5:60, 5:110] = 120 + 10 * i
+        frames.append(f)
+    assert express_clean.small_picture(frames)
+    full = [np.full((270, 480), 90.0, dtype=np.float32) for _ in range(6)]
+    assert not express_clean.small_picture(full)
+    letterbox = [np.zeros((270, 480), dtype=np.float32) for _ in range(6)]
+    for f in letterbox:
+        f[35:235, :] = 100       # a wide film's bars top and bottom: content_rect trims those
+    assert not express_clean.small_picture(letterbox)

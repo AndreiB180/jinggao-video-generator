@@ -770,7 +770,7 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
     subs = subtitles(frames, content, source_boxes)
     # A picture much narrower than the film: a vertical video, or one inside wide black or blurred bars.
     narrow = (content[2] - content[0]) * src_aspect / max(1e-6, content[3] - content[1]) < 0.8 * out_aspect \
-        or (out_aspect > 1 and blurred_sides(frames, content))
+        or (out_aspect > 1 and blurred_sides(frames, content)) or small_picture(frames)
     if narrow:
         # A picture much narrower than the film (a vertical video): show it whole; the render's contain fit
         # fills the sides with a blurred copy of the picture itself. Marks inside it are blurred.
@@ -787,6 +787,19 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
             "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still | {"fixed_camera": fixed},
             "src_aspect": round(src_aspect, 4), "inner_picture": list(pip) if pip else None, "narrow": narrow,
             "layout_jump": jump}
+
+
+def small_picture(frames) -> bool:
+    """A small picture in a corner of a black frame (a picture-in-picture template): content_rect keeps the whole
+    frame there, because its bars are not margins on both ends. The bright part covers under half the frame."""
+    stack = np.stack(frames)
+    h, w = stack.shape[1:]
+    rows = np.nonzero(np.percentile(stack.max(axis=2), 90, axis=0) > 40)[0]
+    cols = np.nonzero(np.percentile(stack.max(axis=1), 90, axis=0) > 40)[0]
+    if not len(rows) or not len(cols):
+        return False
+    tall, wide = (rows[-1] - rows[0] + 1) / h, (cols[-1] - cols[0] + 1) / w
+    return tall * wide < 0.5 and min(tall, wide) < 0.75
 
 
 def blurred_sides(frames, content) -> bool:
