@@ -951,4 +951,51 @@ def test_open_lines_walk_through_the_pool_and_a_pool_video_gives_many_windows(da
     # The picker's pool tiles: one long video fills more lines than SOURCE_MAX, neighbours included.
     options = {s["id"]: [({"source": game, "t": 40.0 * (i + 1)}, "pool")] for i, s in enumerate(m.shots)}
     assigned = m.allocate(options, {}, {}, m.shots)
-    assert len(assigned) == 6
+    assert len(assigned) == 5        # one window per two minutes of it: a 10-minute video gives five
+    game["duration"] = 7236.0        # a full game replay gives every line
+    assert len(m.allocate(options, {}, {}, m.shots)) == 6
+
+
+def test_pool_covers_person_lines_with_story_footage_and_skips_talk_videos(data):
+    shots = [planner.new_shot("库里这场轰下44分。") | {"duration": 6.0, "persons": [{"name": "库里"}]},
+             planner.new_shot("乔治防得很凶。") | {"duration": 6.0, "persons": [{"name": "乔治"}]},
+             planner.new_shot("比赛进入第四节。") | {"duration": 6.0}]
+    m = _matcher(data, shots)
+    replay = {"provider": "bilibili", "id": "BVreplay", "duration": 7236.0, "pool": True, "pool_talk": False,
+              "title": "勇士vs森林狼完整全场回放！库里44分"}
+    talk = {"provider": "bilibili", "id": "BVtalk", "duration": 797.0, "pool": True, "pool_talk": True,
+            "title": "库里常规赛44分赛后采访"}
+    other = {"provider": "bilibili", "id": "BVother", "duration": 900.0, "pool": True, "pool_talk": False,
+             "title": "黄子韬直播首秀"}
+    m.pool_sources = [replay, talk]
+    curry, george, plain = m.shots
+    assert m.pool_covers(curry, replay) and m.pool_covers(curry, talk)        # its title names him
+    assert m.pool_covers(george, replay) and not m.pool_covers(george, talk)  # the game he played in, not an interview
+    assert m.pool_covers(plain, talk)
+    m.pool_sources = [replay, other]
+    assert not m.pool_covers(curry, other)          # another star's video while a pool video names him
+    assert m.shows_person(george, {"tile": {"source": replay, "t": 10.0}, "lane": "sweep", "base_lane": "sweep"})
+    # The sweep walks the replay for every line, never the interview.
+    tiles = {"BVreplay": [{"source": replay, "t": float(t)} for t in range(60, 600, 30)],
+             "BVtalk": [{"source": talk, "t": float(t)} for t in range(30, 300, 30)]}
+    jobs = m.pool_sweep(m.shots, {}, {}, {"BVreplay": {"available": True}, "BVtalk": {"available": True}}, tiles)
+    assert len(jobs) == 3 and {j[2]["tile"]["source"]["id"] for j in jobs} == {"BVreplay"}
+
+
+def test_pool_rows_prefer_footage_over_talk_and_need_the_story_name(data, monkeypatch):
+    m = _matcher(data, [planner.new_shot("勇士赢了。") | {"duration": 6.0}])
+    m.plan["pool"] = ["勇士 森林狼 全场回放", "遥望科技 上市公司"]
+    rows = [{"provider": "bilibili", "id": "BVt", "title": "库里赛后采访：勇士森林狼一战", "duration": 800, "play": 900000},
+            {"provider": "bilibili", "id": "BVr", "title": "勇士vs森林狼完整全场回放", "duration": 7200, "play": 20000},
+            {"provider": "bilibili", "id": "BVd", "title": "十分钟读懂上市公司：德福科技", "duration": 600, "play": 5000},
+            {"provider": "bilibili", "id": "BVy", "title": "遥望科技上市公司新闻", "duration": 400, "play": 5000}]
+    class Bili:
+        logged_in = True
+        def search(self, q):
+            return [dict(r) for r in rows]
+    m.bili = Bili()
+    monkeypatch.setattr(express_match, "_stamp", lambda name: 0)
+    found = m.pool_rows()
+    ids = [r["id"] for r in found]
+    assert ids[0] == "BVr" and "BVd" not in ids              # 科技 alone is no name of the story
+    assert next(r for r in found if r["id"] == "BVt")["pool_talk"] if "BVt" in ids else True

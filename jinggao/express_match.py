@@ -73,9 +73,17 @@ LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at o
 # where a different stranger's video for every line does not. A pool video may give many windows, a little apart.
 POOL_SOURCES = 4        # long videos about the story a film draws on
 POOL_TILES = 24         # preview frames of each, spread over it, for the picker and the sweep
-POOL_WINDOWS = 16       # windows one pool video may give a film
+POOL_WINDOWS = 40       # windows one pool video may give a film at most (a 2-hour game replay); shorter ones
+POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gives 2)
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
-                "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈"}
+                "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈",
+                "科技", "集团", "股份", "控股", "有限", "企业", "品牌", "官方", "中国", "国家", "全国", "上市", "直播间"}
+# Pool videos that are someone talking about the story (post-game interviews, commentary, explainers): their windows are
+# a face to camera and fail QA one after another (10-30: three of an NBA film's four pool videos were interviews and
+# the game replay itself was never reached). Footage words in a title (回放, 集锦, 纪录片) count for it.
+POOL_TALK = re.compile(r"采访|专访|访谈|发布会|学英语|解读|解析|分析|盘点|复盘|讲解|解说|点评|评论|评述|聊聊|说说|看法|观点|"
+                       r"揭秘|科普|为什么|怎么看|告诉你|带你|读懂|了解一家|十分钟|一分钟|三分钟|几分钟")
+POOL_FOOTAGE = re.compile(r"回放|全场|集锦|纪录片|实录|影像|现场|原声|录像|镜头|画面|直播|全程|高清")
 POOL_GAP = 12.0         # seconds between two windows of one pool video
 FRONTIER = 1            # options per line whose play addresses are asked for before the first round (the rest when
                         # a round allocates them: every address is two B站 calls)
@@ -108,6 +116,7 @@ NOISE_WORDS = re.compile(
 # Uploads that say they are sped up (re-uploaders speed clips up against duplicate checks) or are memes:
 # never used.
 SKIPPED_UPLOADS = re.compile(r"倍速|加速版|快进|变速|表情包|梗图|斗图|擦边|性感|福利|比基尼|丝袜|写真|热舞|美腿|内衣|泳装|"
+                             r"ASMR|asmr|Asmr|调情|撩妹|撩汉|"
                              r"吻戏|床戏|亲热|激情|大尺度|"
                              # AI-made videos (AI 短剧, image-to-video): drawn faces a platform and viewers spot at once
                              r"AI生成|AI短剧|AI漫剧|AI动画|AI视频|AI绘画|AI制作|AI电影|AI故事|AI剧|AIGC|aigc|"
@@ -347,6 +356,7 @@ class Matcher:
         self.host_hits, self.host_sources = {}, set()   # sources whose windows keep showing a presenter on camera
         self.presenter_sources = set()                  # presenter-led videos found from their preview frames
         self.pool_found = []        # the pool queries that found videos about the story (QA judges footage against them)
+        self.pool_sources = []      # the pool videos themselves
         self.library_rich = set()   # groups whose lines all found library videos of their own (fewer live searches)
         self.fill_errors = {}   # job id -> why its download or text check failed (written back to the library's checks)
         self.window_notes = []  # library moments judged here, for footage_index.record_checks
@@ -493,8 +503,11 @@ class Matcher:
                 if names.get(q) and not any(w in text for w in names[q]):
                     continue
                 overlap = sum(1 for w in words if w in text) / max(1, len(words))
+                title = row.get("title", "")
+                talk = bool(POOL_TALK.search(title))
                 score = (3 * overlap - 0.08 * rank + min(0.5, math.log10(1 + float(row.get("play") or 0)) / 12)
-                         + (0.4 if duration >= 300 else 0))
+                         + (0.4 if duration >= 300 else 0) + (0.4 if duration >= 1200 else 0)
+                         + (0.6 if POOL_FOOTAGE.search(title) else 0) - (1.5 if talk else 0))
                 if overlap >= 0.34 and (row["id"] not in scored or scored[row["id"]][0] < score):
                     scored[row["id"]] = (score, row)
         out, titles = [], set()
@@ -503,9 +516,10 @@ class Matcher:
             if title in titles:
                 continue
             titles.add(title)
-            out.append(dict(row) | {"pool": True})
+            out.append(dict(row) | {"pool": True, "pool_talk": bool(POOL_TALK.search(row.get("title", "")))})
             if len(out) >= POOL_SOURCES:
                 break
+        self.pool_sources = list(out)
         if out:
             self.pool_found = queries
             self.notes.append(f"同题素材：{len(out)} 部（" + "；".join(r.get("title", "")[:20] for r in out) + "）")
@@ -526,8 +540,6 @@ class Matcher:
         order = sorted(pool_tiles, key=lambda bvid: len(used.get(bvid, [])))
         jobs, turn = [], 0
         for shot in sorted(pending, key=lambda s: self.position[s["id"]]):
-            if shot.get("persons") and not self.unfilmed_shot(shot):
-                continue
             need = float(shot["duration"]) + MARGIN
             for attempt in range(len(order)):
                 bvid = order[(turn + attempt) % len(order)]
@@ -536,8 +548,10 @@ class Matcher:
                     continue
                 tiles = pool_tiles[bvid]
                 source = tiles[0]["source"]
+                if source.get("pool_talk") or not self.pool_covers(shot, source):
+                    continue
                 key = ("bilibili", bvid)
-                if len(reserved.get(key, [])) >= POOL_WINDOWS:
+                if len(reserved.get(key, [])) >= self.pool_cap(source):
                     continue
                 length = float(source.get("duration") or 0)
                 cursor = cursors.get(bvid, -1e9)
@@ -559,6 +573,22 @@ class Matcher:
                 turn = (turn + attempt + 1) % len(order)
                 break
         return jobs
+
+    @staticmethod
+    def pool_cap(source) -> int:
+        """Windows a pool video may give one film: one per POOL_SECONDS_PER of it, at most POOL_WINDOWS."""
+        return max(2, min(POOL_WINDOWS, int(float(source.get("duration") or 0) // POOL_SECONDS_PER)))
+
+    def pool_covers(self, shot, source) -> bool:
+        """A pool video may show a line about a named person: its title names them, or no pool video names them and
+        it is footage of the story they are in (the game replay for a line about a player)."""
+        if not source.get("pool"):
+            return False
+        if not shot.get("persons") or self.unfilmed_shot(shot):
+            return True
+        if self.names_in_source(shot, source):
+            return True
+        return not source.get("pool_talk") and not any(self.names_in_source(shot, s) for s in self.pool_sources)
 
     def penalties(self) -> dict:
         """Library videos other recent films already show cost a little (a batch on one topic repeats itself)."""
@@ -735,7 +765,10 @@ class Matcher:
         lane = choice.get("base_lane", choice.get("lane"))
         if lane in ("person", "person_near", "news", "person_photo"):
             return True
-        return lane == "pick" and self.names_in_source(shot, choice["tile"]["source"]) and not self.unfilmed_shot(shot)
+        source = choice["tile"]["source"]
+        if lane in ("pool", "sweep") and self.pool_covers(shot, source):
+            return True
+        return lane == "pick" and self.names_in_source(shot, source) and not self.unfilmed_shot(shot)
 
     def oriented(self, source) -> bool:
         """A portrait stock clip in a landscape project would be a thin strip; landscape stock crops fine to 9:16."""
@@ -1506,7 +1539,7 @@ class Matcher:
                     # picture again. A news report's windows show different scenes: it may fill more lines.
                     news = lane == "news"
                     pooled = bool(tile["source"].get("pool"))
-                    cap = NEWS_CAP if news else POOL_WINDOWS if pooled else min(SOURCE_MAX, hard_cap)
+                    cap = NEWS_CAP if news else self.pool_cap(tile["source"]) if pooled else min(SOURCE_MAX, hard_cap)
                     gap = SCENE_SECONDS if news else POOL_GAP if pooled else SCENE_GAP
                     if used >= cap or twin or (adjacent and not news and not pooled) or near < gap:
                         continue
@@ -1901,7 +1934,8 @@ class Matcher:
             shot = shots_by_id[sid]
             names = "、".join(p["name"] for p in shot.get("persons") or [])
             role = ""
-            if names:
+            pooled = ((self.job_choice.get(job_id) or {}).get("tile") or {}).get("source", {}).get("pool")
+            if names and not pooled:
                 choice = self.job_choice.get(job_id) or {}
                 source = choice.get("tile", {}).get("source", {})
                 lane = choice.get("base_lane", choice.get("lane"))
@@ -1921,7 +1955,8 @@ class Matcher:
                 lane = choice.get("lane")
                 if (choice.get("tile") or {}).get("source", {}).get("pool"):
                     role = ("｜同题素材：这是讲这件事本身的视频（比赛、新闻报道、纪录片、历史影像）里的画面，画面属于这件事就合格，"
-                            "不必和这句口播逐字对上；按画面是否干净（主持人对镜头讲话、文字页、花字、水印、表情包、黑屏、模糊）判断")
+                            "不必和这句口播逐字对上；口播提到的人不必是画面主体，这件事里的其他人（同场比赛的球员、现场的人）也合格；"
+                            "按画面是否干净（主持人对镜头讲话、文字页、花字、水印、表情包、黑屏、模糊）判断")
                 if role:
                     pass
                 elif lane == "library":
@@ -2500,9 +2535,12 @@ class Matcher:
             person = bool(shot.get("persons")) and not self.unfilmed_shot(shot)
             # A film with a pool runs on it the way the client's references do (one game, one archive): its frames come
             # right after the line's own pool picks, before other videos' picks.
-            sweep_tiles = [] if (shot.get("persons") and not self.unfilmed_shot(shot)) else [
-                (t, "sweep") for t in pool_spread if t not in pool_picks.get(sid, [])]
-            own = (news_tiles.get(sid, []) + [(t, "pool") for t in pool_picks.get(sid, [])] + sweep_tiles
+            own_pool = {(t["source"]["id"], round(float(t["t"]), 1)) for t in pool_picks.get(sid, [])}
+            sweep_tiles = [(t, "sweep") for t in pool_spread
+                           if (t["source"]["id"], round(float(t["t"]), 1)) not in own_pool
+                           and not t["source"].get("pool_talk") and self.pool_covers(shot, t["source"])]
+            own = (news_tiles.get(sid, []) + [(t, "pool") for t in pool_picks.get(sid, [])
+                                              if self.pool_covers(shot, t["source"])] + sweep_tiles
                    + [(t, "pick") for t in picks.get(sid, [])])
             fill = []
             if person:
@@ -2771,32 +2809,45 @@ class Matcher:
                 self.notes.append(f"{len(photos)} 句讲具体人物的没有本人视频，用了本人的照片（动态画面）")
             pending = [s for s in pending if s["id"] not in final]
             stamp("person_photos", began)
-        if pending and pool_tiles:
-            # Lines still open walk on through the pool videos before any stranger's video is looked for.
-            began = time.monotonic()
+        def fill_from_pool(tag, seconds):
+            """Open lines walk on through the pool videos (a later stretch each time); returns lines filled."""
+            nonlocal pending
+            if not (pending and pool_tiles):
+                return 0
             ask = {bvid: tiles_[0]["source"] for bvid, tiles_ in pool_tiles.items() if bvid not in streams}
             if ask:
                 streams.update(self.resolve(ask))
-            jobs = self.pool_sweep(pending, final, reserved, streams, pool_tiles)
-            if jobs:
-                self.job_choice.update({job_id: c for job_id, _, c in jobs})
-                got, failed, bad, running = self.download(jobs, streams, qa=checking,
-                                                           deadline=time.monotonic() + LIBRARY_SECONDS)
-                failures.update(failed)
-                qa_bad.update(bad)
-                swept = 0
-                for job_id, sid, choice in jobs:
-                    if sid in final or job_id not in got or job_id in bad:
-                        continue
-                    if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
-                        continue
-                    final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
-                                           "job": job_id}
-                    files[sid] = got[job_id]
-                    swept += 1
-                if swept:
-                    self.notes.append(f"{swept} 镜接着用同题素材（讲这件事本身的视频）")
-                pending = [s for s in pending if s["id"] not in final]
+            jobs = [(job_id.replace("#p", f"#p{tag}"), sid, c)
+                    for job_id, sid, c in self.pool_sweep(pending, final, reserved, streams, pool_tiles)]
+            if not jobs:
+                return 0
+            self.job_choice.update({job_id: c for job_id, _, c in jobs})
+            got, failed, bad, running = self.download(jobs, streams, qa=checking, deadline=time.monotonic() + seconds)
+            failures.update(failed)
+            qa_bad.update(bad)
+            self.note_presenters(bad)
+            swept = 0
+            for job_id, sid, choice in jobs:
+                # A window turned down stays reserved: the next walk through the video goes on past it.
+                if sid in final or job_id not in got or job_id in bad:
+                    continue
+                if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
+                    continue
+                final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
+                                       "job": job_id}
+                files[sid] = got[job_id]
+                self.place(sid, choice, key_of(choice)[0])
+                swept += 1
+            pending = [s for s in pending if s["id"] not in final]
+            return swept
+        if pending and pool_tiles:
+            # Lines still open walk on through the pool videos before any stranger's video is looked for.
+            began = time.monotonic()
+            swept = fill_from_pool("", LIBRARY_SECONDS)
+            if pending:
+                swept += fill_from_pool("2", AUDIT_SECONDS)   # windows QA turned down: the next stretch
+            if swept:
+                self.notes.append(f"{swept} 镜接着用同题素材（讲这件事本身的视频）")
             stamp("pool_sweep", began)
         # Lines still open take a NEW video from the library before any video already in the film shows another
         # moment (the client, 10-28: one drama's girl in pink eight times in a film, "use the library, don't
@@ -3091,7 +3142,9 @@ class Matcher:
             self.abandon.clear()
             pending = [s for s in self.shots if s["id"] in redo]
             # One round with a short limit: the film is otherwise done, the replacements must not hold it up.
-            replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
+            replaced += fill_from_pool("x", AUDIT_SECONDS)
+            if pending:
+                replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
             pending = [s for s in pending if s["id"] not in final]
             refused_now = self.bili.blocked > 0 or self.bili.cooled > 0
             if pending and refused_now and len(pending) >= max(2, 0.05 * len(self.shots)):
@@ -3128,13 +3181,16 @@ class Matcher:
             self.progress(90, "成片终审：逐镜检查")
             final_bad = self.final_review(final, files)
             exempt = {sid for sid, c in final.items() if c.get("base_lane", c.get("lane")) in ("person", "person_near", "news")
-                      or (self.shots_by_id_all.get(sid, {}).get("persons") and not self.unfilmed_shot(self.shots_by_id_all[sid]))}
+                      or (self.shots_by_id_all.get(sid, {}).get("persons") and not self.unfilmed_shot(self.shots_by_id_all[sid])
+                          and not (pool_tiles and c.get("lane") in CONTEXT_LANES + ("repeat", "reuse", "near", "neighbor")))}
             redo_final = {sid: why for sid, why in final_bad.items() if sid not in exempt}
             if redo_final:
                 kept = {sid: (final.pop(sid), files.pop(sid, None)) for sid in redo_final}
                 self.abandon.clear()
                 pending = [s for s in self.shots if s["id"] in redo_final]
-                final_fixed = fill_from_library("f", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
+                final_fixed = fill_from_pool("f", AUDIT_SECONDS)
+                if pending:
+                    final_fixed += fill_from_library("f", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
                 failures.update(self.stop_downloads())
                 for sid, (choice, path) in kept.items():
                     if sid not in final:
@@ -3148,6 +3204,12 @@ class Matcher:
         unmatched = [s["id"] for s in self.shots if s["id"] not in final]
         report = {"selected": len(final), "unmatched": unmatched, "elapsed_seconds": round(time.monotonic() - self.started, 2),
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
+                  "jobs": [[job_id.split("#")[0][:6] + "#" + job_id.split("#")[-1], c.get("lane"),
+                            c.get("tile", {}).get("source", {}).get("id", ""), round(float(c.get("start") or 0)),
+                            "final" if (final.get(job_id.split("#")[0]) or {}).get("job") == job_id
+                            else "qa:" + str(qa_bad[job_id])[:24] if job_id in qa_bad
+                            else "dl:" + str(failures[job_id])[:24] if job_id in failures else "-"]
+                           for job_id, c in list(self.job_choice.items())[:500]],
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
                                          "library", "pool", "sweep", "repeat", "reuse", "card")},
