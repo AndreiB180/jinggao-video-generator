@@ -85,7 +85,7 @@ POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公�
 # Pool videos that are someone talking about the story (post-game interviews, commentary, explainers): their windows are
 # a face to camera and fail QA one after another (10-30: three of an NBA film's four pool videos were interviews and
 # the game replay itself was never reached). Footage words in a title (回放, 集锦, 纪录片) count for it.
-POOL_TALK = re.compile(r"采访|专访|访谈|发布会|学英语|解读|解析|分析|盘点|复盘|讲解|解说|点评|评论|评述|聊聊|说说|看法|观点|"
+POOL_TALK = re.compile(r"采访|专访|访谈|学英语|解读|解析|分析|盘点|复盘|讲解|解说|点评|评论|评述|聊聊|说说|看法|观点|"
                        r"揭秘|科普|为什么|怎么看|告诉你|带你|读懂|了解一家|十分钟|一分钟|三分钟|几分钟")
 POOL_FOOTAGE = re.compile(r"回放|全场|集锦|纪录片|实录|影像|现场|原声|录像|镜头|画面|直播|全程|高清")
 POOL_GAP = 12.0         # seconds between two windows of one pool video
@@ -178,8 +178,9 @@ PRESENTER_SYSTEM = """图片每一行是同一个视频的8张抽帧（行首黄
 
 POOL_VET_SYSTEM = """你在给一条短视频挑“同题素材”：从这些视频里取画面配整条口播。图片每一行是同一个视频的6张抽帧（行首黄色编号 V1、V2…），文字里有每个视频的标题。
 same：画面就是这件事本身的视频——同一场比赛的回放或集锦、这个人做这件事的现场（直播间、发布会、工厂）或新闻画面、这段历史的真实影像或纪录片。
+当事人本人对着镜头的画面也算 same：他的直播录屏（直播间里对着镜头卖货）、演讲、发布会、接受采访。
 field：不是这件事，但是同一类事的真实现场画面，配这条口播不违和（讲某场 NBA 比赛时别的 NBA 比赛，讲某人直播带货时别的直播间带货现场）。
-都不要：这个人参加的综艺、唱歌、影视剧、别的运动、别的领域；以主持人或博主对着镜头讲解为主的；PPT、文字、截图为主的。
+都不要：这个人参加的综艺、唱歌、影视剧、别的运动、别的领域；别人（主持人、博主、解说）对着镜头讲解这件事为主的；PPT、文字、截图为主的。
 只输出 JSON：{"same":["V1"],"field":["V3"]}，没有就空数组。"""
 
 TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体画面，不出现可辨认人物特写"
@@ -561,8 +562,13 @@ class Matcher:
         songs (10-30: a 贾乃亮 live-selling film drew a billiards show and a duet). Same-event footage is the pool;
         footage of the field joins only when the event's own is under POOL_ENOUGH seconds. Without an answer the
         candidates naming the event come first, the same way. Candidates left out lose their pool mark."""
+        # The presenter screen flags anyone talking to camera; a pool video naming the story's people may be them
+        # talking (贾乃亮's livestreams, 王兴兴's speeches, 10-30): the picture check below tells them apart.
+        def own_people(row):
+            text = row.get("title", "") + " " + row.get("tags", "")
+            return any(name in text for name in self.names)
         rows = [r for r in candidates if tiles.get((r["provider"], r["id"]))
-                and (r["provider"], r["id"]) not in self.presenter_sources]
+                and ((r["provider"], r["id"]) not in self.presenter_sources or own_people(r))]
         same, field = None, []
         if rows:
             try:
@@ -2072,6 +2078,7 @@ class Matcher:
                 if (choice.get("tile") or {}).get("source", {}).get("pool"):
                     role = ("｜同题素材：这是讲这件事本身的视频（比赛、新闻报道、纪录片、历史影像）里的画面，画面属于这件事就合格，"
                             "不必和这句口播逐字对上；口播提到的人不必是画面主体，这件事里的其他人（同场比赛的球员、现场的人）也合格；"
+                            "这件事的当事人本人对着镜头（直播间卖货、演讲、发布会、接受采访）不算主持人口播，合格；"
                             "按画面是否干净（主持人对镜头讲话、文字页、花字、水印、表情包、黑屏、模糊）判断")
                 if role:
                     pass
@@ -2588,7 +2595,8 @@ class Matcher:
         if pool_rows:
             for row in pool_rows:
                 key = (row["provider"], row["id"])
-                if tiles.get(key) and key not in self.presenter_sources:
+                if tiles.get(key):     # presenter-flagged ones left the pool in vet_pool unless they are the story's people
+                    self.presenter_sources.discard(key)
                     pool_tiles[row["id"]] = tiles[key]
         if pool_tiles:
             # The pool's frames, spread over each video and interleaved, for every group: its lines take these first.

@@ -1078,3 +1078,24 @@ def test_state_leaders_footage_only_when_the_script_names_them(data):
     m.project["script"] = "习近平主席在阅兵式上讲话。"
     assert not m.off_limits(leader)
     assert m.off_limits({"title": "ASMR 助眠", "tags": ""})
+
+
+def test_pool_keeps_the_storys_own_people_talking_but_not_other_presenters(data, monkeypatch):
+    from PIL import Image
+    m = _matcher(data, [planner.new_shot("贾乃亮单日卖5.7亿。") | {"duration": 6.0, "persons": [{"name": "贾乃亮"}]}])
+    m.names = {"贾乃亮"}
+    live = {"provider": "bilibili", "id": "BVlive", "title": "万茜&贾乃亮直播录屏", "duration": 3823, "pool": True,
+            "anchored": True}
+    host = {"provider": "bilibili", "id": "BVhost", "title": "直播电商的未来在哪", "duration": 700, "pool": True,
+            "anchored": False}
+    image = Image.new("RGB", (160, 90))
+    tiles = {("bilibili", r["id"]): [{"source": r, "t": float(t), "image": image} for t in range(10, 70, 10)]
+             for r in (live, host)}
+    m.presenter_sources = {("bilibili", "BVlive"), ("bilibili", "BVhost")}
+    seen = {}
+    def chat(system, content, **k):
+        seen["text"] = content[0]["text"]
+        return {"same": ["V1"], "field": []}, {}
+    monkeypatch.setattr(m, "chat", chat)
+    assert [r["id"] for r in m.vet_pool([live, host], tiles)] == ["BVlive"]
+    assert "直播录屏" in seen["text"] and "电商的未来" not in seen["text"]   # only his own livestream is looked at
