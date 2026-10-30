@@ -64,7 +64,6 @@ LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from it
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
 AUDIT_SECONDS = 40      # download time the final repeat check's replacements and the topic round get, flat
-CONTINUE_MAX = 3        # lines a clip may go on into after its own (one scene, a long take; more reads as filler)
 REFUSED_WAIT = 90       # seconds a film waits in place for B站 before its repeats get one more fresh round
 TOPIC_SECONDS = 25      # the topic round, a last fill before borrowing
 LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at once it waited up to three minutes)
@@ -130,7 +129,7 @@ ARCHIVE_TITLE = re.compile(r"珍贵|影像|纪录片|央视|新闻|原声|档案
 
 PICK_SYSTEM = """你在为营销号视频挑选实拍素材。图片是若干视频的缩略图联系表，每格左上角有黄色编号。
 请为每个镜头挑出合适的格子编号（最好的在前，最多6个），只输出 JSON：{"S1":["12","7"],"S2":[]}。
-普通镜头标准：画面要在表现这句口播讲的人、事、物或场景，观众一看就知道画面在配这句话（平台会把“只和整篇主题沾边的通用素材”判为音画弱相关并限流）：只沾整篇主题边的通用画面（同类人在走路、街景、写字楼、办公室、人群）不选，宁可这句不选；不要求型号、年份、地点、动作逐一一致：讲人和人之间的事（夫妻、家人、同事、官员、民众、士兵），画面要有相应的人和场景，不选风景、空镜、物品；讲某个国家、组织的事，画面要是那个国家、组织的，不选别国的同类画面（讲也门战事不选中国火箭军、中国海军）；讲中国国内的人和事，不选明显是外国人或外国街景的画面。情感、家庭、社会故事可以选影视剧、短剧里情节相符的片段（有人物、有情绪）。
+普通镜头标准：画面主体要和口播讲的对象一致（画面建议只是参考），不要求型号、年份、地点、动作逐一一致：讲人和人之间的事（夫妻、家人、同事、官员、民众、士兵），画面要有相应的人和场景，不选风景、空镜、物品；讲某个国家、组织的事，画面要是那个国家、组织的，不选别国的同类画面（讲也门战事不选中国火箭军、中国海军）；讲中国国内的人和事，不选明显是外国人或外国街景的画面。情感、家庭、社会故事可以选影视剧、短剧里情节相符的片段（有人物、有情绪）。
 必须排除：性暗示或暴露的画面（内衣、泳装、裸露身体、亲热接吻、床戏、擦边）、血腥暴力（殴打、流血）、主持人或博主对镜头口播、PPT/文字页/图表/排行榜截图为主、手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面）、大面积马赛克、片头片尾和转场、频道订阅页、黑屏或严重模糊、大面积硬字幕/弹幕/贴纸/台标遮挡画面、游戏/动画/CG（除非口播就是讲这些）、与口播明显无关的内容、广告。
 新闻、纪录片里真实存在的人物的脸部特写，除非该镜头要求此人物，否则尽量不选（容易被当成口播里讲的人）；影视剧、短剧里的演员不受此限。
 优先选有明显动作或镜头运动的视频画面；静态插画、照片、幻灯片式的画面尽量不选（口播在讲这幅画、这件文物时除外）。
@@ -155,7 +154,7 @@ TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体�
 
 QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
 对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
-bad：只列“明显不合格”的镜头。不合格指：画面没有表现这句口播讲的人、事、物或场景，只和整篇大主题沾边的通用素材（原因写“弱相关”，平台会判音画不相关）；任意一帧有性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），或血腥暴力（殴打、拉扯、流血）；任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克或打码；表情包、卡通表情、贴纸、梗图、对话气泡图标叠在画面上，或画面本身是表情包式的夸张反应镜头（对着镜头狂笑、做鬼脸）；画面上后加的大号花字、标题字（不是场景里本来就有的字）；整段画面静止不动（一张图片或定格）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
+bad：只列“明显不合格”的镜头。不合格指：任意一帧有性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），或血腥暴力（殴打、拉扯、流血）；任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克或打码；表情包、卡通表情、贴纸、梗图、对话气泡图标叠在画面上，或画面本身是表情包式的夸张反应镜头（对着镜头狂笑、做鬼脸）；画面上后加的大号花字、标题字（不是场景里本来就有的字）；整段画面静止不动（一张图片或定格）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
 wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
 股市K线和走势图、数据图表、商品和品牌logo、街道招牌、包装上的字是画面本身的内容，不算文字页，口播相关就合格。
@@ -1792,18 +1791,16 @@ class Matcher:
                 if lane == "library":
                     # A new library video found by this line's own picture words: related to the line or the story
                     # is enough, but a line about people shows people (the client: no filler 空镜).
-                    role = (f"｜补位画面（按这句的画面词“{choice.get('words', '')}”从素材库找的）：画面要在表现这句口播讲的人、事、物或场景"
-                            "（演员表演这句讲的情节也算），细节、人物身份不必一致；只和整篇主题沾边的通用画面判“弱相关”；"
+                    role = (f"｜补位画面（按这句的画面词“{choice.get('words', '')}”从素材库找的）：画面和这句口播或整篇讲的人和事"
+                            "大致相关就合格，细节、人物身份不必一致；口播讲人和人之间的事，画面要有相应的人，风景空镜判跑题；"
                             "并按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
                 elif lane in ("topic", "near", "neighbor", "repeat"):
                     # Filler for a line without footage of its own: a fresh clean picture beats the same clip
                     # again (the client: "less on topic is fine, but clean and not repeated").
                     # The client (10-28): no filler 空镜 — a line about people shows people, scenery only for a place.
-                    role = ("｜补位画面：画面要在表现这句口播讲的人、事、物或场景，细节不必一致；只和整篇主题沾边的通用画面判“弱相关”，"
-                            "风景、空镜、航拍判跑题；并按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
-                elif lane == "continue":
-                    role = ("｜延续画面：这是上一镜（或下一镜）同一段素材接着播，和那一镜同一个场景；不要因为和这句口播对不上判跑题，"
-                            "只按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊、静止）判断")
+                    role = ("｜补位画面：和整篇讲的人和事大致相关就合格，不要因为和这句口播细节对不上而判跑题；"
+                            "但口播讲人、讲人的处境时，风景、空镜、航拍、田野山水判跑题；"
+                            "并按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
             lines.append(f"{label} 口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{role}")
         domain = self.plan.get("domain") or ""
         head = [f"整篇领域：{domain}"] if domain else []
@@ -1862,48 +1859,6 @@ class Matcher:
             self.soft.setdefault(job_id, set()).add("wm")
 
     # ------------------------------------------------------------------- save
-    # ------------------------------------------------------------- continuation
-    def continuation_jobs(self, pending, final, reserved, streams) -> list:
-        """Lines without a clip that shows what they say: the neighbouring shot's clip goes on (the seconds right
-        after its window, or right before it for the line before), at most CONTINUE_MAX lines a clip. One scene
-        held a little longer reads as a long take; generic footage that only touches the topic is what the
-        platform limits films for ("音画弱相关"、"通用素材填充"). [(job_id, sid, choice)]"""
-        jobs, chained = [], {}
-        for shot in sorted(pending, key=lambda s: self.position[s["id"]]):
-            sid, index = shot["id"], self.position[shot["id"]]
-            need = float(shot["duration"]) + MARGIN
-            for other, forward in ((index - 1, True), (index + 1, False)):
-                if not 0 <= other < len(self.timeline):
-                    continue
-                donor_id = self.timeline[other]["id"]
-                donor = final.get(donor_id)
-                if not donor or donor.get("lane") in ("reuse", "card", "image", "stock", "continue"):
-                    continue
-                if chained.get(donor_id, 0) + donor.get("chain", 0) >= CONTINUE_MAX:
-                    continue
-                source = donor["tile"]["source"]
-                if source.get("provider") != "bilibili" or not (streams.get(source["id"]) or {}).get("available"):
-                    continue
-                if shot.get("persons") and not self.unfilmed_shot(shot) and not self.names_in_source(shot, source):
-                    continue
-                length = float(source.get("duration") or 0)
-                donor_seconds = float(self.shots_by_id_all[donor_id]["duration"])
-                start = donor["start"] + donor_seconds if forward else donor["start"] - need + MARGIN
-                if start < 0 or start + need > length - 0.1:
-                    continue
-                key = ("bilibili", source["id"])
-                others = [w for w in reserved.get(key, []) if abs(w[0] - donor["start"]) > 1e-6]
-                if any(not (start + need <= a or start >= b) for a, b in others):
-                    continue
-                reserved.setdefault(key, []).append((start, start + need))
-                chained[donor_id] = chained.get(donor_id, 0) + 1
-                jobs.append((f"{sid}#c", sid, donor | {
-                    "start": round(start, 2), "lane": "continue", "base_lane": donor.get("base_lane", donor["lane"]),
-                    "continue_of": donor_id, "chain": donor.get("chain", 0) + 1,
-                    "tile": donor["tile"] | {"t": start + 1.0, "hash": None}}))
-                break
-        return jobs
-
     # ------------------------------------------------------------- final review
     FINAL_SYSTEM = """你在替客户做营销号视频的成片终审：成片要直接发布，不能有任何一个镜头让观众觉得不对劲。
 图片每一行是成片里一个镜头的3张截图（左→右，就是观众看到的样子），行首黄色编号是镜头号；文字里有每个镜头的口播。
@@ -2103,9 +2058,6 @@ class Matcher:
             for b in sids[i + 1:]:
                 same_clip = ((final[a].get("lane") == "reuse" and final[a].get("repeat_of") == b)
                              or (final[b].get("lane") == "reuse" and final[b].get("repeat_of") == a))
-                if final[a].get("continue_of") == b or final[b].get("continue_of") == a or (
-                        final[a].get("continue_of") and final[a].get("continue_of") == final[b].get("continue_of")):
-                    continue        # one scene going on: a long take, not a repeat
                 if same_clip or (a in looks and b in looks and self.alike(looks[a], looks[b])):
                     parent[root(a)] = root(b)
                     if abs(self.position[a] - self.position[b]) == 1 and b not in exempt:
@@ -2120,16 +2072,14 @@ class Matcher:
                         redo.setdefault(sid, f"全片有 {len(members)} 个镜头画面几乎一样")
         for a, b in zip(sids, sids[1:], strict=False):
             # The same video in neighbouring shots reads as one shot cut in two (S17/S18 of a dorm test film).
-            if (key_of(a) == key_of(b) and b not in exempt and abs(self.position[a] - self.position[b]) == 1
-                    and not final[a].get("continue_of") and not final[b].get("continue_of")):
+            if key_of(a) == key_of(b) and b not in exempt and abs(self.position[a] - self.position[b]) == 1:
                 redo.setdefault(b, "和上一镜是同一个视频")
         for sid in sids:
             if final[sid].get("lane") == "reuse" and sid not in exempt:
                 redo.setdefault(sid, "同一段画面第二次出现")
         by_source = {}
         for sid in sids:
-            if not final[sid].get("continue_of"):       # a scene going on counts once
-                by_source.setdefault(key_of(sid), []).append(sid)
+            by_source.setdefault(key_of(sid), []).append(sid)
         for members in by_source.values():
             counted = [sid for sid in members if sid not in exempt]
             if len(counted) > SOURCE_MAX:
@@ -2677,31 +2627,6 @@ class Matcher:
         if library_filled:
             self.notes.append(f"{library_filled} 镜用素材库里描述相符的新视频补上，没有重复已经用过的画面")
         if pending:
-            # The neighbour's clip goes on before any footage that only touches the topic (the platform's
-            # "音画弱相关、通用素材填充").
-            began = time.monotonic()
-            jobs = self.continuation_jobs(pending, final, reserved, streams)
-            if jobs:
-                self.job_choice.update({job_id: c for job_id, _, c in jobs})
-                got, failed, bad, running = self.download(jobs, streams, qa=checking,
-                                                           deadline=time.monotonic() + AUDIT_SECONDS)
-                failures.update(failed)
-                qa_bad.update(bad)
-                held = 0
-                for job_id, sid, choice in jobs:
-                    if sid in final or job_id not in got or job_id in bad:
-                        continue
-                    if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
-                        continue
-                    final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
-                                           "job": job_id}
-                    files[sid] = got[job_id]
-                    held += 1
-                if held:
-                    self.notes.append(f"{held} 镜没有贴这句话的新画面，上一镜的素材接着往下放（不用只沾主题的通用素材）")
-                pending = [s for s in pending if s["id"] not in final]
-            stamp("continue", began)
-        if pending:
             # Another moment of a video already in the film, only where the library had nothing new: one video at
             # most SOURCE_MAX windows a film, SCENE_GAP seconds apart, never next to its other window (a named
             # person's own footage may show more of the same documentary).
@@ -2782,7 +2707,7 @@ class Matcher:
         def keepable(shot, choice, reason, marks_ok=False):
             # Clearly wrong footage is worse than a neutral card: badly off-topic anywhere, and for an
             # ancient-history video modern, foreign or other-dynasty scenes.
-            if re.search(r"严重不符|完全无关|完全不符|明显无关|毫无关系|毫无关联|弱相关|跑题|对不上|无关", reason):
+            if re.search(r"严重不符|完全无关|完全不符|明显无关|毫无关系|毫无关联", reason):
                 return False
             if not marks_ok and (reason in (MARKED, MARKED_MIDDLE, NARROW) or MARK_REJECTION.search(reason)
                                  or self.flags(choice.get("job")) & {"wm", "narrow"}):
@@ -2855,29 +2780,6 @@ class Matcher:
                 self.notes.append(f"{filled} 镜用素材库里同一主题的新视频补上")
             cards = [s for s in cards if s["id"] not in final]
             stamp("library_d", began)
-        if cards:
-            # Before a clip is shown a second time: the neighbour's clip going on (a long take reads as one scene; the
-            # same clip twice reads as a repeat, and strict relevance leaves more lines open).
-            self.abandon.clear()
-            began = time.monotonic()
-            jobs = self.continuation_jobs(cards, final, reserved, streams)
-            if jobs:
-                self.job_choice.update({job_id: c for job_id, _, c in jobs})
-                got, failed, bad, running = self.download(jobs, streams, qa=checking,
-                                                           deadline=time.monotonic() + AUDIT_SECONDS)
-                failures.update(failed)
-                qa_bad.update(bad)
-                for job_id, sid, choice in jobs:
-                    if sid in final or job_id not in got or job_id in bad:
-                        continue
-                    if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
-                        continue
-                    final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
-                                           "job": job_id}
-                    files[sid] = got[job_id]
-            failures.update(self.stop_downloads())
-            cards = [s for s in cards if s["id"] not in final]
-            stamp("continue_late", began)
         reused = 0
         for shot in list(cards):
             # The same clip a second time (never next to itself), from a video the film shows only once so far.
@@ -3020,7 +2922,7 @@ class Matcher:
                   "timing": self.timing, "model_calls": self.calls, "qa_rejected": qa_bad, "download_failures": failures,
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
-                                         "library", "continue", "repeat", "reuse", "card")},
+                                         "library", "repeat", "reuse", "card")},
                   "qa_kept_rejected": [sid for sid, c in final.items() if str(c.get("qa", "")).startswith("rejected")],
                   "flags": {"still": sum(1 for c in final.values() if "still" in self.flags(c.get("job"))),
                             "wm": sum(1 for c in final.values() if "wm" in self.flags(c.get("job"))),

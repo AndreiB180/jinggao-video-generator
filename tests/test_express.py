@@ -904,22 +904,3 @@ def test_the_final_review_looks_at_every_shot_and_names_the_ones_to_replace(data
     verdict = m.final_review(final, files)
     assert sorted(asked) == [1, 10]                    # 11 shots (the picture is left out) on two sheets
     assert set(verdict) <= set(ids) and len(verdict) == 2 and "浴缸里的亲热镜头" in verdict.values()
-
-
-def test_a_line_without_its_own_footage_takes_the_neighbouring_clip_going_on(data):
-    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(5)]
-    m = _matcher(data, shots)
-    ids = [s["id"] for s in m.shots]
-    source = {"provider": "bilibili", "id": "BVscene", "duration": 120.0}
-    final = {ids[1]: {"tile": {"source": source, "t": 21.0}, "start": 20.0, "lane": "pick", "job": "j1"},
-             ids[4]: {"tile": {"source": {"provider": "bilibili", "id": "BVend", "duration": 9.0}, "t": 3.0}, "start": 2.0,
-                      "lane": "library", "job": "j4"}}
-    reserved = {("bilibili", "BVscene"): [(20.0, 25.3)], ("bilibili", "BVend"): [(2.0, 7.3)]}
-    streams = {"BVscene": {"available": True}, "BVend": {"available": True}}
-    pending = [m.shots[0], m.shots[2], m.shots[3]]
-    jobs = {sid: c for _, sid, c in m.continuation_jobs(pending, final, reserved, streams)}
-    # The line before goes back from the pick's window, the one after goes on from it; the pick is held at most
-    # CONTINUE_MAX lines, and a clip too short to go on gives nothing.
-    assert jobs[ids[0]]["start"] == 15.0 and jobs[ids[0]]["continue_of"] == ids[1]
-    assert jobs[ids[2]]["start"] == 25.0 and jobs[ids[2]]["lane"] == "continue"
-    assert ids[3] not in jobs
