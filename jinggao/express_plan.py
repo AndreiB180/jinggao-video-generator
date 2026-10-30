@@ -32,7 +32,7 @@ LIBRARY_THINGS = ("手机 电脑 书包 行李箱 书本 试卷 台灯 钞票 �
 
 SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的镜头，请为找“实拍视频素材”做检索规划。
 只输出 JSON：
-{"domain":"..","ancient":[],"event":[],"topic":{"zh":["..",".."],"en":["..",".."]},
+{"domain":"..","ancient":[],"event":[],"pool":[],"topic":{"zh":["..",".."],"en":["..",".."]},
  "groups":[{"id":"G1","zh":["..",".."],"en":["..",".."],"person":""}],
  "shots":[{"id":"S1","g":"G1","v":"..","k":["..","..",".."],"p":[]}]}
 规则：
@@ -47,6 +47,7 @@ SYSTEM = """你是营销号短视频的选材编辑。给你按口播切好的�
 8. domain：整篇所属的宽泛领域，2-6字（如“乒乓球”“集装箱港口”“兰州牛肉面”“宋朝历史”“人工智能”）。不要用文章标题、具体事件或人物（讲范仲淹救灾写“宋朝历史”，不能写“范仲淹荒政”）。时事新闻写事件所在的国家或地区（如“也门”“俄乌”“台海”“日本”），不要写“局势”“形势”“问题”“风云”这类抽象词（搜不到画面）。除带具体人名的检索词外，每个 zh 检索词都要包含这个领域词，避免搜到同名的其他领域（例如讲乒乓球世界排名，要写“乒乓球 世界排名”，不能只写“世界排名”）。
 10. 古人（ancient 里的人）：他们没有真实影像，组的 zh 检索词写能搜到影视剧、纪录片片段的词，如“范仲淹 电视剧 片段”“范仲淹 纪录片”；普通历史画面的组写朝代场景，如“宋朝 市井 影视剧”“古代 粮仓 纪录片”“宋代 西湖 画舫”，尽量是有动作的视频画面，少用静态插画。
 11. event：若整篇讲的是一件具体的新闻事件（有明确的当事方、地点或时间，例如某次袭击、某场会谈、某起案件），给 2-3 个能在 B 站搜到这件事新闻报道视频的检索词，每个 3-5 个短词，写当事方 + 地点 + 事件（如“胡塞 导弹 袭击 亚丁 总统府”“也门 内阁 会议 遇袭”“沙特 联军 空袭 萨那”）；讲的是泛泛的话题、个人故事、历史或科普，给空数组。
+13. pool：整篇的“同题素材”检索词，用来在 B 站找讲的就是这件事、这个人、这段历史的长视频（比赛集锦、新闻报道、纪录片、历史影像、采访），全片尽量从这几部里取画面，画风统一、不违和。给 2-3 个，每个 2-5 个短词：体育比赛写两队或选手 + 赛事或日期 + 集锦（如“勇士 森林狼 集锦”“库里 44分 集锦”）；新闻事件写当事方 + 事件 + 新闻；讲具体人物、公司、品牌写名字 + 新闻或采访或纪录片（如“赵长鹏 币安 新闻”“王兴兴 宇树 采访”）；讲一段历史写时代和事件 + 历史影像或纪录片（如“抗日战争 历史影像 纪录片”“淞沪会战 纪录片”）；讲某个行业、地方、社会现象写现象 + 新闻报道或纪录片（如“国企改革 新闻报道”“县城 年轻人 就业 新闻”）。化名的情感家庭故事、纯观点议论，没有讲同一件事的现成视频，给空数组。
 12. k：每个镜头 3 组“素材库画面词”，从具体到宽泛，用来在本地素材库里按词找画面。库里每一帧都配了一句看图写的短描述（如“中年男子坐在摊位前低头看手机”“一男一女在室内争执”），一组里的词要能同时出现在一句这样的描述里，所以只写镜头拍得到的人、动作、表情、物件、地点：
 - 每组 1-3 个词，词和词之间空格隔开（写“男孩 玩手机”，不写“男孩玩手机”），每个词 2-4 个字。第1组最具体（人物+动作或物件），第2组放宽（换成更常见的说法或组合，如人物+表情、人物+地点），第3组最宽：这句的主要人物，或人物+表情、动作。不要整组只有物件或地点：单写“手机”搜到的是手机评测，单写“卧室”“城市”“校园”是空镜；物件最好连着动作写（玩手机、摔手机、拖行李箱），“中年男子 手机”搜到的也多是手机评测。
 - 人物写镜头里看得出的人，不写名字：父亲、母亲、儿子、女儿、丈夫、妻子、大学生、老人这样的称呼可以直接写（库会换成看图描述里的说法）；恋人、男友、女友写“情侣”，丈夫和妻子在一起写“夫妻”，一家人写“一家三口”。
@@ -429,6 +430,8 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
     domain = next((_text(r.get("domain"), 8) for r, _ in answers if isinstance(r, dict) and _text(r.get("domain"), 8)), "")
     # A concrete news event: queries for news reports about it (news_pool cuts their footage where they say the same).
     event = next((_queries(r.get("event"), 40) for r, _ in answers if isinstance(r, dict) and _queries(r.get("event"), 40)), [])
+    # Long videos about this very story (highlights, news reports, documentaries): most of the film's footage.
+    pool = next((_queries(r.get("pool"), 40) for r, _ in answers if isinstance(r, dict) and _queries(r.get("pool"), 40)), [])
     # People from before photography: no real footage can exist, so portraits and dramatisations stand in.
     ancient = sorted({name for r, _ in answers if isinstance(r, dict) and isinstance(r.get("ancient"), list)
                       for name in (_text(n, 40) for n in r["ancient"]) if len(name) >= 2 and name in script})
@@ -513,7 +516,7 @@ def annotate(shots: list[dict], script: str, requirements: str = "", check=None)
     if domain:
         topic["zh"] = [q if domain in q.replace(" ", "") else f"{domain} {q}" for q in topic["zh"]]
     return {"mode": "express", "groups": list(groups.values()), "topic": topic, "domain": domain, "ancient": ancient,
-            "event": event, "model": model, "usage": usage, "batches": len(batches)}
+            "event": event, "pool": pool, "model": model, "usage": usage, "batches": len(batches)}
 
 
 def plan(project: dict, check=None) -> tuple[list[dict], dict]:

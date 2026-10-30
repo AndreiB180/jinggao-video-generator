@@ -919,3 +919,36 @@ def test_a_line_about_a_person_counts_as_shown_only_with_their_own_footage(data)
     assert not m.shows_person(line, {"tile": {"source": other}, "lane": "ctx"})     # background, not the person
     assert not m.shows_person(line, {"tile": {"source": other}, "lane": "library"})
     assert not m.shows_person(line, None)
+
+
+def test_the_topic_pool_takes_long_videos_about_the_story_itself(data, monkeypatch):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 6.0} for i in range(3)]
+    m = _matcher(data, shots)
+    m.plan = {"pool": ["勇士 森林狼 集锦", "库里 44分 集锦"]}
+    rows = {"勇士 森林狼 集锦": [{"provider": "bilibili", "id": "BVgame", "title": "勇士vs森林狼 全场集锦 库里44分", "tags": "",
+                               "duration": 600, "play": 50000},
+                              {"provider": "bilibili", "id": "BVshort", "title": "勇士 森林狼", "tags": "", "duration": 30},
+                              {"provider": "bilibili", "id": "BVcook", "title": "家常菜 做法", "tags": "", "duration": 300}],
+            "库里 44分 集锦": [{"provider": "bilibili", "id": "BVcurry", "title": "库里44分集锦 勇士客场", "tags": "",
+                             "duration": 240, "play": 9000}]}
+    class Bili:
+        def search(self, q):
+            return [dict(r) for r in rows.get(q, [])]
+    m.bili = Bili()
+    pool = m.pool_rows()
+    assert [r["id"] for r in pool] == ["BVgame", "BVcurry"] and all(r["pool"] for r in pool)
+
+
+def test_open_lines_walk_through_the_pool_and_a_pool_video_gives_many_windows(data):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 6.0} for i in range(6)]
+    m = _matcher(data, shots)
+    game = {"provider": "bilibili", "id": "BVgame", "duration": 600.0, "pool": True}
+    tiles = {"BVgame": [{"source": game, "t": float(t)} for t in (30, 35, 60, 90, 120, 150, 180)]}
+    jobs = m.pool_sweep(m.shots[:4], {}, {}, {"BVgame": {"available": True}}, tiles)
+    starts = [j[2]["start"] for j in jobs]
+    assert len(jobs) == 4 and starts == sorted(starts)                       # in the video's own order
+    assert all(b - a >= express_match.POOL_GAP for a, b in zip(starts, starts[1:], strict=False))
+    # The picker's pool tiles: one long video fills more lines than SOURCE_MAX, neighbours included.
+    options = {s["id"]: [({"source": game, "t": 40.0 * (i + 1)}, "pool")] for i, s in enumerate(m.shots)}
+    assigned = m.allocate(options, {}, {}, m.shots)
+    assert len(assigned) == 6
