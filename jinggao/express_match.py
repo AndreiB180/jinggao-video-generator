@@ -77,6 +77,7 @@ POOL_WINDOWS = 40       # windows one pool video may give a film at most (a 2-ho
 POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gives 2)
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
+POOL_SEARCH_WAIT = 30.0 # seconds the pool's first search waits for B站 to answer again
 POOL_GRID = 20.0        # the sweep may start a window every this many seconds of a pool video, not only at its previews
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
                 "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈",
@@ -483,7 +484,6 @@ class Matcher:
         queries = [q for q in (self.plan.get("pool") or []) if q][:3]
         if not queries:
             return []
-        quiet = not self.bili or time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET
         # A pool video carries a name of its query in the title (贾乃亮, 森林狼, 抗战): generic words alone
         # ("上市公司", "新闻") brought in other companies' and other stars' videos.
         names = {q: [w for w in _tokens(q) if w not in POOL_GENERIC and not FOOTAGE_WORDS.fullmatch(w)] for q in queries}
@@ -491,11 +491,20 @@ class Matcher:
         for q in queries:
             self.check()
             rows = []
-            if not quiet:
+            # Asked even while other searches are being refused: the pool carries person and news stories, and
+            # without the first query (the event itself) a 贾乃亮 film never showed him (10-30). B站 refusing
+            # it for a moment is worth one wait.
+            for attempt in range(2 if q == queries[0] else 1):
                 try:
-                    rows = self.bili.search(q)
+                    rows = self.bili.search(q) if self.bili else []
                 except Exception:   # noqa: BLE001 — the library may still have them
                     rows = []
+                if rows or not self.bili or attempt:
+                    break
+                wait_until = time.monotonic() + POOL_SEARCH_WAIT
+                while time.monotonic() < wait_until:
+                    self.check()
+                    time.sleep(1.0)
             if not rows:
                 # Bilibili refusing searches: the library's videos about it (titles carry the story's names too).
                 try:
