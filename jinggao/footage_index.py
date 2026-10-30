@@ -469,6 +469,8 @@ NO_PEOPLE = re.compile(r"空无一人|无人|人民币|人行道|机器人|人�
 # asks for it. The describer's own words (its top 600 include 比基尼, 内衣, 丝袜, 亲密).
 RACY = re.compile(r"比基尼|内衣|丝袜|泳装|泳衣|裸露|赤裸|半裸|光着身|赤膊|露背|性感|诱惑|暧昧|亲热|亲吻|接吻|吻|床戏|"
                   r"擦边|走光|乳|胸部|翘臀|热裤|浴缸|洗澡|沐浴|淋浴|殴打|打人|掐|流血|鲜血|血迹|血腥|尸体|刀砍|捅")
+AI_MADE = re.compile(r"AI生成|AI短剧|AI漫剧|AI动画|AI视频|AI绘画|AI制作|AI电影|AI故事|AI剧|AIGC|aigc|即梦|可灵|海螺AI|"
+                     r"Sora|sora|Midjourney|数字人|AI一键|AI图|AI做的|AI创作")
 # Animals: a line about people searched with 母子 or 一家三口 found gorilla and giraffe mothers with their young.
 ANIMAL = re.compile(r"动物|宠物|猩猩|猴子|长颈鹿|大象|狮子|老虎|豹子|猎豹|熊猫|狗熊|黑熊|棕熊|北极熊|狼群|狐狸|鹿|斑马|河马|"
                     r"犀牛|袋鼠|企鹅|海豚|鲸|鲨鱼|猫|狗|犬|兔子|仓鼠|鹦鹉|小鸟|鸟类|飞鸟|母鸡|小鸡|鸭子|鹅|羊群|山羊|绵羊|"
@@ -704,6 +706,8 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
         return None
     if not racy_ok and RACY.search(str(row.get("title") or "") + str(row.get("tags") or "")):
         return None          # a 擦边 upload: its other frames are no better
+    if AI_MADE.search(" ".join(str(row.get(k) or "") for k in ("title", "tags", "description"))):
+        return None          # an AI-made video (AI 短剧): drawn faces read as fake
     if not foreign_ok and FOREIGN.search(str(row.get("title") or "")):
         return None          # 美国自驾、泰恐怖、留学vlog: the people in it are foreign even where a frame does not say so
     described = [m for m in moments if m["text"]]

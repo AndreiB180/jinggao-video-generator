@@ -64,7 +64,7 @@ LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from it
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
 AUDIT_SECONDS = 40      # download time the final repeat check's replacements and the topic round get, flat
-CONTINUE_MAX = 2        # lines a clip may go on into after its own (one scene, a long take; more reads as filler)
+CONTINUE_MAX = 3        # lines a clip may go on into after its own (one scene, a long take; more reads as filler)
 REFUSED_WAIT = 90       # seconds a film waits in place for B站 before its repeats get one more fresh round
 TOPIC_SECONDS = 25      # the topic round, a last fill before borrowing
 LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at once it waited up to three minutes)
@@ -99,7 +99,10 @@ NOISE_WORDS = re.compile(
 # Uploads that say they are sped up (re-uploaders speed clips up against duplicate checks) or are memes:
 # never used.
 SKIPPED_UPLOADS = re.compile(r"倍速|加速版|快进|变速|表情包|梗图|斗图|擦边|性感|福利|比基尼|丝袜|写真|热舞|美腿|内衣|泳装|"
-                             r"吻戏|床戏|亲热|激情|大尺度")
+                             r"吻戏|床戏|亲热|激情|大尺度|"
+                             # AI-made videos (AI 短剧, image-to-video): drawn faces a platform and viewers spot at once
+                             r"AI生成|AI短剧|AI漫剧|AI动画|AI视频|AI绘画|AI制作|AI电影|AI故事|AI剧|AIGC|aigc|"
+                             r"即梦|可灵|海螺AI|Sora|sora|Midjourney|数字人|AI一键|AI图")
 DRAMA_WORDS = re.compile(r"电视剧|电影|剧照|饰演|扮演|演员|剧情|混剪|AI|特型演员|模仿|cos|动画|动漫|漫画|手绘|配音|片段合集|"
                          r"朗诵|背景视频|LED|舞台|情景")
 PERSON_EVIDENCE = re.compile(r"影像|纪录|新闻|讲话|原声|视频|资料|珍贵|历史|现场|采访|发言|报道")
@@ -2852,6 +2855,29 @@ class Matcher:
                 self.notes.append(f"{filled} 镜用素材库里同一主题的新视频补上")
             cards = [s for s in cards if s["id"] not in final]
             stamp("library_d", began)
+        if cards:
+            # Before a clip is shown a second time: the neighbour's clip going on (a long take reads as one scene; the
+            # same clip twice reads as a repeat, and strict relevance leaves more lines open).
+            self.abandon.clear()
+            began = time.monotonic()
+            jobs = self.continuation_jobs(cards, final, reserved, streams)
+            if jobs:
+                self.job_choice.update({job_id: c for job_id, _, c in jobs})
+                got, failed, bad, running = self.download(jobs, streams, qa=checking,
+                                                           deadline=time.monotonic() + AUDIT_SECONDS)
+                failures.update(failed)
+                qa_bad.update(bad)
+                for job_id, sid, choice in jobs:
+                    if sid in final or job_id not in got or job_id in bad:
+                        continue
+                    if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
+                        continue
+                    final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
+                                           "job": job_id}
+                    files[sid] = got[job_id]
+            failures.update(self.stop_downloads())
+            cards = [s for s in cards if s["id"] not in final]
+            stamp("continue_late", began)
         reused = 0
         for shot in list(cards):
             # The same clip a second time (never next to itself), from a video the film shows only once so far.
