@@ -78,6 +78,7 @@ POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gi
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
 POOL_SEARCH_WAIT = 30.0 # seconds the pool's first search waits for B站 to answer again
+POOL_CARRIES = 0.4      # share of a film the pool must already fill before the library stays out of its lines
 POOL_GRID = 20.0        # the sweep may start a window every this many seconds of a pool video, not only at its previews
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
                 "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈",
@@ -87,6 +88,7 @@ POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公�
 # the game replay itself was never reached). Footage words in a title (回放, 集锦, 纪录片) count for it.
 POOL_TALK = re.compile(r"采访|专访|访谈|学英语|解读|解析|分析|盘点|复盘|讲解|解说|点评|评论|评述|聊聊|说说|看法|观点|"
                        r"揭秘|科普|为什么|怎么看|告诉你|带你|读懂|了解一家|十分钟|一分钟|三分钟|几分钟")
+POOL_FAKE = re.compile(r"神似|恶搞|山寨|模仿|世界名画|名画|配音|鬼畜|二创|整活")
 POOL_FOOTAGE = re.compile(r"回放|全场|集锦|纪录片|实录|影像|现场|原声|录像|镜头|画面|直播|全程|高清")
 POOL_GAP = 12.0         # seconds between two windows of one pool video
 FRONTIER = 1            # options per line whose play addresses are asked for before the first round (the rest when
@@ -180,7 +182,7 @@ POOL_VET_SYSTEM = """你在给一条短视频挑“同题素材”：从这些�
 same：画面就是这件事本身的视频——同一场比赛的回放或集锦、这个人做这件事的现场（直播间、发布会、工厂）或新闻画面、这段历史的真实影像或纪录片。
 当事人本人对着镜头的画面也算 same：他的直播录屏（直播间里对着镜头卖货）、演讲、发布会、接受采访。
 field：不是这件事，但是同一类事的真实现场画面，配这条口播不违和（讲某场 NBA 比赛时别的 NBA 比赛，讲某人直播带货时别的直播间带货现场）。
-都不要：这个人参加的综艺、唱歌、影视剧、别的运动、别的领域；别人（主持人、博主、解说）对着镜头讲解这件事为主的；PPT、文字、截图为主的。
+都不要：这个人参加的综艺、唱歌、影视剧、模仿恶搞、找演员扮演的，别的运动、别的领域；别人（主持人、博主、解说）对着镜头讲解这件事为主的；PPT、文字、截图为主的。
 只输出 JSON：{"same":["V1"],"field":["V3"]}，没有就空数组。"""
 
 TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体画面，不出现可辨认人物特写"
@@ -522,6 +524,9 @@ class Matcher:
                 # Noise words the queries themselves use are the story (a film about live selling wants 直播).
                 noise = [w for w in NOISE_WORDS.findall(row.get("title", "")) if not any(w in query for query in queries)]
                 if not 60 <= duration <= 3 * 3600 or self.off_limits(row) or noise:
+                    continue
+                # Real footage only: no drama, mash-up or lookalike parody (a 贾乃亮 "名画" with two lookalikes, 10-30).
+                if not self.ancient and (DRAMA_WORDS.search(row.get("title", "")) or POOL_FAKE.search(row.get("title", ""))):
                     continue
                 if names.get(q) and not any(w in text for w in names[q]):
                     continue
@@ -3003,8 +3008,11 @@ class Matcher:
             nonlocal carried
             for _, _, choice in self.drop_queued():
                 release(choice)
-            lines = [s for s in pending
-                     if not (pool_strong and any(self.pool_covers(s, r) for r in self.pool_sources))]
+            # ...when it is actually carrying the film: a thin pool whose windows QA keeps turning down left a 贾乃亮
+            # film to borrow one warehouse clip twelve times (10-30).
+            carrying = sum(1 for c in final.values() if c["tile"]["source"].get("pool")) >= POOL_CARRIES * len(self.shots)
+            lines = [s for s in pending if not (pool_strong and carrying
+                                                and any(self.pool_covers(s, r) for r in self.pool_sources))]
             if not lines:
                 return 0
             try:
