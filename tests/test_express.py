@@ -1057,3 +1057,15 @@ def test_pool_keeps_to_the_event_itself_when_its_footage_is_long_enough(data, mo
     next(r for r in fresh if r["id"] == "BVr")["duration"] = 600
     monkeypatch.setattr(m, "chat", lambda *a, **k: ({"same": [label["BVr"]], "field": [label["BVold"]]}, {}))
     assert [r["id"] for r in m.vet_pool(fresh, tiles_of(fresh))] == ["BVr", "BVold"]
+
+
+def test_the_sweep_walks_a_long_pool_video_past_its_previews(data):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 6.0} for i in range(30)]
+    m = _matcher(data, shots)
+    replay = {"provider": "bilibili", "id": "BVreplay", "duration": 7236.0, "pool": True, "title": "全场回放"}
+    m.pool_sources = [replay]
+    tiles = {"BVreplay": [{"source": replay, "t": float(t)} for t in (600, 1200, 1800)]}
+    jobs = m.pool_sweep(m.shots, {}, {}, {"BVreplay": {"available": True}}, tiles)
+    starts = [j[2]["start"] for j in jobs]
+    assert len(jobs) == 30 and starts == sorted(starts)           # one window a line, in the video's order
+    assert all(b - a >= express_match.POOL_GAP for a, b in zip(starts, starts[1:], strict=False))

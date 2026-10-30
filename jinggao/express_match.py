@@ -77,6 +77,7 @@ POOL_WINDOWS = 40       # windows one pool video may give a film at most (a 2-ho
 POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gives 2)
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
+POOL_GRID = 20.0        # the sweep may start a window every this many seconds of a pool video, not only at its previews
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
                 "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈",
                 "科技", "集团", "股份", "控股", "有限", "企业", "品牌", "官方", "中国", "国家", "全国", "上市", "直播间"}
@@ -640,8 +641,12 @@ class Matcher:
                 length = float(source.get("duration") or 0)
                 cursor = cursors.get(bvid, -1e9)
                 start = None
-                for tile in sorted(tiles, key=lambda t: (float(t["t"]) <= cursor, float(t["t"]))):
-                    begin = max(0.0, float(tile["t"]) - 1.0)
+                # Its preview times and a grid over the whole video between the first and last 3% (24 previews ran
+                # out after a dozen lines of a two-hour game replay and the rest went to the library).
+                times = {float(t["t"]) for t in tiles} | {
+                    float(x) for x in range(int(length * 0.03), int(length * 0.97), int(POOL_GRID))}
+                for moment in sorted(times, key=lambda t: (t <= cursor, t)):
+                    begin = max(0.0, moment - 1.0)
                     if begin + need > length - 0.1:
                         continue
                     if all(abs(begin - a) >= POOL_GAP and (begin + need <= a or begin >= b) for a, b in reserved.get(key, [])):
@@ -1617,20 +1622,22 @@ class Matcher:
                 reupload = any(abs(pos - index) == 1 and assigned_keys.get(pos) != key for pos in close)
                 if key[0] == "pixabay" and stock_used >= stock_cap:
                     continue
+                pooled = bool(tile["source"].get("pool"))
+                long_pool = pooled and float(tile["source"].get("duration") or 0) >= POOL_ENOUGH
                 if lane not in ("person", "person_near") and not (shot.get("persons") and not self.unfilmed_shot(shot)):
                     # Hard limits (scores alone let one long stock take fill ten shots in a row): a source at most
                     # SOURCE_MAX windows a film, SCENE_GAP seconds apart, never in neighbouring shots, never the same
                     # picture again. A news report's windows show different scenes: it may fill more lines.
                     news = lane == "news"
-                    pooled = bool(tile["source"].get("pool"))
                     cap = NEWS_CAP if news else self.pool_cap(tile["source"]) if pooled else min(SOURCE_MAX, hard_cap)
                     gap = SCENE_SECONDS if news else POOL_GAP if pooled else SCENE_GAP
                     if used >= cap or twin or (adjacent and not news and not pooled) or near < gap:
                         continue
-                cost = (rank + 2.0 * used + 6.0 * max(0, used + 1 - cap) + 3.0 * adjacent
+                # A pool video is meant to run under the whole film: its next window costs little.
+                cost = (rank + (0.3 if pooled else 2.0) * used + 6.0 * max(0, used + 1 - cap) + 3.0 * adjacent
                         + (8.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
                         # Footage other recent videos already show (a batch on one topic would repeat itself).
-                        + min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0))
+                        + (0 if long_pool else min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0)))
                         + {"news": 0, "pool": -2, "sweep": -1, "pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
                            "near": 6}.get(lane, 6)
                         # A line about a named person should show that person, not generic topic footage.
@@ -2960,12 +2967,20 @@ class Matcher:
             picture_thread = threading.Thread(target=pictures_early, name="pictures", daemon=True)
             picture_thread.start()
         library_filled = 0
+        # A pool long enough to run under the film covers its lines; the library (words matched to frame descriptions,
+        # whatever the story) gave an NBA film football, F1 and street courts and spent 116 checks on them (10-30).
+        pool_strong = sum(float(r.get("duration") or 0) for r in self.pool_sources
+                          if not r.get("pool_talk") and r["id"] in pool_tiles) >= POOL_ENOUGH
         def fill_from_library(tag, levels, per_line=LIB_FILL_PER_LINE, seconds=None):
             nonlocal carried
             for _, _, choice in self.drop_queued():
                 release(choice)
+            lines = [s for s in pending
+                     if not (pool_strong and any(self.pool_covers(s, r) for r in self.pool_sources))]
+            if not lines:
+                return 0
             try:
-                jobs = self.library_jobs(pending, final, reserved, streams, levels=levels, tag=tag, per_line=per_line)
+                jobs = self.library_jobs(lines, final, reserved, streams, levels=levels, tag=tag, per_line=per_line)
             except (media.Cancelled, Budget):
                 raise
             except Exception as exc:   # noqa: BLE001 — the next fills still follow
