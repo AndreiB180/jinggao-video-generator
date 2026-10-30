@@ -76,6 +76,7 @@ POOL_TILES = 24         # preview frames of each, spread over it, for the picker
 POOL_WINDOWS = 40       # windows one pool video may give a film at most (a 2-hour game replay); shorter ones
 POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gives 2)
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
+POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
                 "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈",
                 "科技", "集团", "股份", "控股", "有限", "企业", "品牌", "官方", "中国", "国家", "全国", "上市", "直播间"}
@@ -169,6 +170,12 @@ ANCIENT_RULES = """
 PRESENTER_SYSTEM = """图片每一行是同一个视频的8张抽帧（行首黄色编号 V1、V2…）。
 找出“以主持人/博主/讲解者对着镜头说话为主”的视频：8帧里有3帧及以上是真人（或虚拟主播）正对镜头讲话、坐在桌前或站在背景前讲解的画面。
 影视剧、纪录片里的人物对话、新闻现场、采访对象不算。只输出 JSON：{"presenter":["V2","V5"]}，没有就空数组。"""
+
+POOL_VET_SYSTEM = """你在给一条短视频挑“同题素材”：从这些视频里取画面配整条口播。图片每一行是同一个视频的6张抽帧（行首黄色编号 V1、V2…），文字里有每个视频的标题。
+same：画面就是这件事本身的视频——同一场比赛的回放或集锦、这个人做这件事的现场（直播间、发布会、工厂）或新闻画面、这段历史的真实影像或纪录片。
+field：不是这件事，但是同一类事的真实现场画面，配这条口播不违和（讲某场 NBA 比赛时别的 NBA 比赛，讲某人直播带货时别的直播间带货现场）。
+都不要：这个人参加的综艺、唱歌、影视剧、别的运动、别的领域；以主持人或博主对着镜头讲解为主的；PPT、文字、截图为主的。
+只输出 JSON：{"same":["V1"],"field":["V3"]}，没有就空数组。"""
 
 TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体画面，不出现可辨认人物特写"
 
@@ -523,22 +530,84 @@ class Matcher:
             text = row.get("title", "") + " " + row.get("tags", "")
             return not anchor or sum(1 for w in anchor if w in text) >= min(len(anchor), 2)
         ranked = sorted(scored.values(), key=lambda item: (not anchored(item[1]), -item[0]))
-        strict = sum(float(row.get("duration") or 0) for _, row in ranked
-                     if anchored(row) and not POOL_TALK.search(row.get("title", "")))
         out, titles = [], set()
         for _, row in ranked:
             title = row.get("title", "")[:18]
-            if title in titles or (strict >= POOL_ENOUGH and not anchored(row)):
+            if title in titles:
                 continue
             titles.add(title)
-            out.append(dict(row) | {"pool": True, "pool_talk": bool(POOL_TALK.search(row.get("title", "")))})
-            if len(out) >= POOL_SOURCES:
+            out.append(dict(row) | {"pool": True, "pool_talk": bool(POOL_TALK.search(row.get("title", ""))),
+                                    "anchored": anchored(row)})
+            if len(out) >= POOL_CANDIDATES:
                 break
+        return out
+
+    def vet_pool(self, candidates, tiles) -> list[dict]:
+        """The pool from its candidates: one look at six frames of each decides which show this very event (same)
+        and which only the same kind of thing (field); a title naming the person also finds his variety shows and
+        songs (10-30: a 贾乃亮 live-selling film drew a billiards show and a duet). Same-event footage is the pool;
+        footage of the field joins only when the event's own is under POOL_ENOUGH seconds. Without an answer the
+        candidates naming the event come first, the same way. Candidates left out lose their pool mark."""
+        rows = [r for r in candidates if tiles.get((r["provider"], r["id"]))
+                and (r["provider"], r["id"]) not in self.presenter_sources]
+        same, field = None, []
+        if rows:
+            try:
+                same, field = self._vet_pool(rows, tiles)
+            except media.Cancelled:
+                raise
+            except Exception as exc:   # noqa: BLE001 — the titles decide
+                if type(exc).__name__ in ("BudgetExceeded", "ModelUnavailable", "PricingUnavailable"):
+                    raise
+                same = None
+        if same is None:
+            same = [r for r in rows if r.get("anchored")]
+            field = [r for r in rows if not r.get("anchored")]
+        def length(group):
+            return sum(float(r.get("duration") or 0) for r in group if not r.get("pool_talk"))
+        out = list(same) + (list(field) if length(same) < POOL_ENOUGH else [])
+        out = out[:POOL_SOURCES]
+        kept = {r["id"] for r in out}
+        for r in candidates:
+            if r["id"] not in kept:
+                r.pop("pool", None)
         self.pool_sources = list(out)
         if out:
-            self.pool_found = queries
+            self.pool_found = [q for q in (self.plan.get("pool") or []) if q][:3]
             self.notes.append(f"同题素材：{len(out)} 部（" + "；".join(r.get("title", "")[:20] for r in out) + "）")
+        elif candidates:
+            self.notes.append(f"同题素材：{len(candidates)} 部候选都不是这件事的画面，没有用")
         return out
+
+    def _vet_pool(self, rows, tiles):
+        self.check()
+        cols, w, h = 6, 160, 90
+        sheet = Image.new("RGB", (60 + cols * w, len(rows) * h), (0, 0, 0))
+        draw, font, ids, text = ImageDraw.Draw(sheet), _font(26), {}, []
+        for r, row in enumerate(rows):
+            label = f"V{r + 1}"
+            ids[label] = row
+            draw.text((6, r * h + 28), label, font=font, fill=(255, 214, 0))
+            frames = tiles[(row["provider"], row["id"])]
+            step = max(1, len(frames) / cols)
+            for c in range(min(cols, len(frames))):
+                image = frames[min(len(frames) - 1, int(c * step + step / 2))].get("image")
+                if image is not None:
+                    sheet.paste(image.resize((w, h)), (60 + c * w, r * h))
+            text.append(f"{label} 标题：{row.get('title', '')[:60]}（{float(row.get('duration') or 0) / 60:.0f} 分钟）")
+        head = (f"文稿标题：{self.project.get('title', '')}\n整篇领域：{self.plan.get('domain') or ''}\n"
+                f"文稿开头：{(self.project.get('script') or '')[:160]}\n")
+        result, _ = self.chat(POOL_VET_SYSTEM, [{"type": "text", "text": head + "\n".join(text)},
+                                                {"type": "image_url", "image_url": {"url": _jpeg(sheet)}}],
+                              max_tokens=200, task="express_qa", attempts=2)
+        if not isinstance(result, dict):
+            raise ValueError("no answer")
+        def pick(key):
+            labels = [str(v).strip() for v in (result.get(key) or [])]
+            return [ids[v] for v in labels if v in ids]
+        same = pick("same")
+        field = [r for r in pick("field") if r not in same]
+        return same, field
 
     def pool_sweep(self, pending, final, reserved, streams, pool_tiles) -> list:
         """Lines still open walk through the pool videos in order (a later preview frame each time, POOL_GAP apart):
@@ -1801,6 +1870,11 @@ class Matcher:
                 profile = express_clean.profile([im for _, im in sprites], analysis)
                 with self.lock:
                     self.profiles[key] = profile
+            if source.get("pool"):
+                # A broadcast's main camera hardly moves: the court's floor text and the arena's boards sit in the
+                # same place on every preview and read as marks across the middle (10-30: every window of a game
+                # replay that QA had passed was dropped as watermarked). QA looks at these windows itself.
+                profile = dict(profile, boxes=[b for b in profile.get("boxes", []) if not b.get("central")])
             broadcast = bool(BROADCAST.search(" ".join(str(source.get(k, "")) for k in ("title", "tags", "author"))))
             return express_clean.analyse(path, float(shot["duration"]), size, self.out_aspect(), profile,
                                          sprites, choice["start"], channel_logo=broadcast)
@@ -2432,6 +2506,8 @@ class Matcher:
         self.progress(15, f"读取 {sum(len(v) for v in chosen.values())} 个候选的预览")
         tiles = self.all_tiles(chosen, {g["id"] for g in groups if g.get("person")})
         self.presenter_sources = self.screen_presenters(chosen, tiles)
+        if pool_rows:
+            pool_rows = self.vet_pool(pool_rows, tiles)
         try:   # the library grows with every video made (title text and frame times; described in bulk later)
             from . import footage_index
             footage_index.add_seen([row for rows in chosen.values() for row in rows],

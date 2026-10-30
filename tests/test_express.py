@@ -1017,6 +1017,7 @@ def test_pool_takes_a_video_naming_the_person_and_a_noise_word_the_story_is_abou
 
 
 def test_pool_keeps_to_the_event_itself_when_its_footage_is_long_enough(data, monkeypatch):
+    from PIL import Image
     m = _matcher(data, [planner.new_shot("勇士赢了。") | {"duration": 6.0}])
     m.plan["pool"] = ["勇士 森林狼 全场回放", "库里 比赛 集锦"]
     rows = [{"provider": "bilibili", "id": "BVold", "title": "2016年勇士vs雷霆中文超清回放 库里比赛", "duration": 7000, "play": 900000},
@@ -1028,7 +1029,31 @@ def test_pool_keeps_to_the_event_itself_when_its_footage_is_long_enough(data, mo
             return [dict(r) for r in rows]
     m.bili = Bili()
     monkeypatch.setattr(express_match, "_stamp", lambda name: 0)
-    assert [r["id"] for r in m.pool_rows()] == ["BVr"]
-    rows[1]["duration"] = 600                     # too short to fill a film: other Curry footage joins after it
-    ids = [r["id"] for r in m.pool_rows()]
-    assert ids[0] == "BVr" and len(ids) == 3
+    candidates = m.pool_rows()
+    assert [r["id"] for r in candidates][0] == "BVr" and len(candidates) == 3   # the event's own first
+    image = Image.new("RGB", (160, 90))
+    def tiles_of(rows_):
+        return {("bilibili", r["id"]): [{"source": r, "t": float(t), "image": image} for t in range(10, 70, 10)]
+                for r in rows_}
+    m.presenter_sources = set()
+    # Without a picture answer: the videos naming the event, which are long enough, are the whole pool.
+    def down(*a, **k):
+        raise RuntimeError("down")
+    monkeypatch.setattr(m, "chat", down)
+    fresh = [dict(r) for r in candidates]
+    assert [r["id"] for r in m.vet_pool(fresh, tiles_of(fresh))] == ["BVr"]
+    # The picture check: the 2016 game is only the field; with the event's own footage long enough it stays out
+    # and loses its pool mark.
+    fresh = [dict(r) for r in candidates]
+    order = [r["id"] for r in fresh]
+    label = {bvid: f"V{i + 1}" for i, bvid in enumerate(order)}
+    monkeypatch.setattr(m, "chat", lambda *a, **k: ({"same": [label["BVr"], label["BVc"]], "field": [label["BVold"]]}, {}))
+    pool = m.vet_pool(fresh, tiles_of(fresh))
+    assert [r["id"] for r in pool] == ["BVr", "BVc"]
+    assert "pool" not in next(r for r in fresh if r["id"] == "BVold")
+    assert m.pool_sources == pool and "同题素材：2 部" in m.notes[-1]
+    # A short event: same-kind footage joins after it.
+    fresh = [dict(r) for r in candidates]
+    next(r for r in fresh if r["id"] == "BVr")["duration"] = 600
+    monkeypatch.setattr(m, "chat", lambda *a, **k: ({"same": [label["BVr"]], "field": [label["BVold"]]}, {}))
+    assert [r["id"] for r in m.vet_pool(fresh, tiles_of(fresh))] == ["BVr", "BVold"]
