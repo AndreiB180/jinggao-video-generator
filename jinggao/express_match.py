@@ -344,6 +344,7 @@ class Matcher:
         self.ancient = set(self.plan.get("ancient") or [])   # people from before photography (no real footage can exist)
         self.host_hits, self.host_sources = {}, set()   # sources whose windows keep showing a presenter on camera
         self.presenter_sources = set()                  # presenter-led videos found from their preview frames
+        self.pool_found = []        # the pool queries that found videos about the story (QA judges footage against them)
         self.library_rich = set()   # groups whose lines all found library videos of their own (fewer live searches)
         self.fill_errors = {}   # job id -> why its download or text check failed (written back to the library's checks)
         self.window_notes = []  # library moments judged here, for footage_index.record_checks
@@ -459,16 +460,26 @@ class Matcher:
         """Long Bilibili videos about the story itself (the planner's pool queries): best match of title to the
         queries first, at most POOL_SOURCES. Rows are marked "pool"."""
         queries = [q for q in (self.plan.get("pool") or []) if q][:3]
-        if not queries or not self.bili or time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET:
+        if not queries:
             return []
+        quiet = not self.bili or time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET
         words = list(dict.fromkeys(w for q in queries for w in _tokens(q) if not FOOTAGE_WORDS.fullmatch(w)))
         scored = {}
         for q in queries:
             self.check()
-            try:
-                rows = self.bili.search(q)
-            except Exception:   # noqa: BLE001 — one query less
-                continue
+            rows = []
+            if not quiet:
+                try:
+                    rows = self.bili.search(q)
+                except Exception:   # noqa: BLE001 — the library may still have them
+                    rows = []
+            if not rows:
+                # Bilibili refusing searches: the library's videos about it (titles carry the story's names too).
+                try:
+                    from . import footage_index
+                    rows = footage_index.search(q, limit=12)
+                except Exception:   # noqa: BLE001
+                    rows = []
             for rank, row in enumerate(rows[:12]):
                 text = row.get("title", "") + " " + row.get("tags", "")
                 duration = float(row.get("duration") or 0)
@@ -489,6 +500,7 @@ class Matcher:
             if len(out) >= POOL_SOURCES:
                 break
         if out:
+            self.pool_found = queries
             self.notes.append(f"同题素材：{len(out)} 部（" + "；".join(r.get("title", "")[:20] for r in out) + "）")
         return out
 
@@ -1495,7 +1507,7 @@ class Matcher:
                         + (8.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
                         # Footage other recent videos already show (a batch on one topic would repeat itself).
                         + min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0))
-                        + {"news": 0, "pool": 0, "pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
+                        + {"news": 0, "pool": -2, "pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
                            "near": 6}.get(lane, 6)
                         # A line about a named person should show that person, not generic topic footage.
                         + (5 if lane == "topic" and shot.get("persons") and not self.unfilmed_shot(shot) else 0)
@@ -1921,6 +1933,9 @@ class Matcher:
             lines.append(f"{label} 口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{role}")
         domain = self.plan.get("domain") or ""
         head = [f"整篇领域：{domain}"] if domain else []
+        if self.pool_found:
+            head.append("整篇讲的是：" + "；".join(self.pool_found) + "。画面明显是另一个年代或另一件事的（如讲抗战却是现代坦克、"
+                        "阅兵、客机、现代街景，讲某场比赛却是别的比赛）判跑题")
         if self.ancient:
             head.append(f"本片是古代历史题材（{'、'.join(sorted(self.ancient))}）：古装影视剧、纪录片情景再现、历史动画和插画都是合格的画面，"
                         "不要因为是演员扮演、不是真实史料判不合格；只有现代场景、明显是别的朝代或外国、主持人对镜头讲解才不合格")
@@ -2704,7 +2719,7 @@ class Matcher:
                 files[sid] = path
                 self.place(sid, choice, key_of(choice)[0])
         pending = [s for s in pending if s["id"] not in final]
-        stock = self.stock_options(pending, groups, results, final) if pending and self.pixa else {}
+        stock = self.stock_options(pending, groups, results, final) if pending and self.pixa and not pool_tiles else {}
         if stock:
             # Licensed stock further down the same searches (20 results each, only the best few were offered):
             # clean footage for the lines still open, before reusing anything already in the film.
