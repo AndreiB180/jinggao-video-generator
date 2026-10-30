@@ -74,6 +74,8 @@ LIBRARY_SECONDS = 90    # ...and the library round at most (scaled by films at o
 POOL_SOURCES = 4        # long videos about the story a film draws on
 POOL_TILES = 24         # preview frames of each, spread over it, for the picker and the sweep
 POOL_WINDOWS = 16       # windows one pool video may give a film
+POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
+                "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈"}
 POOL_GAP = 12.0         # seconds between two windows of one pool video
 FRONTIER = 1            # options per line whose play addresses are asked for before the first round (the rest when
                         # a round allocates them: every address is two B站 calls)
@@ -464,6 +466,9 @@ class Matcher:
             return []
         quiet = not self.bili or time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET
         words = list(dict.fromkeys(w for q in queries for w in _tokens(q) if not FOOTAGE_WORDS.fullmatch(w)))
+        # A pool video carries a name of its query in the title (贾乃亮, 森林狼, 抗战): generic words alone
+        # ("上市公司", "新闻") brought in other companies' and other stars' videos.
+        names = {q: [w for w in _tokens(q) if w not in POOL_GENERIC and not FOOTAGE_WORDS.fullmatch(w)] for q in queries}
         scored = {}
         for q in queries:
             self.check()
@@ -484,6 +489,8 @@ class Matcher:
                 text = row.get("title", "") + " " + row.get("tags", "")
                 duration = float(row.get("duration") or 0)
                 if not 60 <= duration <= 3 * 3600 or SKIPPED_UPLOADS.search(text) or NOISE_WORDS.search(row.get("title", "")):
+                    continue
+                if names.get(q) and not any(w in text for w in names[q]):
                     continue
                 overlap = sum(1 for w in words if w in text) / max(1, len(words))
                 score = (3 * overlap - 0.08 * rank + min(0.5, math.log10(1 + float(row.get("play") or 0)) / 12)
@@ -1507,7 +1514,7 @@ class Matcher:
                         + (8.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
                         # Footage other recent videos already show (a batch on one topic would repeat itself).
                         + min(6.0, 2.0 * self.elsewhere.get(f"{key[0]}:{key[1]}", 0))
-                        + {"news": 0, "pool": -2, "pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
+                        + {"news": 0, "pool": -2, "sweep": -1, "pick": 0, "person": 1.5, "person_near": 2.5, "ctx": 3, "topic": 4, "neighbor": 4,
                            "near": 6}.get(lane, 6)
                         # A line about a named person should show that person, not generic topic footage.
                         + (5 if lane == "topic" and shot.get("persons") and not self.unfilmed_shot(shot) else 0)
@@ -2422,7 +2429,7 @@ class Matcher:
                 picks.update(group_picks)
                 for sid in group["shots"]:
                     ctx_tiles[sid] = extra.get("ctx", [])
-        pool_picks, pool_tiles = {}, {}
+        pool_picks, pool_tiles, pool_spread = {}, {}, []
         if pool_rows:
             for row in pool_rows:
                 key = (row["provider"], row["id"])
@@ -2434,6 +2441,7 @@ class Matcher:
             lists = list(pool_tiles.values())
             for i in range(max(len(x) for x in lists)):
                 spread += [x[i] for x in lists if i < len(x)]
+            pool_spread = list(spread)
             spread = spread[:3 * SHEET_COLS * SHEET_ROWS]
             def run_pool_pick(group):
                 try:
@@ -2490,7 +2498,11 @@ class Matcher:
             sid = shot["id"]
             index = self.position[sid]
             person = bool(shot.get("persons")) and not self.unfilmed_shot(shot)
-            own = (news_tiles.get(sid, []) + [(t, "pool") for t in pool_picks.get(sid, [])]
+            # A film with a pool runs on it the way the client's references do (one game, one archive): its frames come
+            # right after the line's own pool picks, before other videos' picks.
+            sweep_tiles = [] if (shot.get("persons") and not self.unfilmed_shot(shot)) else [
+                (t, "sweep") for t in pool_spread if t not in pool_picks.get(sid, [])]
+            own = (news_tiles.get(sid, []) + [(t, "pool") for t in pool_picks.get(sid, [])] + sweep_tiles
                    + [(t, "pick") for t in picks.get(sid, [])])
             fill = []
             if person:
