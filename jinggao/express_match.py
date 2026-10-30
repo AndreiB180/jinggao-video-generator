@@ -2346,9 +2346,9 @@ class Matcher:
             news_thread = threading.Thread(target=news_job, name="news-pool", daemon=True)
             news_thread.start()
         chosen = self.candidates(groups, results)
-        pool = self.pool_rows()
-        if pool:
-            chosen["POOL"] = pool
+        pool_rows = self.pool_rows()
+        if pool_rows:
+            chosen["POOL"] = pool_rows
         def carries(row, name):
             return name in " ".join(str(row.get(k, "")) for k in ("title", "tags", "description"))
         self.unfilmed = {name for name in self.names
@@ -2408,8 +2408,8 @@ class Matcher:
                 for sid in group["shots"]:
                     ctx_tiles[sid] = extra.get("ctx", [])
         pool_picks, pool_tiles = {}, {}
-        if pool:
-            for row in pool:
+        if pool_rows:
+            for row in pool_rows:
                 key = (row["provider"], row["id"])
                 if tiles.get(key) and key not in self.presenter_sources:
                     pool_tiles[row["id"]] = tiles[key]
