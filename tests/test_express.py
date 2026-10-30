@@ -999,3 +999,36 @@ def test_pool_rows_prefer_footage_over_talk_and_need_the_story_name(data, monkey
     ids = [r["id"] for r in found]
     assert ids[0] == "BVr" and "BVd" not in ids              # 科技 alone is no name of the story
     assert next(r for r in found if r["id"] == "BVt")["pool_talk"] if "BVt" in ids else True
+
+
+def test_pool_takes_a_video_naming_the_person_and_a_noise_word_the_story_is_about(data, monkeypatch):
+    m = _matcher(data, [planner.new_shot("贾乃亮单日卖5.7亿。") | {"duration": 6.0}])
+    m.plan["pool"] = ["贾乃亮 直播间 现场", "遥望科技 发布会 新闻"]
+    rows = [{"provider": "bilibili", "id": "BVj", "title": "贾乃亮10.17早9点骆驼羽绒服底价大场", "duration": 1347, "play": 9000},
+            {"provider": "bilibili", "id": "BVc", "title": "贾乃亮在车里直播15分钟就睡着了", "duration": 900, "play": 9000},
+            {"provider": "bilibili", "id": "BVg", "title": "直播游戏实况", "duration": 900, "play": 9000}]
+    class Bili:
+        logged_in = True
+        def search(self, q):
+            return [dict(r) for r in rows]
+    m.bili = Bili()
+    monkeypatch.setattr(express_match, "_stamp", lambda name: 0)
+    assert {r["id"] for r in m.pool_rows()} == {"BVj", "BVc"}
+
+
+def test_pool_keeps_to_the_event_itself_when_its_footage_is_long_enough(data, monkeypatch):
+    m = _matcher(data, [planner.new_shot("勇士赢了。") | {"duration": 6.0}])
+    m.plan["pool"] = ["勇士 森林狼 全场回放", "库里 比赛 集锦"]
+    rows = [{"provider": "bilibili", "id": "BVold", "title": "2016年勇士vs雷霆中文超清回放 库里比赛", "duration": 7000, "play": 900000},
+            {"provider": "bilibili", "id": "BVr", "title": "勇士vs森林狼完整全场回放", "duration": 7200, "play": 2000},
+            {"provider": "bilibili", "id": "BVc", "title": "库里比赛集锦", "duration": 300, "play": 90000}]
+    class Bili:
+        logged_in = True
+        def search(self, q):
+            return [dict(r) for r in rows]
+    m.bili = Bili()
+    monkeypatch.setattr(express_match, "_stamp", lambda name: 0)
+    assert [r["id"] for r in m.pool_rows()] == ["BVr"]
+    rows[1]["duration"] = 600                     # too short to fill a film: other Curry footage joins after it
+    ids = [r["id"] for r in m.pool_rows()]
+    assert ids[0] == "BVr" and len(ids) == 3

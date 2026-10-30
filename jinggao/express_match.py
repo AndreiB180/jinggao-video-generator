@@ -75,6 +75,7 @@ POOL_SOURCES = 4        # long videos about the story a film draws on
 POOL_TILES = 24         # preview frames of each, spread over it, for the picker and the sweep
 POOL_WINDOWS = 40       # windows one pool video may give a film at most (a 2-hour game replay); shorter ones
 POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gives 2)
+POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
                 "报道", "全场", "回放", "对话", "视频", "合集", "完整版", "高清", "最新", "事件", "历史", "专访", "访谈",
                 "科技", "集团", "股份", "控股", "有限", "企业", "品牌", "官方", "中国", "国家", "全国", "上市", "直播间"}
@@ -475,7 +476,6 @@ class Matcher:
         if not queries:
             return []
         quiet = not self.bili or time.time() - _stamp("bili-search-refused.json") < SEARCH_QUIET
-        words = list(dict.fromkeys(w for q in queries for w in _tokens(q) if not FOOTAGE_WORDS.fullmatch(w)))
         # A pool video carries a name of its query in the title (贾乃亮, 森林狼, 抗战): generic words alone
         # ("上市公司", "新闻") brought in other companies' and other stars' videos.
         names = {q: [w for w in _tokens(q) if w not in POOL_GENERIC and not FOOTAGE_WORDS.fullmatch(w)] for q in queries}
@@ -498,11 +498,16 @@ class Matcher:
             for rank, row in enumerate(rows[:12]):
                 text = row.get("title", "") + " " + row.get("tags", "")
                 duration = float(row.get("duration") or 0)
-                if not 60 <= duration <= 3 * 3600 or SKIPPED_UPLOADS.search(text) or NOISE_WORDS.search(row.get("title", "")):
+                # Noise words the queries themselves use are the story (a film about live selling wants 直播).
+                noise = [w for w in NOISE_WORDS.findall(row.get("title", "")) if not any(w in query for query in queries)]
+                if not 60 <= duration <= 3 * 3600 or SKIPPED_UPLOADS.search(text) or noise:
                     continue
                 if names.get(q) and not any(w in text for w in names[q]):
                     continue
-                overlap = sum(1 for w in words if w in text) / max(1, len(words))
+                # How much of this query's own names the title carries (all queries' words together left a video
+                # carrying only "贾乃亮" at 1 of 5 and dropped it).
+                own = names.get(q) or [w for w in _tokens(q) if not FOOTAGE_WORDS.fullmatch(w)]
+                overlap = sum(1 for w in own if w in text) / max(1, len(own))
                 title = row.get("title", "")
                 talk = bool(POOL_TALK.search(title))
                 score = (3 * overlap - 0.08 * rank + min(0.5, math.log10(1 + float(row.get("play") or 0)) / 12)
@@ -510,10 +515,20 @@ class Matcher:
                          + (0.6 if POOL_FOOTAGE.search(title) else 0) - (1.5 if talk else 0))
                 if overlap >= 0.34 and (row["id"] not in scored or scored[row["id"]][0] < score):
                     scored[row["id"]] = (score, row)
+        # The first query names the event itself (both teams, the person and the company): videos carrying its names
+        # come first, and when they are long enough to fill a film they are the whole pool (10-30: "库里 集锦" brought
+        # in a 2016 game against the Thunder, eleven lines of another team's court).
+        anchor = names.get(queries[0]) or []
+        def anchored(row):
+            text = row.get("title", "") + " " + row.get("tags", "")
+            return not anchor or sum(1 for w in anchor if w in text) >= min(len(anchor), 2)
+        ranked = sorted(scored.values(), key=lambda item: (not anchored(item[1]), -item[0]))
+        strict = sum(float(row.get("duration") or 0) for _, row in ranked
+                     if anchored(row) and not POOL_TALK.search(row.get("title", "")))
         out, titles = [], set()
-        for _, row in sorted(scored.values(), key=lambda item: -item[0]):
+        for _, row in ranked:
             title = row.get("title", "")[:18]
-            if title in titles:
+            if title in titles or (strict >= POOL_ENOUGH and not anchored(row)):
                 continue
             titles.add(title)
             out.append(dict(row) | {"pool": True, "pool_talk": bool(POOL_TALK.search(row.get("title", "")))})
@@ -1974,7 +1989,9 @@ class Matcher:
                             "并按画面是否干净（主持人、文字页、花字、水印、表情包、黑屏、模糊）判断")
             lines.append(f"{label} 口播：{shot['narration']}｜画面建议：{shot.get('visual', '')}{role}")
         domain = self.plan.get("domain") or ""
-        head = [f"整篇领域：{domain}"] if domain else []
+        # The film's field: footage of another sport or field passed as "related" (a football pitch and an F1 award
+        # in an NBA film, 10-30).
+        head = [f"整篇领域：{domain}（画面是别的运动、别的领域的判跑题，如讲篮球却是足球、赛车、乒乓球）"] if domain else []
         if self.pool_found:
             head.append("整篇讲的是：" + "；".join(self.pool_found) + "。画面明显是另一个年代或另一件事的（如讲抗战却是现代坦克、"
                         "阅兵、客机、现代街景，讲某场比赛却是别的比赛）判跑题")
