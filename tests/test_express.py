@@ -1069,3 +1069,12 @@ def test_the_sweep_walks_a_long_pool_video_past_its_previews(data):
     starts = [j[2]["start"] for j in jobs]
     assert len(jobs) == 30 and starts == sorted(starts)           # one window a line, in the video's order
     assert all(b - a >= express_match.POOL_GAP for a, b in zip(starts, starts[1:], strict=False))
+
+
+def test_state_leaders_footage_only_when_the_script_names_them(data):
+    m = _matcher(data, [planner.new_shot("特朗普和泽连斯基见面。") | {"duration": 6.0}])
+    leader = {"title": "习近平主席阅兵讲话视频，振奋人心！", "tags": ""}
+    assert m.off_limits(leader) and not m.off_limits({"title": "特朗普会见泽连斯基", "tags": ""})
+    m.project["script"] = "习近平主席在阅兵式上讲话。"
+    assert not m.off_limits(leader)
+    assert m.off_limits({"title": "ASMR 助眠", "tags": ""})

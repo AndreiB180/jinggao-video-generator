@@ -125,6 +125,9 @@ SKIPPED_UPLOADS = re.compile(r"倍速|加速版|快进|变速|表情包|梗图|�
                              # AI-made videos (AI 短剧, image-to-video): drawn faces a platform and viewers spot at once
                              r"AI生成|AI短剧|AI漫剧|AI动画|AI视频|AI绘画|AI制作|AI电影|AI故事|AI剧|AIGC|aigc|"
                              r"即梦|可灵|海螺AI|Sora|sora|Midjourney|数字人|AI一键|AI图")
+# Footage of China's leaders is never filler: only when the script itself names them (10-30: a clip titled
+# "习近平主席阅兵讲话视频" filled a line in a film about Trump and Zelensky).
+STATE_LEADERS = re.compile(r"习近平|习主席|总书记|李强|赵乐际|王沪宁|蔡奇|丁薛祥|李希|毛泽东|毛主席|邓小平|江泽民|胡锦涛|温家宝|周恩来")
 DRAMA_WORDS = re.compile(r"电视剧|电影|剧照|饰演|扮演|演员|剧情|混剪|AI|特型演员|模仿|cos|动画|动漫|漫画|手绘|配音|片段合集|"
                          r"朗诵|背景视频|LED|舞台|情景")
 PERSON_EVIDENCE = re.compile(r"影像|纪录|新闻|讲话|原声|视频|资料|珍贵|历史|现场|采访|发言|报道")
@@ -517,7 +520,7 @@ class Matcher:
                 duration = float(row.get("duration") or 0)
                 # Noise words the queries themselves use are the story (a film about live selling wants 直播).
                 noise = [w for w in NOISE_WORDS.findall(row.get("title", "")) if not any(w in query for query in queries)]
-                if not 60 <= duration <= 3 * 3600 or SKIPPED_UPLOADS.search(text) or noise:
+                if not 60 <= duration <= 3 * 3600 or self.off_limits(row) or noise:
                     continue
                 if names.get(q) and not any(w in text for w in names[q]):
                     continue
@@ -672,6 +675,14 @@ class Matcher:
                 break
         return jobs
 
+    def off_limits(self, row) -> bool:
+        """Uploads never used: sped up, memes, racy, AI-made; China's leaders unless the script names them."""
+        text = row.get("title", "") + " " + row.get("tags", "")
+        if SKIPPED_UPLOADS.search(text):
+            return True
+        script = (getattr(self, "project", None) or {}).get("script") or ""
+        return any(name not in script for name in STATE_LEADERS.findall(text))
+
     @staticmethod
     def pool_cap(source) -> int:
         """Windows a pool video may give one film: one per POOL_SECONDS_PER of it, at most POOL_WINDOWS."""
@@ -771,7 +782,7 @@ class Matcher:
         if row["provider"] == "bilibili":
             if duration < 12 or duration > 3 * 3600:
                 return None
-            if SKIPPED_UPLOADS.search(row.get("title", "") + row.get("tags", "")):
+            if self.off_limits(row):
                 return None
             if NOISE_WORDS.search(row.get("title", "")):
                 score -= 1.2
@@ -1316,7 +1327,7 @@ class Matcher:
                         continue
                     if FUNERAL.search(row.get("title", "")) and not DEATH_LINE.search(shot["narration"]):
                         continue
-                    if SKIPPED_UPLOADS.search(row.get("title", "") + row.get("tags", "")):
+                    if self.off_limits(row):
                         continue
                     length = float(row.get("duration") or 0)
                     moment = next((float(t) for t in row.get("moments") or [] if max(0.0, float(t) - 1.0) + need <= length - 0.1),
