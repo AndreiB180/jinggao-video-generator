@@ -78,6 +78,7 @@ POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gi
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
 POOL_SEARCH_WAIT = 30.0 # seconds the pool's first search waits for B站 to answer again
+SPORTS = re.compile(r"NBA|CBA|篮球|足球|排球|网球|乒乓|羽毛球|比赛|赛事|体育|世界杯|奥运|联赛|F1|拳击|UFC|斯诺克|台球|集锦|全场回放")
 POOL_CARRIES = 0.4      # share of a film the pool must already fill before the library stays out of its lines
 POOL_GRID = 20.0        # the sweep may start a window every this many seconds of a pool video, not only at its previews
 POOL_GENERIC = {"新闻", "采访", "纪录片", "集锦", "比赛", "上市公司", "公司", "发布会", "直播", "现场", "历史影像", "影像",
@@ -633,7 +634,7 @@ class Matcher:
         field = [r for r in pick("field") if r not in same]
         return same, field
 
-    def pool_sweep(self, pending, final, reserved, streams, pool_tiles) -> list:
+    def pool_sweep(self, pending, final, reserved, streams, pool_tiles, avoid=()) -> list:
         """Lines still open walk through the pool videos in order (a later preview frame each time, POOL_GAP apart):
         footage of the story itself, the way the client's references run a game's highlights under the talk.
         [(job_id, sid, choice)]"""
@@ -645,7 +646,9 @@ class Matcher:
             if source.get("pool"):
                 used.setdefault(source["id"], []).append(float(choice.get("start") or 0))
         cursors = {bvid: max(starts) for bvid, starts in used.items()}
-        order = sorted(pool_tiles, key=lambda bvid: len(used.get(bvid, [])))
+        order = sorted((b for b in pool_tiles if b not in avoid), key=lambda bvid: len(used.get(bvid, [])))
+        if not order:
+            return []
         jobs, turn = [], 0
         for shot in sorted(pending, key=lambda s: self.position[s["id"]]):
             need = float(shot["duration"]) + MARGIN
@@ -2359,10 +2362,13 @@ class Matcher:
             return source.get("provider"), source.get("id")
         sids = [sid for _, sid in order]
         pooled = {sid for sid in sids if final[sid]["tile"]["source"].get("pool")}
+        # One game's shots look alike by nature (the same court) and are different moments; an interview's are one
+        # seated person over and over (a 赵长鹏 film showed one 7 times, 10-30): only a sports pool is let off.
+        sports = bool(SPORTS.search((self.plan.get("domain") or "") + " " + " ".join(self.plan.get("pool") or [])))
         for i, a in enumerate(sids):
             for b in sids[i + 1:]:
-                if a in pooled and b in pooled:
-                    continue        # one game, one documentary: its shots look alike by nature
+                if sports and a in pooled and b in pooled:
+                    continue
                 same_clip = ((final[a].get("lane") == "reuse" and final[a].get("repeat_of") == b)
                              or (final[b].get("lane") == "reuse" and final[b].get("repeat_of") == a))
                 if same_clip or (a in looks and b in looks and self.alike(looks[a], looks[b])):
@@ -2942,7 +2948,7 @@ class Matcher:
                 self.notes.append(f"{len(photos)} 句讲具体人物的没有本人视频，用了本人的照片（动态画面）")
             pending = [s for s in pending if s["id"] not in final]
             stamp("person_photos", began)
-        def fill_from_pool(tag, seconds):
+        def fill_from_pool(tag, seconds, avoid=()):
             """Open lines walk on through the pool videos (a later stretch each time); returns lines filled."""
             nonlocal pending
             if not (pending and pool_tiles):
@@ -2951,7 +2957,7 @@ class Matcher:
             if ask:
                 streams.update(self.resolve(ask))
             jobs = [(job_id.replace("#p", f"#p{tag}"), sid, c)
-                    for job_id, sid, c in self.pool_sweep(pending, final, reserved, streams, pool_tiles)]
+                    for job_id, sid, c in self.pool_sweep(pending, final, reserved, streams, pool_tiles, avoid)]
             if not jobs:
                 return 0
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
@@ -3286,7 +3292,10 @@ class Matcher:
             self.abandon.clear()
             pending = [s for s in self.shots if s["id"] in redo]
             # One round with a short limit: the film is otherwise done, the replacements must not hold it up.
-            replaced += fill_from_pool("x", AUDIT_SECONDS)
+            # Pool videos whose shots looked alike give no more (their replacement would look alike again).
+            alike_pool = {kept[sid][0]["tile"]["source"]["id"] for sid, why in redo.items()
+                          if "几乎一样" in why and kept[sid][0]["tile"]["source"].get("pool")}
+            replaced += fill_from_pool("x", AUDIT_SECONDS, avoid=alike_pool)
             if pending:
                 replaced += fill_from_library("x", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
             pending = [s for s in pending if s["id"] not in final]

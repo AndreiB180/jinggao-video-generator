@@ -749,6 +749,18 @@ def test_the_finished_film_is_checked_for_alike_shots_and_overused_videos(data, 
     m.looked.clear()
     assert set(m.audit(final, files)) == {ids[1], ids[2]}    # never next to itself either
     assert m.similar == []
+    # A pool video: one game's alike court shots stay; one interview's alike seated shots beyond SOURCE_MAX go.
+    pool = {"provider": "bilibili", "id": "BVpool", "pool": True}
+    final = {sid: {"tile": {"source": pool, "t": 100.0 * n}, "lane": "sweep", "job": f"j{n}"} for n, sid in enumerate(ids[:4])}
+    for n, sid in enumerate(ids[:4]):
+        looks[sid] = [0b1010] * 3
+    m.looked.clear()
+    m.plan["domain"] = "NBA篮球"
+    assert m.audit(final, files) == {}
+    m.plan["domain"] = "加密货币"
+    m.looked.clear()
+    redo = set(m.audit(final, files))
+    assert {ids[2], ids[3]} <= redo and ids[0] not in redo
 
 
 def test_windows_taken_from_the_library_teach_it_what_they_showed(data, monkeypatch):
