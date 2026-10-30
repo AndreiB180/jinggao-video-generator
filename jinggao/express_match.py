@@ -615,6 +615,15 @@ class Matcher:
     def group_foreign(self, group) -> bool:
         return any(self.foreign_ok(self.shots_by_id_all[sid]) for sid in group.get("shots") or [] if sid in self.shots_by_id_all)
 
+    def shows_person(self, shot, choice) -> bool:
+        """The clip chosen for a line about a named person is that person's own footage (or a news report about it)."""
+        if not choice:
+            return False
+        lane = choice.get("base_lane", choice.get("lane"))
+        if lane in ("person", "person_near", "news", "person_photo"):
+            return True
+        return lane == "pick" and self.names_in_source(shot, choice["tile"]["source"]) and not self.unfilmed_shot(shot)
+
     def oriented(self, source) -> bool:
         """A portrait stock clip in a landscape project would be a thin strip; landscape stock crops fine to 9:16."""
         r = source.get("rendition") or {}
@@ -1113,7 +1122,7 @@ class Matcher:
             # A line about a named person: photos of that person first (an editor's answer when there is little
             # footage of someone; a film about two named people borrowed one clip 23 times instead).
             names = [p["name"] for p in shot.get("persons") or [] if p.get("name")]
-            words = [f"{names[0]} 照片", names[0]] if names else []
+            words = [names[0], f"{names[0]} 照片", f"{names[0]} 新闻"] if names else []
             for q in (groups.get(shot["id"]) or {}).get("zh", [])[:2] + [shot.get("visual") or ""]:
                 q = " ".join(self.IMAGE_WORDS.sub(" ", q).split())
                 if q and q not in words:
@@ -1132,8 +1141,9 @@ class Matcher:
                     except Exception:   # noqa: BLE001 — one search less
                         continue
             pictures = []
+            wanted = 4 if shot.get("persons") else 3
             for row in rows:
-                if len(pictures) >= 3 or time.monotonic() > deadline:
+                if len(pictures) >= wanted or time.monotonic() > deadline:
                     break
                 url = row.get("url") or ""
                 if not url or self.IMAGE_SKIP_HOSTS.search(url + " " + str(row.get("source_url") or row.get("source") or "")):
@@ -1195,7 +1205,9 @@ class Matcher:
                 box = draw.textbbox((4, row_index * (h + 8) + 2), label, font=font)
                 draw.rectangle((box[0] - 3, box[1] - 2, box[2] + 3, box[3] + 2), fill=(255, 214, 0))
                 draw.text((4, row_index * (h + 8) + 2), label, font=font, fill=(0, 0, 0))
-                lines.append(f"{label}（{len(pictures)} 张）：{self.shots_by_id_all[sid]['narration'][:60]}")
+                names = "、".join(p["name"] for p in self.shots_by_id_all[sid].get("persons") or [] if p.get("name"))
+                lines.append(f"{label}（{len(pictures)} 张）：{self.shots_by_id_all[sid]['narration'][:60]}"
+                             + (f"｜要这个人本人的照片：{names}（没有本人就填 0）" if names else ""))
             content = [{"type": "text", "text": "\n".join(lines)}, {"type": "image_url", "image_url": {"url": _jpeg(sheet)}}]
             try:
                 result, _ = self.chat(self.IMAGE_PICK, content, max_tokens=60 + 12 * len(batch), task="express_pick")
@@ -2570,6 +2582,28 @@ class Matcher:
             carried = settle(carried + jobs, got, bad, running, last=True)
             stamp("stock", began)
             pending = [s for s in pending if s["id"] not in final]
+        # A line about a named person shows that person: without their own footage it takes a photo of them, moving
+        # slowly (the client, 10-30: "if there is no footage of the person, use a moving picture of them"), before
+        # any footage of the topic around them.
+        person_open = [shot for shot in self.shots if shot.get("persons") and not self.shows_person(shot, final.get(shot["id"]))]
+        if person_open:
+            began = time.monotonic()
+            self.progress(86, f"给 {len(person_open)} 句人物找本人照片")
+            try:
+                photos = self.image_fill(person_open)
+            except (media.Cancelled, Budget):
+                raise
+            except Exception as exc:   # noqa: BLE001 — the lines keep what they have
+                self.notes.append(f"人物照片补位失败：{type(exc).__name__}")
+                photos = {}
+            for sid, (choice, path) in photos.items():
+                if sid in final:
+                    release(final[sid])
+                final[sid], files[sid] = choice | {"lane": "image", "base_lane": "person_photo"}, path
+            if photos:
+                self.notes.append(f"{len(photos)} 句讲具体人物的没有本人视频，用了本人的照片（动态画面）")
+            pending = [s for s in pending if s["id"] not in final]
+            stamp("person_photos", began)
         # Lines still open take a NEW video from the library before any video already in the film shows another
         # moment (the client, 10-28: one drama's girl in pink eight times in a film, "use the library, don't
         # repeat"): first videos whose described frames carry the line's specific or broader words, then its

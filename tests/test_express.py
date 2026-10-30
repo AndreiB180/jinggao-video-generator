@@ -904,3 +904,18 @@ def test_the_final_review_looks_at_every_shot_and_names_the_ones_to_replace(data
     verdict = m.final_review(final, files)
     assert sorted(asked) == [1, 10]                    # 11 shots (the picture is left out) on two sheets
     assert set(verdict) <= set(ids) and len(verdict) == 2 and "浴缸里的亲热镜头" in verdict.values()
+
+
+def test_a_line_about_a_person_counts_as_shown_only_with_their_own_footage(data):
+    shot = planner.new_shot("赵长鹏被罚款。") | {"duration": 5.0, "persons": [{"name": "赵长鹏", "aliases": []}]}
+    m = _matcher(data, [shot])
+    line = m.shots[0]
+    own = {"provider": "bilibili", "id": "BV1", "title": "赵长鹏 采访 新闻"}
+    other = {"provider": "bilibili", "id": "BV2", "title": "比特币 行情 素材"}
+    assert m.shows_person(line, {"tile": {"source": own}, "lane": "pick"})
+    assert m.shows_person(line, {"tile": {"source": own}, "lane": "person_near"})
+    assert m.shows_person(line, {"tile": {"source": {"provider": "web_image", "id": "x"}}, "lane": "image",
+                                 "base_lane": "person_photo"})
+    assert not m.shows_person(line, {"tile": {"source": other}, "lane": "ctx"})     # background, not the person
+    assert not m.shows_person(line, {"tile": {"source": other}, "lane": "library"})
+    assert not m.shows_person(line, None)
