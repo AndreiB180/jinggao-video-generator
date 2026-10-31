@@ -3398,11 +3398,25 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     shot = self.shots_by_id_all[sid]
                     donor = None
                     if HARD_FAULT.search(final_bad.get(sid, "")):
+                        # Never the clip a neighbouring line already shows (two flagged neighbours borrowed one clip
+                        # and it ran three times, twice in a row, in a test film).
+                        index = self.position[sid]
+                        beside = {key_of(final[t["id"]])[0] for t in self.timeline[max(0, index - 1):index + 2]
+                                  if t["id"] != sid and t["id"] in final}
                         for limit in (SOURCE_MAX + 1, None):
-                            donor = donor or self.borrow(shot, lenders, files, limit=limit)
+                            candidates = dict(lenders)
+                            for _ in range(6):
+                                found = self.borrow(shot, candidates, files, limit=limit)
+                                if not found or key_of(final[found])[0] not in beside:
+                                    donor = found
+                                    break
+                                candidates.pop(found)
+                            if donor:
+                                break
                     if donor:
                         final[sid] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
                         files[sid] = files[donor]
+                        lenders[sid] = final[sid]      # counted against its video's limit for the next borrower
                         borrowed += 1
                     else:
                         final[sid], files[sid] = choice, path
