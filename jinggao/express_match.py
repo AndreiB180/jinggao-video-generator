@@ -78,6 +78,11 @@ POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gi
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
 POOL_SEARCH_WAIT = 30.0 # seconds the pool's first search waits for B站 to answer again
+# Final review reasons: a mark that cropping may clear, other faults it cannot, and the faults never left in a film.
+MARK_REASON = re.compile(r"水印|台标|账号|署名|平台|素材站|角标|字幕|logo|LOGO|bilibili|Bilibili")
+OTHER_FAULT = re.compile(r"花字|中间|竖屏|黑边|画中画|模糊|黑屏|性暗示|暴露|血腥|暴力|表情包|卡通|游戏|主持|PPT|截图|外国")
+HARD_FAULT = re.compile(r"水印|台标|账号|署名|平台名|素材站|角标|花字|字幕|竖屏|黑边|画中画|模糊|黑屏|性暗示|暴露|内衣|泳装|"
+                        r"擦边|亲热|血腥|暴力|表情包|鬼脸|卡通|游戏|PPT|截图")
 SPORTS = re.compile(r"NBA|CBA|篮球|足球|排球|网球|乒乓|羽毛球|比赛|赛事|体育|世界杯|奥运|联赛|F1|拳击|UFC|斯诺克|台球|集锦|全场回放")
 POOL_CARRIES = 0.4      # share of a film the pool must already fill before the library stays out of its lines
 POOL_GRID = 20.0        # the sweep may start a window every this many seconds of a pool video, not only at its previews
@@ -191,7 +196,7 @@ TOPIC_SHOT = "通用补位画面：与整篇主题相关的环境/场景/物体�
 QA_SYSTEM = """你在检查营销号视频的成片选镜。每一行是同一个镜头的3张抽帧（左→右，已按成片裁切），行首黄色编号是镜头号。
 对照每个镜头的口播内容（画面建议只是参考，不必符合），只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S2":["右上","底部"]}}，没有就留空，原因不超过20字。
 bad：只列“明显不合格”的镜头。不合格指：任意一帧有性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），或血腥暴力（殴打、拉扯、流血）；任意一帧出现主持人、博主或嘉宾对着镜头讲话（访谈/口播/演播室；要求的具名人物本人的历史讲话影像除外）；与口播明显无关/跑题；要求具名人物的镜头画面是影视剧/情景再现的演员扮演（老年代事件却是彩色高清电影感画面）；PPT/文字页/图表为主；手机或电脑屏幕截图（评论区、聊天记录、网页/App 界面），即使口播在讲网友评论；大面积马赛克或打码；表情包、卡通表情、贴纸、梗图、对话气泡图标叠在画面上，或画面本身是表情包式的夸张反应镜头（对着镜头狂笑、做鬼脸）；画面上后加的大号花字、标题字（不是场景里本来就有的字）；整段画面静止不动（一张图片或定格）；黑屏、纯色、严重模糊；大面积硬字幕、弹幕、贴纸或台标遮挡主体；画面上有联系方式或引流文字（电话号码、微信号、QQ号、“私信”“加V”“需要视频”等，再小也算）；游戏/动画（口播不是讲这些时）；要求具名人物的镜头却明显是别人或演员。
-wm：画面上仍能看到的台标、水印、平台或作者署名（包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
+wm：画面上仍能看到的台标、水印、平台或作者署名（B站的“作者名 + bilibili”常在左上或右上角，白色半透明，浅色背景上也要看出来；包括叠在画面中间或侧边的半透明频道名/账号名，如“@名字”“某某说”“某某影视”，再淡也要列出）、原视频字幕或文字条、画面中间的花字/标题/滚动文字，写出所有位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间（字幕、文字条写“底部”）。小角标也要列出，它们会被裁掉，不算不合格。
 若给出“整篇领域”，画面属于其他领域（如讲乒乓球却是电竞、板球、足球等其他运动，或卡通动画、3D建模渲染、频道片尾订阅页、排行榜截图）一律不合格；标为“古代人物”的镜头里，表现此人的动画、插画不算其他领域。
 股市K线和走势图、数据图表、商品和品牌logo、街道招牌、包装上的字是画面本身的内容，不算文字页，口播相关就合格。
 普通镜头（没有要求具名人物）：用电视剧、短剧、栏目剧片段里的演员表现口播讲的情节（夫妻吵架、婆媳矛盾、查看手机、离婚、职场冲突等）是合格的，不要因为是演员扮演或情景再现判不合格。画面主体和口播讲的对象一致即可，细节不必一致：例如口播讲港口工作人员协作，画面是港口作业远景也算合格；不要因为型号、年份、具体动作、人物细节或特写不一致而判不合格；菜品种类、制作步骤、同一场所的不同环节（如揉面与拉面、后厨与前厅、汤与面）也不必一致。以下算跑题（不合格，原因写“跑题”）：口播讲人和人之间的事（夫妻、家人、同事、官员、民众），画面却是风景、空镜、物品、动物，看不出相关的人；口播讲中国国内的人和事，画面明显是外国人或外国街景；口播讲某个国家、组织，画面明显是另一个国家的（如讲也门战事却是中国火箭军发射、中国海军演习）；科普讲解、课堂课件、带货、游戏解说之类与口播无关的视频画面；画面题材与口播完全无关。
@@ -374,6 +379,7 @@ class Matcher:
         self.presenter_sources = set()                  # presenter-led videos found from their preview frames
         self.pool_found = []        # the pool queries that found videos about the story (QA judges footage against them)
         self.pool_sources = []      # the pool videos themselves
+        self.final_marks = {}       # sid -> where the final review saw marks (cropped off when it can)
         self.library_rich = set()   # groups whose lines all found library videos of their own (fewer live searches)
         self.fill_errors = {}   # job id -> why its download or text check failed (written back to the library's checks)
         self.window_notes = []  # library moments judged here, for footage_index.record_checks
@@ -1917,13 +1923,32 @@ class Matcher:
                 # replay that QA had passed was dropped as watermarked). QA looks at these windows itself.
                 profile = dict(profile, boxes=[b for b in profile.get("boxes", []) if not b.get("central")])
             broadcast = bool(BROADCAST.search(" ".join(str(source.get(k, "")) for k in ("title", "tags", "author"))))
-            return express_clean.analyse(path, float(shot["duration"]), size, self.out_aspect(), profile,
-                                         sprites, choice["start"], channel_logo=broadcast)
+            result = express_clean.analyse(path, float(shot["duration"]), size, self.out_aspect(), profile,
+                                           sprites, choice["start"], channel_logo=broadcast)
+            return self.remembered_marks(source, result)
         except media.Cancelled:
             raise
         except Exception as exc:
             self.notes.append(f"去水印分析失败 {source['id']}: {type(exc).__name__}: {str(exc)[:80]}")
             return {}
+
+    def remembered_marks(self, source, result) -> dict:
+        """B站's upload mark (the uploader's name + "bilibili") sits in the same corner of every frame of a video,
+        but on a pale stretch the match misses it (a 岁月珍宝馆 clip on a white wall, 10-31). Where any window of the
+        video showed it, every window of it is cropped there, in this film and later ones."""
+        if not result or source.get("provider") != "bilibili":
+            return result
+        path = es._cache("platform-marks") / f"{source['id']}.json"
+        known = es._read_json(path, 365 * 24 * 3600) or []
+        seen = [b["box"] for b in result.get("platform") or []]
+        if seen:
+            boxes = known + [b for b in seen if not any(abs(b[0] - k[0]) < 0.1 and abs(b[2] - k[2]) < 0.1 for k in known)]
+            if boxes != known:
+                es._write_json(path, boxes)
+            return result
+        if not known:
+            return result
+        return express_clean.recrop(result, [{"kind": "logo", "box": list(b)} for b in known], self.out_aspect())
 
     def wants_backup(self, shot, primary, videos: int) -> bool:
         """A second candidate per shot in the same round saves a round when the first fails the check, at the
@@ -2169,13 +2194,14 @@ class Matcher:
     # ------------------------------------------------------------- final review
     FINAL_SYSTEM = """你在替客户做营销号视频的成片终审：成片要直接发布，不能有任何一个镜头让观众觉得不对劲。
 图片每一行是成片里一个镜头的3张截图（左→右，就是观众看到的样子），行首黄色编号是镜头号；文字里有每个镜头的口播。
-只输出 JSON：{"bad":{"S3":"原因"}}，没有就 {"bad":{}}，原因不超过15字。
+只输出 JSON：{"bad":{"S3":"原因"},"wm":{"S3":["左上"]}}，没有就 {"bad":{},"wm":{}}，原因不超过15字。
+wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的镜头，写出它们在画面上的位置：左上/右上/左下/右下/顶部/底部/左侧/右侧/中间。
 只列有下面这些硬伤、发布出去会出事或一看就是劣质素材的镜头（画面和口播对得不够准不算，不要列）：
 - 不得体：性暗示或暴露（内衣、泳装、裸露身体、亲热接吻、床戏、擦边），血腥暴力（殴打、拉扯、流血）；
 - 口播讲中国的人和事，画面明显是外国人、外国街景或外国影视剧；
 - 表情包式的夸张反应镜头（对着镜头狂哭狂笑、做鬼脸）、卡通动画、游戏画面、AI 图（口播在讲这些时除外）；
 - 主持人或博主对着镜头讲话、PPT 文字页、手机电脑屏幕截图；
-- 画面上能看到水印、台标、平台名或素材站名（如“光厂素材”）、账号名、花字、大段字幕；竖屏、黑边、画中画、严重模糊、黑屏。
+- 画面上能看到水印、台标、平台名或素材站名（如“光厂素材”）、账号名（B站“作者名 + bilibili”半透明角标，再淡也算）、花字、大段字幕；竖屏、黑边、画中画、严重模糊、黑屏。
 标为“要求人物”的镜头：画面是这个人本人的真实影像就合格。场景里本来就有的招牌、商品包装、钞票上的字不算。
 影视剧、短剧里演员表演口播讲的情节是合格的；细节、人物身份和口播不完全一致也合格，只要大致是这类人、这类事。"""
     FINAL_ROWS = 10
@@ -2219,6 +2245,10 @@ class Matcher:
             with self.lock:
                 self.calls["qa"] += 1
             bad = (result or {}).get("bad") if isinstance(result, dict) else {}
+            marks = (result or {}).get("wm") if isinstance(result, dict) else {}
+            with self.lock:
+                self.final_marks.update({ids[k]: v for k, v in (marks if isinstance(marks, dict) else {}).items()
+                                         if k in ids})
             return {ids[k]: str(v)[:40] for k, v in (bad or {}).items() if k in ids}
         parts = [rows[i:i + self.FINAL_ROWS] for i in range(0, len(rows), self.FINAL_ROWS)]
         verdict = {}
@@ -3336,6 +3366,18 @@ class Matcher:
             exempt = {sid for sid, c in final.items() if c.get("base_lane", c.get("lane")) in ("person", "person_near", "news")
                       or (self.shots_by_id_all.get(sid, {}).get("persons") and not self.unfilmed_shot(self.shots_by_id_all[sid])
                           and not (pool_tiles and c.get("lane") in CONTEXT_LANES + ("repeat", "reuse", "near", "neighbor")))}
+            # Marks in a corner or along an edge: cropped off the clip already there (no new video, no repeat).
+            recropped = 0
+            for sid, where in self.final_marks.items():
+                job = (final.get(sid) or {}).get("job")
+                if sid in final_bad and job and self.clean.get(job) and MARK_REASON.search(final_bad[sid]) \
+                        and not OTHER_FAULT.search(final_bad[sid]) and "wm" not in self.flags(job):
+                    self.residual_mark(job, where)
+                    if "wm" not in self.flags(job):
+                        final_bad.pop(sid)
+                        recropped += 1
+            if recropped:
+                self.notes.append(f"成片终审：{recropped} 个镜头的水印/字幕在角上或边上，已裁掉")
             redo_final = {sid: why for sid, why in final_bad.items() if sid not in exempt}
             if redo_final:
                 kept = {sid: (final.pop(sid), files.pop(sid, None)) for sid in redo_final}
@@ -3345,11 +3387,28 @@ class Matcher:
                 if pending:
                     final_fixed += fill_from_library("f", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
                 failures.update(self.stop_downloads())
+                # A hard fault nothing replaced (a watermark, 花字, a vertical or black picture, anything indecent) is
+                # never left in the film (10-31: a 岁月珍宝馆 mark and a vlog's 花字 went out to the client): a clean
+                # clip of this film is shown again instead; content that only fits loosely stays.
+                lenders = {sid: c for sid, c in final.items() if sid not in final_bad}
+                borrowed = 0
                 for sid, (choice, path) in kept.items():
-                    if sid not in final:
+                    if sid in final:
+                        continue
+                    shot = self.shots_by_id_all[sid]
+                    donor = None
+                    if HARD_FAULT.search(final_bad.get(sid, "")):
+                        for limit in (SOURCE_MAX + 1, None):
+                            donor = donor or self.borrow(shot, lenders, files, limit=limit)
+                    if donor:
+                        final[sid] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
+                        files[sid] = files[donor]
+                        borrowed += 1
+                    else:
                         final[sid], files[sid] = choice, path
                 self.notes.append(f"成片终审：{len(final_bad)} 个镜头不合格（" + "；".join(sorted(set(final_bad.values())))[:80]
-                                  + f"），{final_fixed} 个换成了素材库里的新视频")
+                                  + f"），{final_fixed} 个换成了素材库里的新视频"
+                                  + (f"，{borrowed} 个有硬伤的借用了片中干净的画面" if borrowed else ""))
         stamp("final_review", began)
         self.record_windows(qa_bad)
         self.progress(92, "保存选片")

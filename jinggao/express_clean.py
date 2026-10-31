@@ -507,6 +507,13 @@ def _ncc(image, template) -> np.ndarray:
     return num / (np.sqrt((centred * centred).sum(axis=(2, 3))) * np.sqrt((t * t).sum()) + 1e-6)
 
 
+def _highpass(a: np.ndarray) -> np.ndarray:
+    """The picture minus its blur: a pale logo over a pale wall keeps its outline, the wall's shading goes."""
+    from PIL import ImageFilter
+    blurred = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.0))
+    return a - np.asarray(blurred, dtype=np.float32)
+
+
 def platform_watermark(path, duration: float, clip_size: tuple[int, int], count: int = 8) -> list[dict]:
     """Bilibili's upload watermark (user name + "bilibili") is burned into the stream but absent from the
     preview sprites. Find its logo in the median of the top band (either corner, any common size)."""
@@ -534,12 +541,15 @@ def platform_watermark(path, duration: float, clip_size: tuple[int, int], count:
         region = np.asarray(Image.fromarray(top[:, x0:x0 + side].astype(np.uint8)).resize(
             (side // 2, band // 2), Image.BILINEAR), dtype=np.float32)
         best = (-1.0, None, None)
+        # Also matched on the high-passed band: a white "bilibili" over a white wall scored 0.53 and was left in a
+        # client's film (10-31); its outline scores 0.62-0.80 there, clean corners stay near 0.4.
+        flat = _highpass(region)
         for scale in (0.6, 0.72, 0.85, 1.0, 1.15, 1.3) + ((1.5, 1.78) if ch > cw else ()):
             template = np.asarray(Image.fromarray(logo.astype(np.uint8)).resize(
                 (round(48 * scale), round(23 * scale)), Image.BILINEAR), dtype=np.float32)
-            score = _ncc(region, template)
-            if score.max() > best[0]:
-                best = (float(score.max()), np.unravel_index(score.argmax(), score.shape), template.shape)
+            for score in (_ncc(region, template), _ncc(flat, _highpass(template))):
+                if score.max() > best[0]:
+                    best = (float(score.max()), np.unravel_index(score.argmax(), score.shape), template.shape)
         score, where, size = best
         if score < LOGO_MATCH:
             continue
@@ -752,6 +762,7 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
     edge = [{"kind": b["kind"], "box": b["box"]} for b in found if not b["central"]]
     central = [{"kind": "center", "box": b["box"]} for b in found if b["central"]]
     corners = platform_watermark(clip, duration, clip_size)
+    platform = [dict(b) for b in corners]
     if not still["still"]:
         corners += [b for b in corner_overlays(frames, content) if not fixed or _tight_corner(b["box"])]
     elif sprites:   # a frozen picture is steady everywhere: compare with the preview frame instead
@@ -786,7 +797,7 @@ def analyse(clip, duration: float, clip_size: tuple[int, int], out_aspect: float
     return {"content": [round(v, 4) for v in content], "overlays": edge + subs, "central": central, "size": [cw, chh],
             "crop": rect, "zoom": zoom, "residual": residual + central, "motion": still | {"fixed_camera": fixed},
             "src_aspect": round(src_aspect, 4), "inner_picture": list(pip) if pip else None, "narrow": narrow,
-            "layout_jump": jump}
+            "layout_jump": jump, "platform": platform}
 
 
 def small_picture(frames) -> bool:

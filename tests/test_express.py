@@ -1111,3 +1111,21 @@ def test_pool_keeps_the_storys_own_people_talking_but_not_other_presenters(data,
     monkeypatch.setattr(m, "chat", chat)
     assert [r["id"] for r in m.vet_pool([live, host], tiles)] == ["BVlive"]
     assert "直播录屏" in seen["text"] and "电商的未来" not in seen["text"]   # only his own livestream is looked at
+
+
+def test_a_videos_bilibili_mark_once_seen_is_cropped_from_its_other_windows(data):
+    m = _matcher(data, [planner.new_shot("一。") | {"duration": 5.0}])
+    source = {"provider": "bilibili", "id": "BVmarked"}
+    plain = {"content": [0, 0, 1, 1], "overlays": [], "central": [], "size": [960, 720], "crop": [0.0, 0.0, 1.0, 1.0],
+             "zoom": 1.0, "residual": [], "motion": {}, "src_aspect": 1.333, "narrow": False, "platform": []}
+    seen = dict(plain, platform=[{"kind": "logo", "box": [0.0, 0.0, 0.27, 0.11], "score": 0.7}])
+    assert m.remembered_marks(source, dict(plain)) == plain              # nothing known yet
+    m.remembered_marks(source, seen)                                      # one window shows it
+    later = m.remembered_marks(source, dict(plain))                       # a pale window that hid it
+    assert later["crop"][1] >= 0.11                                       # cropped below the mark
+
+
+def test_the_final_review_crops_corner_marks_and_never_keeps_a_hard_fault(data, monkeypatch):
+    assert express_match.MARK_REASON.search("左上角有bilibili水印") and not express_match.OTHER_FAULT.search("左上角有bilibili水印")
+    assert express_match.OTHER_FAULT.search("画面中间有花字") and express_match.HARD_FAULT.search("画面中间有花字")
+    assert not express_match.HARD_FAULT.search("口播讲库里大笑，画面在跑动")
