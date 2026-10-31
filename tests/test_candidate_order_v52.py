@@ -41,7 +41,7 @@ def test_fresh_install_uses_one_qwen_key_for_models_and_voice(tmp_path, monkeypa
         "candidate_ranking")} == {"qwen3.7-flash"}
     assert cfg["tts_provider"] == "edge_tts" and cfg["edge_tts_voice"] == "zh-CN-YunxiNeural"
     assert cfg["source_plan_mode"] == "unified" and cfg["pixel_observer_mode"] == "joint"
-    assert cfg["model_project_budget_cny"] == cfg["model_job_budget_cny"] == "0.10"
+    assert cfg["model_project_budget_cny"] == cfg["model_job_budget_cny"] == "0.30"
     assert all(not cfg[key] for key in config.SECRETS)
     assert not (tmp_path / "settings.json").exists()
 
@@ -56,3 +56,16 @@ def test_existing_explicit_settings_survive_changed_defaults(tmp_path, monkeypat
     before = path.read_bytes()
     assert {k: config.read()[k] for k in saved} == saved
     assert path.read_bytes() == before
+
+
+def test_the_old_film_budget_is_raised_once_but_a_users_own_cap_is_kept(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({"model_project_budget_cny": "0.10", "model_job_budget_cny": "0.05",
+                                                        "tts_migrated": "1", "tts_migrated_edge": "1", "news_migrated": "1"}))
+    config.migrate()
+    cfg = config.read()
+    assert cfg["model_project_budget_cny"] == "0.30" and cfg["model_job_budget_cny"] == "0.05"
+    config.update({"model_project_budget_cny": "0.10"})       # chosen again afterwards: kept
+    config.migrate()
+    assert config.read()["model_project_budget_cny"] == "0.10"

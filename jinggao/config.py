@@ -26,8 +26,10 @@ DEFAULTS = {
     "marked_clips": "never",
     "plan_retries": "1",
     "source_plan_mode": "unified", "pixel_observer_mode": "joint",
-    "model_project_budget_cny": "0.10", "model_daily_budget_cny": "3.00",
-    "model_job_budget_cny": "0.10",
+    # A film costs ¥0.03-0.07, but in-flight reservations and calls ending without usage count at their reserve:
+    # at ¥0.10 films stopped picking halfway (10-31), so the cap guards against runaways only.
+    "model_project_budget_cny": "0.30", "model_daily_budget_cny": "3.00",
+    "model_job_budget_cny": "0.30", "budget_migrated": "",
     "model_provider_budget_cny": "",
     "cost_input_per_million": "", "cost_cached_per_million": "", "cost_output_per_million": "",
     "cost_image_tokens": "0",
@@ -84,15 +86,21 @@ def migrate() -> None:
         return
     with _lock:
         data = json.loads(p.read_text("utf-8"))
-        if data.get("tts_migrated") and data.get("tts_migrated_edge") and data.get("news_migrated"):
+        if data.get("tts_migrated") and data.get("tts_migrated_edge") and data.get("news_migrated") \
+                and data.get("budget_migrated"):
             return
+        if not data.get("budget_migrated"):
+            # The old ¥0.10 film cap saved as it was: the new one (a cap the user set themselves is kept).
+            for key in ("model_project_budget_cny", "model_job_budget_cny"):
+                if str(data.get(key, "")).strip() in ("0.10", "0.1"):
+                    data[key] = DEFAULTS[key]
         if not data.get("tts_migrated") and data.get("tts_provider") in ("baidu_web", "baidu_http"):
             data["tts_provider"] = "qwen_tts"
         if not data.get("tts_migrated_edge") and data.get("tts_provider") == "qwen_tts":
             data["tts_provider"] = "edge_tts"
         if not data.get("news_migrated"):
             data["news_mode"] = "1"
-        data["tts_migrated"] = data["tts_migrated_edge"] = data["news_migrated"] = "1"
+        data["tts_migrated"] = data["tts_migrated_edge"] = data["news_migrated"] = data["budget_migrated"] = "1"
         temporary = p.with_suffix(".tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
         os.chmod(temporary, 0o600)
@@ -205,7 +213,7 @@ def update(values: dict) -> dict:
         data = read() | values
         # Whatever is saved now is the user's current choice: the one-time migration must never undo it
         # (without the flags, a 百度一镜 or 千问 choice saved before the next start would be moved to the free voice).
-        data["tts_migrated"] = data["tts_migrated_edge"] = data["news_migrated"] = "1"
+        data["tts_migrated"] = data["tts_migrated_edge"] = data["news_migrated"] = data["budget_migrated"] = "1"
         from .tts_costs import validate_pricing
         validate_pricing(data["tts_pricing_json"])
         for key in ("model_project_budget_cny", "model_daily_budget_cny", "model_provider_budget_cny", "model_job_budget_cny",
