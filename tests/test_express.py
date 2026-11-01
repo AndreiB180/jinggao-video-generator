@@ -1181,3 +1181,20 @@ def test_a_key_fact_caption_keeps_only_figures_the_line_says():
     assert callout_text("好", "好") == "" and callout_text(None, "x") == ""
     ass, _ = media.subtitles("", 4.0, 1920, 1080, callout="被盗63亿美元")
     assert "Callout,,0,0,0,,{\\fad(180,180)}被盗63亿美元" in ass
+
+
+def test_key_fact_captions_on_at_most_four_in_ten_shots_never_two_in_a_row(data):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(10)]
+    m = _matcher(data, shots)
+    m.plan["event"] = ["币安 黑客"]
+    final = {}
+    for i, s in enumerate(m.shots):
+        s["express"] = {"c": f"被盗{i}亿美元" if i % 3 else "黑客攻击"}
+        m.shots_by_id_all[s["id"]] = s
+        final[s["id"]] = {"lane": "pool" if i == 4 else "library", "tile": {"source": {}}}
+    chosen = m.captioned(final)
+    positions = sorted(m.position[sid] for sid in chosen)
+    assert 0 < len(chosen) <= 4 and 4 not in positions                     # footage of the event: no caption
+    assert all(b - a > 1 for a, b in zip(positions, positions[1:], strict=False))
+    from jinggao.express_plan import callout_text
+    assert callout_text("63亿美元一夜蒸发", "被黑客攻破六十三亿美元一夜蒸发") == "63亿美元一夜蒸发"   # a transcript's numerals

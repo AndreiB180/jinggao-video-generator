@@ -80,6 +80,7 @@ POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before t
 POOL_SEARCH_WAIT = 30.0 # seconds the pool's first search waits for B站 to answer again
 # Footage of the story itself: no key-fact text over it.
 EVENT_LANES = ("news", "pool", "sweep", "person", "person_near")
+CALLOUT_SHARE = 0.4     # of a film's shots at most carry a key-fact caption
 # Final review reasons: a mark that cropping may clear, other faults it cannot, and the faults never left in a film.
 MARK_REASON = re.compile(r"水印|台标|账号|署名|平台|素材站|角标|字幕|logo|LOGO|bilibili|Bilibili")
 OTHER_FAULT = re.compile(r"花字|中间|竖屏|黑边|画中画|模糊|黑屏|性暗示|暴露|血腥|暴力|表情包|卡通|游戏|主持|PPT|截图|外国")
@@ -723,6 +724,27 @@ class Matcher:
         if self.names_in_source(shot, source):
             return True
         return not source.get("pool_talk") and not any(self.names_in_source(shot, s) for s in self.pool_sources)
+
+    def captioned(self, final) -> set:
+        """Shots that carry their line's key fact: in a news or person story, shots that are not footage of the event,
+        at most CALLOUT_SHARE of the film and never two in a row, lines with figures first (on 47 of 54 shots a test
+        film read as a slide show)."""
+        if not self.news_like():
+            return set()
+        facts = {sid: (self.shots_by_id_all.get(sid, {}).get("express") or {}).get("c") or "" for sid in final}
+        ranked = sorted((sid for sid, c in final.items() if facts.get(sid) and c.get("lane") not in EVENT_LANES
+                         and sid in self.position),
+                        key=lambda sid: (not re.search(r"\d", facts[sid]), self.position[sid]))
+        chosen, taken = set(), set()
+        for sid in ranked:
+            if len(chosen) >= CALLOUT_SHARE * len(self.shots):
+                break
+            index = self.position[sid]
+            if index - 1 in taken or index + 1 in taken:
+                continue
+            chosen.add(sid)
+            taken.add(index)
+        return chosen
 
     @staticmethod
     def fresh_picture(final, choice) -> bool:
@@ -2516,7 +2538,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
         return redo
 
     def save(self, final, files):
-        news_story = self.news_like()
+        captioned = self.captioned(final)
         try:
             store.mark_footage_used(self.pid, [f"{c['tile']['source']['provider']}:{c['tile']['source']['id']}"
                                                for c in final.values() if c["tile"]["source"].get("provider") != "card"])
@@ -2622,9 +2644,8 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 # A news or person story: a shot that is not footage of the event itself carries the line's key fact
                 # in big text (the client's competitors' films keep what is said on the picture; their footage
                 # matches loosely and still passes 百家号's audio-picture check).
-                fact = (shot.get("express") or {}).get("c") or ""
-                if news_story and fact and choice["lane"] not in EVENT_LANES:
-                    shot["callout"] = fact
+                if sid in captioned:
+                    shot["callout"] = (shot.get("express") or {}).get("c") or ""
                 else:
                     shot.pop("callout", None)
                 shot.update(selected_asset=asset["id"], clip_start=0, verification=verification, approved=True,

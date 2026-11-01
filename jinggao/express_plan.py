@@ -254,9 +254,29 @@ def callout_text(value, narration: str) -> str:
     if len(text.replace(" ", "")) < 4:
         return ""
     digits = re.findall(r"\d+(?:\.\d+)?", text)
-    if any(d not in narration for d in digits):
+    said = narration + " " + arabic_numerals(narration)   # a transcript writes 六十三亿 where the plan writes 63亿
+    if any(d not in said for d in digits):
         return ""
     return text
+
+
+_CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def arabic_numerals(text: str) -> str:
+    """Chinese numerals as digits, 万 and 亿 kept as words: 六十三亿 -> 63亿, 一千二百七十亿 -> 1270亿, 三十 -> 30."""
+    def value(run: str) -> str:
+        total, digit = 0, None
+        for ch in run:
+            if ch in _CN_DIGIT:
+                digit = _CN_DIGIT[ch]
+            else:
+                unit = {"十": 10, "百": 100, "千": 1000}[ch]
+                total += (1 if digit is None else digit) * unit
+                digit = None
+        return str(total + (digit or 0))
+    return re.sub(r"[零〇一二两三四五六七八九十百千]+", lambda m: value(m.group()) if any(c in _CN_DIGIT or c == "十"
+                                                                               for c in m.group()) else m.group(), text)
 
 
 def library_sets(value, avoid=(), narration: str = "") -> list[list[str]]:
