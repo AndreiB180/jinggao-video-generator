@@ -1426,12 +1426,17 @@ class Matcher:
                 if q and q not in words:
                     words.append(q)
             words = words[:3 if names else 2]
+            if self.news_like():
+                # One search per subject, shared by its lines (a person's name, the group's first words): a search a
+                # line in three forms got 360 to refuse the computer within three films (11-01).
+                words = [names[0]] if names else words[:1]
             # The story itself (its news or pool query) when the line's own words find nothing usable.
             story = next((q for q in list(self.plan.get("event") or []) + list(self.plan.get("pool") or []) if q), "")
             if story and not names and story not in words:
                 words.append(story)
             return words
         seen_hashes = []
+        claimed = set()         # each picture goes to one line only (shared searches return the same ones)
         lock = threading.Lock()
         began_at = time.monotonic()
         stats = self.picture_stats
@@ -1468,6 +1473,10 @@ class Matcher:
                 url = row.get("url") or ""
                 if not url or self.IMAGE_SKIP_HOSTS.search(url + " " + str(row.get("source_url") or row.get("source") or "")):
                     continue
+                with lock:
+                    if url in claimed:
+                        continue
+                    claimed.add(url)
                 self.check()
                 try:
                     with network.client(timeout=6, follow_redirects=True) as client:

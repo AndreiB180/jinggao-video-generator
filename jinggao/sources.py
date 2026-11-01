@@ -276,6 +276,12 @@ def bing_images(query: str) -> list[dict]:
     return result
 
 
+SO360_GAP = 1.5        # seconds between two 360 searches from this computer
+SO360_PAUSE = 1800     # no 360 searches this long after it refused one
+_so360_lock = threading.Lock()
+_so360_last = [0.0]
+
+
 def so360_images(query: str) -> list[dict]:
     """360 image search: from China it answers a program plainly (Baidu's refuses one) with the photos of news
     reports on the very people and events (赵长鹏, 周群飞, 特奥多罗: 48-99 each, 11-01). Landscape ones first; each
@@ -283,12 +289,26 @@ def so360_images(query: str) -> list[dict]:
     cache = paths.DATA / "cache"
     cache.mkdir(parents=True, exist_ok=True)
     file = cache / ("so360-" + hashlib.sha256(query.encode()).hexdigest() + ".json")
-    if file.exists() and time.time() - file.stat().st_mtime < 3600:
+    if file.exists() and time.time() - file.stat().st_mtime < 24 * 3600:
         return json.loads(file.read_text("utf-8"))
-    response = httpx.get("https://image.so.com/j", params={"q": query, "pn": 30, "sn": 0},
-                         headers={"User-Agent": AGENT}, timeout=10)
-    response.raise_for_status()
-    result = parse_so360_images(response.json())
+    # It answers a program until it searches too much, then shows "访问异常" (11-01, after ~150 searches in a few
+    # minutes): searches one at a time, a little apart, and none for half an hour after a refusal.
+    refused = cache / "so360-refused"
+    if refused.exists() and time.time() - refused.stat().st_mtime < SO360_PAUSE:
+        return []
+    with _so360_lock:
+        wait = _so360_last[0] + SO360_GAP - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _so360_last[0] = time.monotonic()
+        response = httpx.get("https://image.so.com/j", params={"q": query, "pn": 30, "sn": 0},
+                             headers={"User-Agent": AGENT}, timeout=10)
+    try:
+        body = response.json()
+    except ValueError:
+        refused.write_text(str(time.time()), "utf-8")
+        return []
+    result = parse_so360_images(body)
     file.write_text(json.dumps(result, ensure_ascii=False), "utf-8")
     return result
 

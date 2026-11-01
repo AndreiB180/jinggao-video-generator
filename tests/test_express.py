@@ -1159,3 +1159,15 @@ def test_360_image_results_put_landscape_news_photos_first():
     rows = sources.parse_so360_images(body)
     assert [r["url"] for r in rows] == ["https://p1.ssl.qhimgs1.com/b.jpg", "https://p0.ssl.qhimgs1.com/a.jpg"]  # 360's copy
     assert rows[0]["fallback"] == "https://q0.itc.cn/b.jpeg" and rows[0]["source_url"] == "http://www.sohu.com/a/2"
+
+
+def test_360_refusing_pauses_its_searches(data, monkeypatch):
+    from jinggao import sources
+    calls = []
+    class Page:
+        def json(self):
+            raise ValueError("html: 访问异常")
+    monkeypatch.setattr(sources.httpx, "get", lambda *a, **k: calls.append(1) or Page())
+    monkeypatch.setattr(sources, "SO360_GAP", 0)
+    assert sources.so360_images("赵长鹏") == [] and len(calls) == 1
+    assert sources.so360_images("周群飞") == [] and len(calls) == 1      # paused: not asked again
