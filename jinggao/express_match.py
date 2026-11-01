@@ -720,6 +720,16 @@ class Matcher:
             return True
         return not source.get("pool_talk") and not any(self.names_in_source(shot, s) for s in self.pool_sources)
 
+    @staticmethod
+    def fresh_picture(final, choice) -> bool:
+        """A photo the film does not show yet: the person-photo pass and the story-photo pass each pick freely, and one
+        贾乃亮 portrait came up four times in a test film (10-31)."""
+        h = (choice.get("tile") or {}).get("hash")
+        if h is None:
+            return True
+        return not any(c.get("lane") == "image" and (c.get("tile") or {}).get("hash") is not None
+                       and bin(h ^ c["tile"]["hash"]).count("1") <= 6 for c in final.values())
+
     def news_like(self) -> bool:
         """A story about real events or named people (news queries, a topic pool, or many named lines), where photos
         of the story beat generic footage; social stories with invented names keep the library first."""
@@ -2995,7 +3005,10 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             except Exception as exc:   # noqa: BLE001 — the lines keep what they have
                 self.notes.append(f"人物照片补位失败：{type(exc).__name__}")
                 photos = {}
-            for sid, (choice, path) in photos.items():
+            for sid, (choice, path) in list(photos.items()):
+                if not self.fresh_picture(final, choice):
+                    photos.pop(sid)
+                    continue
                 if sid in final:
                     release(final[sid])
                 final[sid], files[sid] = choice | {"lane": "image", "base_lane": "person_photo"}, path
@@ -3116,7 +3129,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             for sid, (choice, path) in sorted(early_pictures.items(), key=lambda item: self.position[item[0]]):
                 if first >= room:
                     break
-                if sid in open_ids and sid not in final:
+                if sid in open_ids and sid not in final and self.fresh_picture(final, choice):
                     final[sid], files[sid] = choice, path
                     first += 1
             if first:
@@ -3263,8 +3276,11 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     raise
                 except Exception as exc:   # noqa: BLE001 — borrowing still follows
                     self.notes.append(f"相关图片补位失败：{type(exc).__name__}")
-            for sid, (choice, path) in pictured.items():
-                final[sid], files[sid] = choice, path
+            for sid, (choice, path) in list(pictured.items()):
+                if self.fresh_picture(final, choice):
+                    final[sid], files[sid] = choice, path
+                else:
+                    pictured.pop(sid)
             cards = [s for s in cards if s["id"] not in pictured]
             if pictured:
                 self.notes.append(f"{len(pictured)} 镜没有合适的视频，用了相关图片（慢慢推拉的动态画面）")

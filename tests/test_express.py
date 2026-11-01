@@ -1152,3 +1152,9 @@ def test_news_and_person_stories_take_photos_before_library_footage(data):
     for s in m.shots[:2]:
         s["persons"] = [{"name": "周群飞"}]
     assert m.news_like()
+
+
+def test_a_photo_already_in_the_film_is_not_placed_again():
+    placed = {"a": {"lane": "image", "tile": {"hash": 0b1010_1010}}}
+    assert not express_match.Matcher.fresh_picture(placed, {"tile": {"hash": 0b1010_1011}})
+    assert express_match.Matcher.fresh_picture(placed, {"tile": {"hash": (1 << 40) - 1}})
