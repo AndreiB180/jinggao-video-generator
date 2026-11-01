@@ -1129,3 +1129,26 @@ def test_the_final_review_crops_corner_marks_and_never_keeps_a_hard_fault(data, 
     assert express_match.MARK_REASON.search("左上角有bilibili水印") and not express_match.OTHER_FAULT.search("左上角有bilibili水印")
     assert express_match.OTHER_FAULT.search("画面中间有花字") and express_match.HARD_FAULT.search("画面中间有花字")
     assert not express_match.HARD_FAULT.search("口播讲库里大笑，画面在跑动")
+
+
+def test_baidu_image_results_put_landscape_news_photos_first():
+    from jinggao import sources
+    text = ('{"data":[{"thumbURL":"https://img1.baidu.com/it/u=1","width":"800","height":"928","fromPageTitleEnc":"周群飞成女首富",'
+            '"replaceUrl":[{"ObjURL":"https://q2.itc.cn/a.jpeg","FromURL":"https://www.sohu.com/a"}]},'
+            '{"thumbURL":"https://img1.baidu.com/it/u=2","width":"1200","height":"800","fromPageTitleEnc":"周群飞\\\'玻璃女王\\\'",'
+            '"replaceUrl":[{"ObjURL":"https://q2.itc.cn/b.jpeg","FromURL":"https://www.sohu.com/b"}]},{}]}')
+    rows = sources.parse_baidu_images(text)
+    assert [r["url"] for r in rows] == ["https://q2.itc.cn/b.jpeg", "https://q2.itc.cn/a.jpeg"]
+    assert rows[0]["fallback"] == "https://img1.baidu.com/it/u=2" and rows[0]["source_url"] == "https://www.sohu.com/b"
+
+
+def test_news_and_person_stories_take_photos_before_library_footage(data):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(10)]
+    m = _matcher(data, shots)
+    assert not m.news_like()                                   # an invented-name social story: library first
+    m.plan["event"] = ["币安 黑客 63亿美元"]
+    assert m.news_like()
+    m.plan["event"] = []
+    for s in m.shots[:2]:
+        s["persons"] = [{"name": "周群飞"}]
+    assert m.news_like()

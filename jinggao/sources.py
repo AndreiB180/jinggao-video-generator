@@ -276,6 +276,46 @@ def bing_images(query: str) -> list[dict]:
     return result
 
 
+def baidu_images(query: str) -> list[dict]:
+    """Baidu image search: the photos of news articles about the very people and events (10-31: for 周群飞, 特奥多罗
+    and the 币安 hack every result came from a report on that story). Landscape ones first."""
+    cache = paths.DATA / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    file = cache / ("baiduimg-" + hashlib.sha256(query.encode()).hexdigest() + ".json")
+    if file.exists() and time.time() - file.stat().st_mtime < 3600:
+        return json.loads(file.read_text("utf-8"))
+    response = httpx.get("https://image.baidu.com/search/acjson",
+                         params={"tn": "resultjson_com", "ipn": "rj", "word": query, "queryWord": query, "pn": 0,
+                                 "rn": 30, "ie": "utf-8", "oe": "utf-8"},
+                         headers={"User-Agent": AGENT, "Referer": "https://image.baidu.com/"}, timeout=10)
+    response.raise_for_status()
+    result = parse_baidu_images(response.text)
+    file.write_text(json.dumps(result, ensure_ascii=False), "utf-8")
+    return result
+
+
+def parse_baidu_images(text: str) -> list[dict]:
+    try:
+        body = json.loads(text.replace("\\'", "'"))
+    except ValueError:
+        return []
+    rows = []
+    for item in body.get("data") or []:
+        if not isinstance(item, dict) or not item.get("thumbURL"):
+            continue
+        original = next((r.get("ObjURL") for r in item.get("replaceUrl") or [] if isinstance(r, dict) and r.get("ObjURL")), "")
+        page = next((r.get("FromURL") for r in item.get("replaceUrl") or [] if isinstance(r, dict) and r.get("FromURL")), "")
+        width, height = int(item.get("width") or 0), int(item.get("height") or 0)
+        url = original if urlparse(original).scheme in ("http", "https") else item["thumbURL"]
+        rows.append(candidate("baidu_image", html.unescape(item.get("fromPageTitleEnc") or "网页图片"), url,
+                              item["thumbURL"], page if urlparse(page).scheme in ("http", "https") else url,
+                              width=width, height=height, fallback=item["thumbURL"],
+                              license="网页图片，使用许可待核实"))
+    # Landscape photos fill a landscape film; tall ones are cropped (after the landscape ones).
+    rows.sort(key=lambda r: not (r.get("width") and r.get("height") and r["width"] >= 1.2 * r["height"]))
+    return rows
+
+
 def pixabay(query: str, key: str, *, video_only: bool = False) -> list[dict]:
     if not key:
         raise ValueError("请在设置中填写 Pixabay API Key")

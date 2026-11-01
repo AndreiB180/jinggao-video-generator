@@ -117,7 +117,8 @@ SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in gre
 # (a 70-line film about two named people got 19 title cards while library and picture fill were off limits).
 CONTEXT_LANES = ("ctx", "topic", "library", "image", "stock")
 PICTURE_SECONDS = 90    # time the picture fallback may take per film (searches and downloads)
-PICTURE_LINES = 30      # lines it looks for pictures for
+PICTURE_LINES = 40      # lines it looks for pictures for
+PICTURE_SHARE = 0.5     # a news or person story's lines that may take a photo of the story before library footage
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -718,6 +719,12 @@ class Matcher:
         if self.names_in_source(shot, source):
             return True
         return not source.get("pool_talk") and not any(self.names_in_source(shot, s) for s in self.pool_sources)
+
+    def news_like(self) -> bool:
+        """A story about real events or named people (news queries, a topic pool, or many named lines), where photos
+        of the story beat generic footage; social stories with invented names keep the library first."""
+        named = sum(1 for s in self.shots if s.get("persons"))
+        return bool(self.plan.get("event") or self.pool_found or named >= 0.15 * max(1, len(self.shots)))
 
     def penalties(self) -> dict:
         """Library videos other recent films already show cost a little (a batch on one topic repeats itself)."""
@@ -1414,7 +1421,7 @@ class Matcher:
         def candidates(shot):
             rows = []
             for q in queries(shot):
-                for search in (sources.bing_images, publisher_videos.chinanews_images):
+                for search in (sources.baidu_images, sources.bing_images, publisher_videos.chinanews_images):
                     try:
                         rows += search(q)[:12]
                     except Exception:   # noqa: BLE001 — one search less
@@ -1431,6 +1438,9 @@ class Matcher:
                 try:
                     with network.client(timeout=6, follow_redirects=True) as client:
                         response = client.get(url, headers={"User-Agent": BROWSER})
+                        if response.status_code != 200 and row.get("fallback"):
+                            response = client.get(row["fallback"], headers={"User-Agent": BROWSER,
+                                                                             "Referer": "https://image.baidu.com/"})
                     if response.status_code != 200 or len(response.content) > 12 * 2**20:
                         continue
                     with Image.open(io.BytesIO(response.content)) as raw:
@@ -1440,7 +1450,13 @@ class Matcher:
                 if min(image.size) < 360 or not 0.45 <= image.width / image.height <= 2.6:
                     continue
                 if self.project.get("aspect", "16:9") != "9:16" and image.width < image.height * 1.15:
-                    continue    # a tall picture in a landscape film would sit between blurred side bands
+                    # A tall picture would sit between blurred side bands: a portrait wide enough is cut to 16:9
+                    # around the upper middle, where a face usually is (most photos of a named person are tall).
+                    if image.width < 640:
+                        continue
+                    band = round(image.width * 9 / 16)
+                    top = max(0, min(image.height - band, round(image.height * 0.36 - band / 2)))
+                    image = image.crop((0, top, image.width, top + band))
                 h = _dhash(image)
                 with lock:
                     if any(bin(h ^ other).count("1") <= 6 for other in seen_hashes):
@@ -1456,6 +1472,15 @@ class Matcher:
                               for l in lines)
                     if found["contact"] or found["dense"] or big:
                         continue    # a poster, a screenshot, an ad, or a stock picture with big words on it ("房贷")
+                    # A news photo's credit ("@作者", an outlet's name) along the top or bottom edge: cut that band off.
+                    marks = [l["box"] for l in lines if l["score"] >= 0.5 and (l["box"][1] >= 0.8 or l["box"][3] <= 0.2)]
+                    if marks:
+                        top = max([b[3] for b in marks if b[3] <= 0.2] or [0.0])
+                        bottom = min([b[1] for b in marks if b[1] >= 0.8] or [1.0])
+                        if bottom - top < 0.6:
+                            continue
+                        image = image.crop((0, round(top * image.height) + 2, image.width,
+                                            round(bottom * image.height) - 2))
                 image.thumbnail((1920, 1920))
                 pictures.append((row, image, h))
             return shot, pictures
@@ -3078,6 +3103,26 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 self.place(sid, choice, key_of(choice)[0])
                 filled += 1
             return filled
+        if pending and picture_thread is not None and self.news_like():
+            # A news or person story: a photo from a report on this very story says more than a stranger's clip found
+            # by "男子 说话" (10-31: every film of the client's news stories was limited on 百家号 for 通用素材、
+            # 循环画面、重复片段). Up to PICTURE_SHARE of the film; the library fills what is left.
+            began = time.monotonic()
+            picture_thread.join()
+            self.check()
+            room = int(PICTURE_SHARE * len(self.shots)) - sum(1 for c in final.values() if c.get("lane") == "image")
+            open_ids = {s["id"] for s in pending}
+            first = 0
+            for sid, (choice, path) in sorted(early_pictures.items(), key=lambda item: self.position[item[0]]):
+                if first >= room:
+                    break
+                if sid in open_ids and sid not in final:
+                    final[sid], files[sid] = choice, path
+                    first += 1
+            if first:
+                self.notes.append(f"{first} 镜用了讲这件事的新闻图片（慢慢推拉），没用素材库里的通用画面")
+            pending = [s for s in pending if s["id"] not in final]
+            stamp("pictures_first", began)
         if pending:
             began = time.monotonic()
             library_filled += fill_from_library("a", "all", per_line=LIB_FILL_PER_LINE + 1)
