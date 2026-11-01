@@ -1155,6 +1155,7 @@ def test_360_image_results_put_landscape_news_photos_first():
                       "thumb": "https://p0.ssl.qhimgs1.com/a.jpg", "link": "http://www.sohu.com/a/1"},
                      {"title": "特奥多罗记者会", "width": "1280", "height": "852", "img": "https://q0.itc.cn/b.jpeg",
                       "thumb": "https://p1.ssl.qhimgs1.com/b.jpg", "link": "http://www.sohu.com/a/2"}, "junk"]}
+    body["list"].append({"title": "小图", "width": "407", "height": "245", "img": "https://x/c.jpeg", "thumb": "https://p2/c.jpg"})
     rows = sources.parse_so360_images(body)
-    assert [r["url"] for r in rows] == ["https://q0.itc.cn/b.jpeg", "https://q4.itc.cn/a.jpeg"]
-    assert rows[0]["fallback"] == "https://p1.ssl.qhimgs1.com/b.jpg" and rows[0]["source_url"] == "http://www.sohu.com/a/2"
+    assert [r["url"] for r in rows] == ["https://p1.ssl.qhimgs1.com/b.jpg", "https://p0.ssl.qhimgs1.com/a.jpg"]  # 360's copy
+    assert rows[0]["fallback"] == "https://q0.itc.cn/b.jpeg" and rows[0]["source_url"] == "http://www.sohu.com/a/2"

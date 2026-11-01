@@ -298,17 +298,22 @@ def parse_so360_images(body: dict) -> list[dict]:
     for item in (body or {}).get("list") or []:
         if not isinstance(item, dict):
             continue
-        url, copy = item.get("img") or "", item.get("thumb") or ""
-        if urlparse(url).scheme not in ("http", "https"):
-            url = copy
+        # 360's own copy first: from China it came every time in about half a second, the originals' sites half the
+        # time not at all (one stalled ten seconds), 11-01.
+        original, copy = item.get("img") or "", item.get("thumb") or ""
+        url = copy if urlparse(copy).scheme in ("http", "https") else original
         if urlparse(url).scheme not in ("http", "https"):
             continue
-        page = item.get("link") or url
-        rows.append(candidate("so360_image", html.unescape(item.get("title") or "网页图片"), url, copy or url,
-                              page if urlparse(page).scheme in ("http", "https") else url,
-                              width=int(item.get("width") or 0), height=int(item.get("height") or 0),
-                              fallback=copy if copy != url else "", license="网页图片，使用许可待核实"))
-    rows.sort(key=lambda r: not (r.get("width") and r.get("height") and r["width"] >= 1.2 * r["height"]))
+        width, height = int(item.get("width") or 0), int(item.get("height") or 0)
+        if width and height and min(width, height) < 360:
+            continue    # too small for the film: not downloaded at all
+        page = item.get("link") or original or url
+        rows.append(candidate("so360_image", html.unescape(item.get("title") or "网页图片"), url, url,
+                              page if urlparse(page).scheme in ("http", "https") else url, width=width, height=height,
+                              fallback=original if original != url and urlparse(original).scheme in ("http", "https") else "",
+                              license="网页图片，使用许可待核实"))
+    # Landscape first, then the largest.
+    rows.sort(key=lambda r: (not (r["width"] and r["height"] and r["width"] >= 1.2 * r["height"]), -r["width"] * r["height"]))
     return rows
 
 
