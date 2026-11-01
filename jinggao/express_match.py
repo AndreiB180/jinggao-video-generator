@@ -382,6 +382,7 @@ class Matcher:
         self.pool_found = []        # the pool queries that found videos about the story (QA judges footage against them)
         self.pool_sources = []      # the pool videos themselves
         self.final_marks = {}       # sid -> where the final review saw marks (cropped off when it can)
+        self.picture_stats = {}     # where the photo search's candidates went (report "pictures")
         self.library_rich = set()   # groups whose lines all found library videos of their own (fewer live searches)
         self.fill_errors = {}   # job id -> why its download or text check failed (written back to the library's checks)
         self.window_notes = []  # library moments judged here, for footage_index.record_checks
@@ -1432,6 +1433,11 @@ class Matcher:
             return words
         seen_hashes = []
         lock = threading.Lock()
+        began_at = time.monotonic()
+        stats = self.picture_stats
+        def count(key, n=1):
+            with lock:
+                stats[key] = stats.get(key, 0) + n
         # A time budget: the client's machines spent up to four and a half minutes here for a few pictures.
         deadline = time.monotonic() + (PICTURE_SECONDS_NEWS if self.news_like() else PICTURE_SECONDS)
         def candidates(shot):
@@ -1442,7 +1448,10 @@ class Matcher:
                     rows += sources.so360_images(q)[:12]
                 except Exception:   # noqa: BLE001 — one search less
                     continue
+            count("lines")
+            count("found", len(rows))
             if len(rows) < 8:
+                count("other_searches")
                 for q in queries(shot):
                     for search in (sources.bing_images, publisher_videos.chinanews_images):
                         try:
@@ -1453,6 +1462,8 @@ class Matcher:
             wanted = 4 if shot.get("persons") else 3
             for row in rows:
                 if len(pictures) >= wanted or time.monotonic() > deadline:
+                    if time.monotonic() > deadline:
+                        count("out_of_time")
                     break
                 url = row.get("url") or ""
                 if not url or self.IMAGE_SKIP_HOSTS.search(url + " " + str(row.get("source_url") or row.get("source") or "")):
@@ -1464,17 +1475,22 @@ class Matcher:
                         if response.status_code != 200 and row.get("fallback"):
                             response = client.get(row["fallback"], headers={"User-Agent": BROWSER})   # the search's copy
                     if response.status_code != 200 or len(response.content) > 12 * 2**20:
+                        count("refused")
                         continue
                     with Image.open(io.BytesIO(response.content)) as raw:
                         image = ImageOps.exif_transpose(raw).convert("RGB")
                 except Exception:   # noqa: BLE001 — broken or refused picture
+                    count("refused")
                     continue
+                count("downloaded")
                 if min(image.size) < 360 or not 0.45 <= image.width / image.height <= 2.6:
+                    count("small")
                     continue
                 if self.project.get("aspect", "16:9") != "9:16" and image.width < image.height * 1.15:
                     # A tall picture would sit between blurred side bands: a portrait wide enough is cut to 16:9
                     # around the upper middle, where a face usually is (most photos of a named person are tall).
                     if image.width < 640:
+                        count("tall")
                         continue
                     band = round(image.width * 9 / 16)
                     top = max(0, min(image.height - band, round(image.height * 0.36 - band / 2)))
@@ -1482,6 +1498,7 @@ class Matcher:
                 h = _dhash(image)
                 with lock:
                     if any(bin(h ^ other).count("1") <= 6 for other in seen_hashes):
+                        stats["duplicate"] = stats.get("duplicate", 0) + 1
                         continue
                     seen_hashes.append(h)
                 if screen_text.installed():
@@ -1493,6 +1510,7 @@ class Matcher:
                     big = any(l["score"] >= 0.7 and screen_text._cjk(l["text"]) >= 1 and l["box"][3] - l["box"][1] >= 0.08
                               for l in lines)
                     if found["contact"] or found["dense"] or big:
+                        count("text")
                         continue    # a poster, a screenshot, an ad, or a stock picture with big words on it ("房贷")
                     # A news photo's credit ("@作者", an outlet's name) along the top or bottom edge: cut that band off.
                     marks = [l["box"] for l in lines if l["score"] >= 0.5 and (l["box"][1] >= 0.8 or l["box"][3] <= 0.2)]
@@ -1512,7 +1530,9 @@ class Matcher:
             for shot, pictures in pool.map(candidates, ordered[:PICTURE_LINES if not self.news_like() else len(ordered)]):
                 if pictures:
                     found[shot["id"]] = pictures
+        stats["lines_with_pictures"] = stats.get("lines_with_pictures", 0) + len(found)
         if not found:
+            stats["seconds"] = round(stats.get("seconds", 0) + time.monotonic() - began_at, 1)
             return {}
         chosen = {}
         items = list(found.items())
@@ -1544,6 +1564,10 @@ class Matcher:
                 sid = labels.get(str(label).strip())
                 if sid and isinstance(value, int) and 1 <= value <= len(found[sid]):
                     chosen[sid] = found[sid][value - 1]
+                elif sid:
+                    stats["picker_none"] = stats.get("picker_none", 0) + 1
+        stats["chosen"] = stats.get("chosen", 0) + len(chosen)
+        stats["seconds"] = round(stats.get("seconds", 0) + time.monotonic() - began_at, 1)
         out = {}
         for sid, (row, image, h) in chosen.items():
             name = hashlib.sha1((row.get("url") or str(h)).encode()).hexdigest()[:16]
@@ -3511,6 +3535,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                             else "qa:" + str(qa_bad[job_id])[:24] if job_id in qa_bad
                             else "dl:" + str(failures[job_id])[:24] if job_id in failures else "-"]
                            for job_id, c in list(self.job_choice.items())[:500]],
+                  "pictures": dict(self.picture_stats),
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
                                          "library", "pool", "sweep", "repeat", "reuse", "card")},
