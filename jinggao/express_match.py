@@ -118,7 +118,8 @@ SPRITE_SHEETS_KEPT = 12   # preview sheets kept decoded (about 13 MB each in gre
 CONTEXT_LANES = ("ctx", "topic", "library", "image", "stock")
 PICTURE_SECONDS = 90    # time the picture fallback may take per film (searches and downloads)
 PICTURE_LINES = 40      # lines it looks for pictures for
-PICTURE_SHARE = 0.5     # a news or person story's lines that may take a photo of the story before library footage
+PICTURE_SHARE = 1.0     # a news or person story's lines that may take a photo of the story before library footage
+PICTURE_SECONDS_NEWS = 180   # ...and the time its pictures may take (every open line looks for one)
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -1423,19 +1424,32 @@ class Matcher:
                 q = " ".join(self.IMAGE_WORDS.sub(" ", q).split())
                 if q and q not in words:
                     words.append(q)
-            return words[:3 if names else 2]
+            words = words[:3 if names else 2]
+            # The story itself (its news or pool query) when the line's own words find nothing usable.
+            story = next((q for q in list(self.plan.get("event") or []) + list(self.plan.get("pool") or []) if q), "")
+            if story and not names and story not in words:
+                words.append(story)
+            return words
         seen_hashes = []
         lock = threading.Lock()
         # A time budget: the client's machines spent up to four and a half minutes here for a few pictures.
-        deadline = time.monotonic() + PICTURE_SECONDS
+        deadline = time.monotonic() + (PICTURE_SECONDS_NEWS if self.news_like() else PICTURE_SECONDS)
         def candidates(shot):
             rows = []
+            # Baidu first, the others only where it found too little: three searches per query, Bing slow or
+            # refused from China, used the whole time budget before a picture was looked at (10-31: 3-7 photos a film).
             for q in queries(shot):
-                for search in (sources.baidu_images, sources.bing_images, publisher_videos.chinanews_images):
-                    try:
-                        rows += search(q)[:12]
-                    except Exception:   # noqa: BLE001 — one search less
-                        continue
+                try:
+                    rows += sources.baidu_images(q)[:12]
+                except Exception:   # noqa: BLE001 — one search less
+                    continue
+            if len(rows) < 8:
+                for q in queries(shot):
+                    for search in (sources.bing_images, publisher_videos.chinanews_images):
+                        try:
+                            rows += search(q)[:12]
+                        except Exception:   # noqa: BLE001 — one search less
+                            continue
             pictures = []
             wanted = 4 if shot.get("persons") else 3
             for row in rows:
@@ -1497,7 +1511,7 @@ class Matcher:
         found = {}
         ordered = sorted(shots, key=lambda shot: not shot.get("persons"))   # person lines first
         with execution.ThreadPoolExecutor(max_workers=8) as pool:
-            for shot, pictures in pool.map(candidates, ordered[:PICTURE_LINES]):
+            for shot, pictures in pool.map(candidates, ordered[:PICTURE_LINES if not self.news_like() else len(ordered)]):
                 if pictures:
                     found[shot["id"]] = pictures
         if not found:
@@ -2732,6 +2746,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                       for sid, found in (news.get("matched") or {}).items()}
         # Build ranked options per shot: the matching news report first, own picks, then context/topic/neighbour fills.
         group_of = {sid: g for g in groups for sid in g["shots"]}
+        news_story = self.news_like()
         options = {}
         for shot in self.shots:
             sid = shot["id"]
@@ -2757,7 +2772,8 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                                 fill += [(t, "person") for t in picks.get(other, [])
                                          if self.names_in_source(shot, t["source"])]
                 fill += [(t, "ctx") for t in ctx_tiles.get(sid, [])]
-            fill += [(t, "topic") for t in topic_tiles]
+            if not news_story:   # a news or person story: photos of the story, not the topic's generic footage
+                fill += [(t, "topic") for t in topic_tiles]
             if not person:
                 neighbours = []
                 for other in self.timeline[max(0, index - 3):index + 4]:
