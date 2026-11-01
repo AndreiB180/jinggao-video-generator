@@ -78,6 +78,8 @@ POOL_SECONDS_PER = 120  # ...one per this many seconds of it (a 4-minute clip gi
 POOL_ENOUGH = 1200      # seconds of footage naming the event itself that make the whole pool
 POOL_CANDIDATES = 8     # pool candidates looked at (one picture check) before the pool is chosen
 POOL_SEARCH_WAIT = 30.0 # seconds the pool's first search waits for B站 to answer again
+# Footage of the story itself: no key-fact text over it.
+EVENT_LANES = ("news", "pool", "sweep", "person", "person_near")
 # Final review reasons: a mark that cropping may clear, other faults it cannot, and the faults never left in a film.
 MARK_REASON = re.compile(r"水印|台标|账号|署名|平台|素材站|角标|字幕|logo|LOGO|bilibili|Bilibili")
 OTHER_FAULT = re.compile(r"花字|中间|竖屏|黑边|画中画|模糊|黑屏|性暗示|暴露|血腥|暴力|表情包|卡通|游戏|主持|PPT|截图|外国")
@@ -2514,6 +2516,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
         return redo
 
     def save(self, final, files):
+        news_story = self.news_like()
         try:
             store.mark_footage_used(self.pid, [f"{c['tile']['source']['provider']}:{c['tile']['source']['id']}"
                                                for c in final.values() if c["tile"]["source"].get("provider") != "card"])
@@ -2616,6 +2619,14 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     # A source note written for the previous clip says nothing about this one.
                     shot.update(source_review_note="", source_review_url="")
                 shot["crop_asset"] = asset["id"]   # the crop was measured on this file only
+                # A news or person story: a shot that is not footage of the event itself carries the line's key fact
+                # in big text (the client's competitors' films keep what is said on the picture; their footage
+                # matches loosely and still passes 百家号's audio-picture check).
+                fact = (shot.get("express") or {}).get("c") or ""
+                if news_story and fact and choice["lane"] not in EVENT_LANES:
+                    shot["callout"] = fact
+                else:
+                    shot.pop("callout", None)
                 shot.update(selected_asset=asset["id"], clip_start=0, verification=verification, approved=True,
                             search_note=verification["reason"],
                             fit=curation.preferred_fit(shot, framed, p.get("aspect", "16:9")))

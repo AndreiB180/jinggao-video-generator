@@ -483,7 +483,7 @@ def stamps(seconds: float, ass=False) -> str:
 
 
 def subtitles(text: str, duration: float, w: int, h: int, label: str = "", *, timed_segments=None,
-              style: dict | None = None) -> tuple[str, list[tuple]]:
+              style: dict | None = None, callout: str = "") -> tuple[str, list[tuple]]:
     """ASS subtitles: one line at a time in the configured font, size and colour (subtitle_style)."""
     st = style or subtitle_style.style(w, h)
     line_chars = st["line_chars"]
@@ -504,10 +504,15 @@ WrapStyle: 2
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{st["family"]},{st["size"]},{st["primary"]},&H00FFFFFF,&H00000000,&H90000000,0,0,0,0,100,100,0,0,1,{st["outline"]},{st["shadow"]},2,{round(w*.04)},{round(w*.04)},{st["margin_v"]},1
 Style: Label,Noto Sans SC,{round(min(w,h)*.028)},&H00FFFFFF,&H00FFFFFF,&H60111111,&H60111111,0,0,0,0,100,100,0,0,3,8,0,9,36,36,36,1
+Style: Callout,{st["family"]},{round(min(w,h)*.085)},&H0000D7FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,2,0,1,{max(4, round(min(w,h)*.007))},2,8,{round(w*.06)},{round(w*.06)},{round(h*.1)},1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     segments = []
+    if callout:
+        # The line's key fact in big gold type at the top (a news story's shot that is not footage of the event).
+        fact = callout.replace("\\", "＼").replace("{", "｛").replace("}", "｝").replace("\n", " ").replace("\r", " ")
+        header += f"Dialogue: 2,0:00:00.00,{stamps(duration,True)},Callout,,0,0,0,,{{\\fad(180,180)}}{fact}\n"
     if label:
         escaped_label = label.replace("\\", "＼").replace("{", "｛").replace("}", "｝").replace("\n", " ").replace("\r", " ")
         header += f"Dialogue: 1,0:00:00.00,{stamps(duration,True)},Label,,0,0,0,,{escaped_label}\n"
@@ -648,11 +653,13 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
         timed = captions.segments(track, begin if full_captions else 0, duration, w, h, narration=shot["narration"],
                                   char_offset=captions.char_offset(shots, i) if full_captions else 0,
                                   line_chars=caption_style["line_chars"]) if track else None
-        ass, segments = subtitles(shot["narration"], duration, w, h, label, timed_segments=timed, style=caption_style)
+        callout = shot.get("callout") or ""
+        ass, segments = subtitles(shot["narration"], duration, w, h, label, timed_segments=timed, style=caption_style,
+                                  callout=callout)
         drawn = segments
         if not burn:
-            # No narration on the picture (the SRT keeps the timed lines); a card's name label stays.
-            ass, _ = subtitles("", duration, w, h, label, style=caption_style)
+            # No narration on the picture (the SRT keeps the timed lines); a card's name label and a key fact stay.
+            ass, _ = subtitles("", duration, w, h, label, style=caption_style, callout=callout)
             drawn = []
         (shot_work / "subtitle.ass").write_text(ass, "utf-8-sig")
         visual = f"scale={w}:{h}:force_original_aspect_ratio="

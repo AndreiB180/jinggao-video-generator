@@ -1171,3 +1171,13 @@ def test_360_refusing_pauses_its_searches(data, monkeypatch):
     monkeypatch.setattr(sources, "SO360_GAP", 0)
     assert sources.so360_images("赵长鹏") == [] and len(calls) == 1
     assert sources.so360_images("周群飞") == [] and len(calls) == 1      # paused: not asked again
+
+
+def test_a_key_fact_caption_keeps_only_figures_the_line_says():
+    from jinggao.express_plan import callout_text
+    from jinggao import media
+    assert callout_text("市值蒸发5000亿美元", "谷歌市值一天蒸发约5000亿美元") == "市值蒸发5000亿美元"
+    assert callout_text("被盗64亿美元", "币安被盗63亿美元") == ""          # a figure the voice does not say
+    assert callout_text("好", "好") == "" and callout_text(None, "x") == ""
+    ass, _ = media.subtitles("", 4.0, 1920, 1080, callout="被盗63亿美元")
+    assert "Callout,,0,0,0,,{\\fad(180,180)}被盗63亿美元" in ass
