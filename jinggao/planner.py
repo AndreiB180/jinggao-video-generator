@@ -292,6 +292,14 @@ def _send_chat_payload(cfg, payload, *, task, timeout, reasoning, reasoning_effo
             info["review_packet"] = packet.stats
         return result, info
     except httpx.HTTPStatusError as exc:
+        try:
+            code = str(((exc.response.json() or {}).get("error") or {}).get("code") or "")
+        except ValueError:
+            code = ""
+        if code in ("Arrearage", "Overdue") or "overdue" in exc.response.text.lower():
+            # 百炼 answers an account out of credit with HTTP 400 "Arrearage" (11-01: every call of a test batch).
+            raise ModelUnavailable("阿里云百炼账户欠费，所有模型请求都被拒绝；请到阿里云充值后重试"
+                                   "（已停止任务并保留完成部分）") from None
         if exc.response.status_code in (401, 402, 403, 429):
             message = {401: "模型 API Key 无效或已过期，请在设置中更换",
                        402: "模型账户额度不足，请充值或在设置中更换可用 Key",
