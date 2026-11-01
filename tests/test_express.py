@@ -1147,3 +1147,14 @@ def test_a_photo_already_in_the_film_is_not_placed_again():
     placed = {"a": {"lane": "image", "tile": {"hash": 0b1010_1010}}}
     assert not express_match.Matcher.fresh_picture(placed, {"tile": {"hash": 0b1010_1011}})
     assert express_match.Matcher.fresh_picture(placed, {"tile": {"hash": (1 << 40) - 1}})
+
+
+def test_360_image_results_put_landscape_news_photos_first():
+    from jinggao import sources
+    body = {"list": [{"title": "菲国防部长特奥多罗", "width": "800", "height": "1000", "img": "https://q4.itc.cn/a.jpeg",
+                      "thumb": "https://p0.ssl.qhimgs1.com/a.jpg", "link": "http://www.sohu.com/a/1"},
+                     {"title": "特奥多罗记者会", "width": "1280", "height": "852", "img": "https://q0.itc.cn/b.jpeg",
+                      "thumb": "https://p1.ssl.qhimgs1.com/b.jpg", "link": "http://www.sohu.com/a/2"}, "junk"]}
+    rows = sources.parse_so360_images(body)
+    assert [r["url"] for r in rows] == ["https://q0.itc.cn/b.jpeg", "https://q4.itc.cn/a.jpeg"]
+    assert rows[0]["fallback"] == "https://p1.ssl.qhimgs1.com/b.jpg" and rows[0]["source_url"] == "http://www.sohu.com/a/2"

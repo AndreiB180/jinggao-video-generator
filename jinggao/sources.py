@@ -276,6 +276,42 @@ def bing_images(query: str) -> list[dict]:
     return result
 
 
+def so360_images(query: str) -> list[dict]:
+    """360 image search: from China it answers a program plainly (Baidu's refuses one) with the photos of news
+    reports on the very people and events (赵长鹏, 周群飞, 特奥多罗: 48-99 each, 11-01). Landscape ones first; each
+    row keeps 360's own copy as a fallback when the original's site refuses."""
+    cache = paths.DATA / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    file = cache / ("so360-" + hashlib.sha256(query.encode()).hexdigest() + ".json")
+    if file.exists() and time.time() - file.stat().st_mtime < 3600:
+        return json.loads(file.read_text("utf-8"))
+    response = httpx.get("https://image.so.com/j", params={"q": query, "pn": 30, "sn": 0},
+                         headers={"User-Agent": AGENT}, timeout=10)
+    response.raise_for_status()
+    result = parse_so360_images(response.json())
+    file.write_text(json.dumps(result, ensure_ascii=False), "utf-8")
+    return result
+
+
+def parse_so360_images(body: dict) -> list[dict]:
+    rows = []
+    for item in (body or {}).get("list") or []:
+        if not isinstance(item, dict):
+            continue
+        url, copy = item.get("img") or "", item.get("thumb") or ""
+        if urlparse(url).scheme not in ("http", "https"):
+            url = copy
+        if urlparse(url).scheme not in ("http", "https"):
+            continue
+        page = item.get("link") or url
+        rows.append(candidate("so360_image", html.unescape(item.get("title") or "网页图片"), url, copy or url,
+                              page if urlparse(page).scheme in ("http", "https") else url,
+                              width=int(item.get("width") or 0), height=int(item.get("height") or 0),
+                              fallback=copy if copy != url else "", license="网页图片，使用许可待核实"))
+    rows.sort(key=lambda r: not (r.get("width") and r.get("height") and r["width"] >= 1.2 * r["height"]))
+    return rows
+
+
 def pixabay(query: str, key: str, *, video_only: bool = False) -> list[dict]:
     if not key:
         raise ValueError("请在设置中填写 Pixabay API Key")

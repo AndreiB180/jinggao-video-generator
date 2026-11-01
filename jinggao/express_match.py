@@ -1436,12 +1436,19 @@ class Matcher:
         deadline = time.monotonic() + (PICTURE_SECONDS_NEWS if self.news_like() else PICTURE_SECONDS)
         def candidates(shot):
             rows = []
+            # 360 first (fast and on the story); Bing (slow from China) and 中新网 only where it found too little.
             for q in queries(shot):
-                for search in (sources.bing_images, publisher_videos.chinanews_images):
-                    try:
-                        rows += search(q)[:12]
-                    except Exception:   # noqa: BLE001 — one search less
-                        continue
+                try:
+                    rows += sources.so360_images(q)[:12]
+                except Exception:   # noqa: BLE001 — one search less
+                    continue
+            if len(rows) < 8:
+                for q in queries(shot):
+                    for search in (sources.bing_images, publisher_videos.chinanews_images):
+                        try:
+                            rows += search(q)[:12]
+                        except Exception:   # noqa: BLE001 — one search less
+                            continue
             pictures = []
             wanted = 4 if shot.get("persons") else 3
             for row in rows:
@@ -1454,6 +1461,8 @@ class Matcher:
                 try:
                     with network.client(timeout=6, follow_redirects=True) as client:
                         response = client.get(url, headers={"User-Agent": BROWSER})
+                        if response.status_code != 200 and row.get("fallback"):
+                            response = client.get(row["fallback"], headers={"User-Agent": BROWSER})   # the search's copy
                     if response.status_code != 200 or len(response.content) > 12 * 2**20:
                         continue
                     with Image.open(io.BytesIO(response.content)) as raw:
