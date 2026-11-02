@@ -339,7 +339,7 @@ def library_words(shot: dict) -> list[list[str]]:
 # second; Baidu 一镜 reads about 5); such pieces join a neighbour when the line allows.
 MIN_WIDTH = 9
 # After the real voice is aligned, a shot shorter than this joins a neighbour (before any footage is chosen).
-MIN_SECONDS = 2.0
+MIN_SECONDS = 3.0      # 2 s shots still read as flashes to the client (11-02)
 # Setting shot_length: how much narration one shot covers, as full-width characters (about 4.8 a second with
 # the default voice): a shot takes subtitle lines until it reaches the first number and never passes the
 # second. Similar channels cut every 6-7 s; one line per shot (about 2.5 s) needs 2-3 times the clips,

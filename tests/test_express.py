@@ -1187,6 +1187,7 @@ def test_key_fact_captions_on_at_most_four_in_ten_shots_never_two_in_a_row(data)
     shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(10)]
     m = _matcher(data, shots)
     m.plan["event"] = ["币安 黑客"]
+    m.cfg = dict(m.cfg, key_fact_captions="1")      # off by default since the client found them ugly (11-02)
     final = {}
     for i, s in enumerate(m.shots):
         s["express"] = {"c": f"被盗{i}亿美元" if i % 3 else "黑客攻击"}
@@ -1198,3 +1199,12 @@ def test_key_fact_captions_on_at_most_four_in_ten_shots_never_two_in_a_row(data)
     assert all(b - a > 1 for a, b in zip(positions, positions[1:], strict=False))
     from jinggao.express_plan import callout_text
     assert callout_text("63亿美元一夜蒸发", "被黑客攻破六十三亿美元一夜蒸发") == "63亿美元一夜蒸发"   # a transcript's numerals
+
+
+
+def test_key_fact_captions_are_off_by_default(data):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0, "express": {"c": "被盗63亿美元"}} for i in range(4)]
+    m = _matcher(data, shots)
+    m.plan["event"] = ["币安 黑客"]
+    final = {s["id"]: {"lane": "library", "tile": {"source": {}}} for s in m.shots}
+    assert m.captioned(final) == set()

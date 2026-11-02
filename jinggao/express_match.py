@@ -728,8 +728,9 @@ class Matcher:
     def captioned(self, final) -> set:
         """Shots that carry their line's key fact: in a news or person story, shots that are not footage of the event,
         at most CALLOUT_SHARE of the film and never two in a row, lines with figures first (on 47 of 54 shots a test
-        film read as a slide show)."""
-        if not self.news_like():
+        film read as a slide show). Off unless the setting key_fact_captions is "1": the client found the gold
+        type ugly and out of step (11-02)."""
+        if self.cfg.get("key_fact_captions", "0") != "1" or not self.news_like():
             return set()
         facts = {sid: (self.shots_by_id_all.get(sid, {}).get("express") or {}).get("c") or "" for sid in final}
         ranked = sorted((sid for sid, c in final.items() if facts.get(sid) and c.get("lane") not in EVENT_LANES
