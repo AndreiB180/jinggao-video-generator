@@ -1364,7 +1364,7 @@ class Matcher:
 
     def semantic_on(self) -> bool:
         from . import footage_index
-        return self.cfg.get("library_semantic", "1") == "1" and hasattr(footage_index, "find_like")
+        return self.cfg.get("library_semantic", "0") == "1" and hasattr(footage_index, "find_like")
 
     LIBRARY_PICK = """每一行先是一句口播（行首 L 编号，后面是画面建议），再是素材库里几段视频画面的文字描述（编号 a、b、c…）。
 为每句挑出最多两段放在这句话下面的画面，最合适的在前。按平台审核“音画相关”的标准挑：画面在表现这句话说的人、事、场景，或这个故事主角的一个具体场景。
@@ -1472,7 +1472,7 @@ class Matcher:
             claimed |= seen
             if options:
                 lines.append((shot, options))
-        picks = self.library_pick(lines) if shortlist and lines and self.cfg.get("library_pick", "1") == "1" else None
+        picks = self.library_pick(lines) if shortlist and lines and self.cfg.get("library_pick", "0") == "1" else None
         if picks is not None:
             stats = self.lib_pick_stats
             stats["lines"] += len(lines)

@@ -29,7 +29,7 @@ DEFAULTS = {
     # A film costs ¥0.03-0.07, but in-flight reservations and calls ending without usage count at their reserve:
     # at ¥0.10 films stopped picking halfway (10-31), so the cap guards against runaways only.
     "model_project_budget_cny": "0.30", "model_daily_budget_cny": "3.00",
-    "model_job_budget_cny": "0.30", "budget_migrated": "", "key_fact_captions": "0", "library_semantic": "1", "library_pick": "1",
+    "model_job_budget_cny": "0.30", "budget_migrated": "", "key_fact_captions": "0", "library_semantic": "0", "library_pick": "0",
     "model_provider_budget_cny": "",
     "cost_input_per_million": "", "cost_cached_per_million": "", "cost_output_per_million": "",
     "cost_image_tokens": "0",

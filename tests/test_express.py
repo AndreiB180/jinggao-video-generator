@@ -1217,6 +1217,7 @@ def test_full_library_fills_shortlist_by_meaning_then_words_and_download_what_th
     project = store.new_project("t", "x")
     project = store.mutate(project["id"], lambda p: p.update(shots=shots))
     m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    m.cfg.update(library_semantic="1", library_pick="1")       # off by default: r49 showed no gain
     first, second = (s["id"] for s in project["shots"])
 
     def video(bvid, text):
