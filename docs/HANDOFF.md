@@ -422,6 +422,22 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.4：对标采集（2026-11-03，sha256 4b4ae6d5…）
+
+客户的做法：跟好看视频上的对标号，挑一万播放以上的爆款，拿原文案洗稿再出片（同行用的"对标内容工作台/易撰"那一类）。
+- `jinggao/benchmark.py` + 左栏"对标采集"（`frontend/src/BenchmarkPanel.tsx`），状态在 DATA/benchmark.json。
+- 作者主页 `haokan.baidu.com/author/<id>` 按访客打开的样子读（`AGENT` 写明是镜稿，作者之间隔 3 秒，超过 3 小时打开面板才自动刷新）：
+  页面的 `__PRELOADED_STATE__` 带最近 16 条（标题、"昨天/2天前"、播放、时长、封面）。**从国外 IP 打开是浏览器验证页（mkdcheck）**，
+  从国内（宿舍机、客户电脑）是正常页面；遇到验证页就报"不绕过"并停这一轮。
+- **视频页的播放地址是加密的（`encrptedVideoMeta`）**，不解、也不接第三方解析/下载服务（用户 11-03 要求接 kedou.life，没接）：
+  客户勾选后"复制链接"（同时把封面存进「封面」，去掉 `@s_0,w_660…` 拿原图），自己下载放进「1-放视频」。
+- 「1-放视频」里的视频/音频/txt：本机 `local_asr` 听写 → `script_norm.normalize` → `rewrite.rewrite`（带对原文的事实核对）
+  → 「2-待审」，原文案存「原文案」，源文件挪到「已转写」；后台线程一次一个（`process_all`）。待审可在面板里改或直接改 txt，
+  勾选送批量（`/api/benchmark/produce`，不烧字幕，成片在"对标批量"文件夹），稿子挪到「3-已出片」。
+- 宿舍机实测：四个对标号都读到（64 条，3 天内 1 万以上 2 条）；封面原图 1189×668；r49 成片转写+洗稿约 1.5 分钟出 1462 字的稿，
+  送批量出片 92% 实拍。
+- 0.7.4 里还带着按意思找画面的代码，默认关（r49 同 r48 三稿：库镜头 QA 判掉 58% vs 59%，重复还多了）；索引和模型没打进包。
+
 ## 0.7.3：去掉关键信息大字、镜头至少 3 秒、带 3.5 万段体检结果的素材库（2026-11-03，sha256 ec5ec509…）
 
 客户 11-02：黄字"老丑了"、有时和数字人不同步，偶尔还有重复和一闪而过；十条里约四条被限（音画不相关/通用素材/循环画面/重复片段）。
