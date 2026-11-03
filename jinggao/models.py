@@ -169,3 +169,24 @@ class LibraryUse(Strict):
 
 class FileAction(Strict):
     export_id: str | None = Field(default=None, max_length=64)     # default: the latest export
+
+
+class BenchmarkAuthors(Strict):
+    links: str = Field(min_length=1, max_length=5000)
+
+
+class BenchmarkMark(Strict):
+    vids: list[Annotated[str, Field(pattern=r"^\d{1,25}$")]] = Field(min_length=1, max_length=500)
+    status: Literal["", "copied"] = "copied"
+
+
+class BenchmarkReview(Strict):
+    name: str = Field(min_length=5, max_length=200)
+    text: str = Field(default="", max_length=30000)
+
+
+class BenchmarkProduce(Strict):
+    names: list[Annotated[str, Field(min_length=5, max_length=200)]] = Field(min_length=1, max_length=200)
+    aspect: Literal["16:9", "9:16"] = "16:9"
+    resolution: Literal["720p", "1080p"] = "1080p"
+    burn_subtitles: bool = False

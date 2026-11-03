@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Aperture, Database, LayoutGrid, ArrowRight, Check, CheckCircle2, ChevronRight, Clapperboard, Download, ExternalLink, Film, FolderOpen, Image as ImageIcon, Layers3, Loader2, Lock, Mic, Monitor, Music2, Newspaper, Play, RefreshCw, Save, Search, Settings2, ShieldCheck, Sparkles, Unlock, Upload, WandSparkles, X } from 'lucide-react';
+import { Aperture, Database, LayoutGrid, ArrowRight, Check, CheckCircle2, ChevronRight, Clapperboard, Download, ExternalLink, Film, FolderOpen, Image as ImageIcon, Layers3, Loader2, Lock, Mic, Monitor, Music2, Newspaper, Play, RefreshCw, Save, Search, Settings2, ShieldCheck, Sparkles, Target, Unlock, Upload, WandSparkles, X } from 'lucide-react';
 import type { Asset, Candidate, Export, Job, Project, Shot, Summary } from './types';
 import './style.css';
 import {ShotPreview} from './ShotPreview';
@@ -14,6 +14,7 @@ import {StockKeys} from './StockKeys';
 import {CoverSettings} from './CoverSettings';
 import {SubtitleSettings} from './SubtitleSettings';
 import {NewsPanel,NewsCrawlerSettings} from './NewsPanel';
+import {BenchmarkPanel} from './BenchmarkPanel';
 import {FilmPreview} from './FilmPreview';
 import {QuickStart} from './QuickStart';
 import {ProduceView} from './ProduceView';
@@ -43,7 +44,7 @@ function App() {
  const [draft,setDraft] = useState({title:'',script:'',style:'',requirements:'',aspect:'16:9',media_policy:'video_preferred',min_video_ratio:.8,min_video_height:720}), [mode,setMode] = useState('auto');
  const [preview,setPreview] = useState<Export|null>(null);
  const [original,setOriginal]=useState<null|{title:string;script:string}>(null), [rewriteInfo,setRewriteInfo]=useState<RewriteResult|null>(null);
- const [batch,setBatch]=useState(false), [newsPanel,setNewsPanel]=useState(false), [filmPreview,setFilmPreview]=useState(false);
+ const [batch,setBatch]=useState(false), [newsPanel,setNewsPanel]=useState(false), [benchmarkPanel,setBenchmarkPanel]=useState(false), [filmPreview,setFilmPreview]=useState(false);
  const [indexLibrary,setIndexLibrary]=useState(false);
  const [view,setView]=useState<'home'|'works'|'project'>('home');
  const saveShotRef=useRef<null|(()=>Promise<void>)>(null);
@@ -129,6 +130,7 @@ function App() {
     <button className={view==='home'?'on':''} onClick={()=>perform(async()=>{await savePending();setView('home')})}><Sparkles size={17}/>一键成片</button>
     <button className={view==='works'?'on':''} onClick={()=>perform(async()=>{await savePending();await loadProjects();setView('works')})}><LayoutGrid size={17}/>我的作品</button>
     <button onClick={()=>perform(async()=>{await savePending();setNewsPanel(true)})}><Newspaper size={17}/>新闻选题</button>
+    <button onClick={()=>perform(async()=>{await savePending();setBenchmarkPanel(true)})}><Target size={17}/>对标采集</button>
     <button onClick={()=>perform(async()=>{await savePending();setBatch(true)})}><Layers3 size={17}/>批量制作</button>
     <button onClick={()=>perform(async()=>{await savePending();setIndexLibrary(true)})}><Database size={17}/>素材库</button>
    </nav>
@@ -168,6 +170,7 @@ function App() {
   </main>
   {filmPreview&&project&&<FilmPreview project={project} close={()=>setFilmPreview(false)} edit={id=>{setFilmPreview(false);setTab('board');setSelected(id);setTimeout(()=>document.querySelector('.shot-card.selected')?.scrollIntoView({block:'center'}),80)}}/>}
   {newsPanel&&<NewsPanel close={()=>setNewsPanel(false)} openProject={chooseProject} onCreated={()=>{loadProjects()}}/>}
+  {benchmarkPanel&&<BenchmarkPanel close={()=>setBenchmarkPanel(false)} onCreated={()=>{loadProjects()}}/>}
   {batch&&<BatchPanel close={()=>setBatch(false)} openProject={chooseProject} onCreated={()=>{loadProjects()}}/>}
   {indexLibrary&&<FootagePanel close={()=>setIndexLibrary(false)}/>}
   {settings&&<SettingsModal close={()=>setSettings(false)} onError={setError}/>}

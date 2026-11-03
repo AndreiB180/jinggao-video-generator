@@ -261,3 +261,26 @@ img.film-layer{width:100%;height:100%;object-fit:contain}
 .baidu-voice-head{display:flex;align-items:center;gap:12px;margin:6px 0 10px;font-size:12px;color:#cdd4d6}.baidu-voice-head span{color:#8698a4;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .baidu-filter{display:flex;align-items:center;gap:10px;margin-bottom:10px}.baidu-filter .segmented{margin:0}.baidu-filter input{flex:1;min-width:0;padding:6px 9px;font-size:11px}
 .baidu-settings .voice-picker .voice-grid{max-height:320px;overflow-y:auto}.baidu-settings .voice-picker>small{display:block;margin:8px 0 16px}
+/* 对标采集 */
+.bench-modal{width:860px}
+.bench-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.bench-bar>button,.bench-bar>.secondary{width:auto;flex:0 0 auto}
+.bench-bar small{color:#7d8b94;font-size:11px}
+.bench-bar label{display:flex;align-items:center;gap:6px;font-size:12px;color:#a9b6bd;margin:0}
+.bench-bar select{width:auto;min-width:96px}
+.bench-add{display:flex;gap:8px;align-items:stretch;margin-bottom:10px}
+.bench-add textarea{flex:1;min-height:44px}
+.bench-add button{width:auto;flex:0 0 auto}
+.bench-authors{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-bottom:18px}
+.bench-author{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#182026;min-width:0}
+.bench-author>span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.bench-author strong{font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bench-author small{color:#7d8b94;font-size:10px}
+.bench-author small.error{color:#e0a46b}
+.bench-modal .news-item{display:flex;align-items:center;gap:10px}
+.bench-modal .news-item>.checkbox{flex:1;min-width:0}
+.bench-modal .news-actions{margin:0}
+.bench-modal .news-item.open{flex-wrap:wrap}
+.bench-modal .news-item .news-paste{flex-basis:100%}
+.bench-bar label{white-space:nowrap}
+.bench-bar input[type=checkbox]{width:auto;margin:0}

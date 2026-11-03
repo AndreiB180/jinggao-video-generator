@@ -14,7 +14,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import (__version__, captions, config, costs, curation, demo, library, library_collect, media, paths, source_index,
                sources, store, subtitle_style)
-from .models import (AssetPatch, BatchRequest, FileAction, FootageBuild, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
+from .models import (AssetPatch, BatchRequest, BenchmarkAuthors, BenchmarkMark, BenchmarkProduce, BenchmarkReview, FileAction, FootageBuild, JobRequest, LibraryBuild, LibraryUse, NewProject, ProjectPatch, RemoteImport,
                      NewsCrawl, NewsLink, NewsProduce, NewsText, QueueAction, RewriteRequest, ShotPatch)
 from .worker import shot_by_id
 
@@ -630,6 +630,82 @@ def create_app() -> FastAPI:
         return {"batch": batch, "projects": [news.make_project(i, aspect=body.aspect, minutes=body.minutes,
                                                                resolution=body.resolution, auto=body.auto, batch=batch)
                                              for i in body.ids]}
+
+    # ------------------------------------------------------------ 对标采集
+    @app.get("/api/benchmark")
+    def benchmark_state(days: float = 3, plays: int = 10000, done: bool = False):
+        from . import benchmark
+        if not 0 <= days <= 365 or not 0 <= plays <= 100_000_000:
+            raise ValueError("筛选条件无效")
+        return benchmark.state(days, plays, done)
+
+    @app.post("/api/benchmark/authors")
+    def benchmark_authors(body: BenchmarkAuthors):
+        from . import benchmark
+        return benchmark.add_authors(body.links)
+
+    @app.delete("/api/benchmark/authors/{aid}")
+    def benchmark_remove(aid: str):
+        from . import benchmark
+        return benchmark.remove_author(benchmark.author_id(aid))
+
+    @app.post("/api/benchmark/scan")
+    def benchmark_scan(days: float = 3, plays: int = 10000):
+        from . import benchmark
+        benchmark.scan()
+        return benchmark.state(days, plays)
+
+    @app.post("/api/benchmark/mark")
+    def benchmark_mark(body: BenchmarkMark):
+        """Picked (links copied): marked, and their covers saved to 对标采集/封面."""
+        from . import benchmark
+        benchmark.mark(body.vids, body.status)
+        return {"ok": True, "covers": benchmark.save_covers(body.vids) if body.status == "copied" else 0}
+
+    @app.post("/api/benchmark/open/{name}")
+    def benchmark_open(name: str):
+        from . import benchmark
+        folders = benchmark.folders()
+        if name not in folders:
+            raise ValueError("文件夹无效")
+        from pathlib import Path
+        target = Path(folders[name])
+        media.reveal(next(target.iterdir(), target))    # a file inside: Explorer opens the folder itself
+        return {"path": str(target)}
+
+    @app.post("/api/benchmark/process", status_code=202)
+    def benchmark_process():
+        from . import benchmark
+        return benchmark.process_all()
+
+    @app.put("/api/benchmark/review")
+    def benchmark_review_save(body: BenchmarkReview):
+        from . import benchmark
+        benchmark.save_review(body.name, body.text)
+        return {"review": benchmark.review()}
+
+    @app.post("/api/benchmark/review/delete")
+    def benchmark_review_delete(body: BenchmarkReview):
+        from . import benchmark
+        benchmark.drop_review(body.name)
+        return {"review": benchmark.review()}
+
+    @app.post("/api/benchmark/produce", status_code=202)
+    def benchmark_produce(body: BenchmarkProduce):
+        from . import benchmark
+        if not config.read()["model_api_key"]:
+            raise ValueError("请先在服务与设置中填写模型 API Key，再启动批量制作")
+        scripts = benchmark.take_reviewed(body.names)
+        if not scripts:
+            raise ValueError("勾选的稿子已经不在「2-待审」里了")
+        batch, result = store.uid()[:12], []
+        folder = media.batch_folder(len(scripts), kind="对标批量")
+        for item in scripts:
+            p = store.new_project(item["title"], item["script"], body.aspect, burn_subtitles=body.burn_subtitles)
+            store.mutate(p["id"], lambda p: p.update(save_folder=folder))
+            job = store.enqueue(p["id"], "produce", {"resolution": body.resolution, "mode": "model", "batch": batch})
+            result.append({"project_id": p["id"], "title": p["title"], "job_id": job["id"]})
+        return {"batch": batch, "projects": result, "review": benchmark.review()}
 
     @app.get("/api/library")
     def get_library(query: str = "", min_height: int = 720):
