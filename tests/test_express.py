@@ -1208,3 +1208,55 @@ def test_key_fact_captions_are_off_by_default(data):
     m.plan["event"] = ["币安 黑客"]
     final = {s["id"]: {"lane": "library", "tile": {"source": {}}} for s in m.shots}
     assert m.captioned(final) == set()
+
+
+def test_full_library_fills_shortlist_by_meaning_then_words_and_download_what_the_pick_chose(data, monkeypatch):
+    from jinggao import footage_index
+    shots = [planner.new_shot(t) | {"duration": 5.0, "visual": v}
+             for t, v in (("年轻人找工作越来越难。", "求职者在招聘会排队咨询"), ("父亲摔了手机。", "父亲在客厅摔手机"))]
+    project = store.new_project("t", "x")
+    project = store.mutate(project["id"], lambda p: p.update(shots=shots))
+    m = express_match.Matcher(project, project["shots"], lambda: None, lambda *a: None)
+    first, second = (s["id"] for s in project["shots"])
+
+    def video(bvid, text):
+        return {"provider": "bilibili", "id": bvid, "duration": 300, "moments": [40.0], "match": {"text": text, "t": 40.0}}
+    like = {"求职者在招聘会排队咨询": [video("BVfair", "招聘会现场求职者排队"), video("BVqueue", "食堂排队打饭")],
+            "父亲在客厅摔手机": [video("BVphone", "男子把手机摔在地上")]}
+    words = {"求职者": [video("BVsinger", "女子唱歌")], "父亲": [video("BVdad", "中年男子在客厅生气")]}
+    monkeypatch.setattr(footage_index, "find_like", lambda q, **kw: [dict(r) for r in like.get(q, [])
+                                                                     if f"bilibili:{r['id']}" not in kw["exclude"]])
+    monkeypatch.setattr(footage_index, "find", lambda w, **kw: [dict(r) for r in words.get(" ".join(w), [])
+                                                                if f"bilibili:{r['id']}" not in kw["exclude"]])
+    monkeypatch.setattr(m, "library_words", lambda shot, levels: [["求职者"]] if "工作" in shot["narration"] else [["父亲"]])
+    monkeypatch.setattr(m, "resolve", lambda sources: {k: {"available": True} for k in sources})
+    asked = []
+
+    def chat(system, content, **kw):
+        asked.append(content[0]["text"])
+        return {"L1": ["a"], "L2": ["b", "a"]}, {}
+    monkeypatch.setattr(m, "chat", chat)
+    jobs = m.library_jobs(project["shots"], {}, {}, {}, levels="all")
+    assert [(j[1], j[2]["tile"]["source"]["id"], j[2]["how"]) for j in jobs] == [
+        (first, "BVfair", "like"), (second, "BVdad", "words"), (second, "BVphone", "like")]
+    text = asked[0]
+    assert "L1 口播：年轻人找工作越来越难。｜画面建议：求职者在招聘会排队咨询" in text
+    assert "a. 招聘会现场求职者排队" in text and "c. 女子唱歌" in text        # meaning matches first, then words
+    assert m.lib_pick_stats == {"lines": 2, "options": 5, "chosen": 3, "none": 0}
+
+    # Nothing fits: the line downloads nothing. The pick call failing: the shortlist order.
+    monkeypatch.setattr(m, "chat", lambda *a, **kw: ({"L1": [], "L2": ["a"]}, {}))
+    jobs = m.library_jobs(project["shots"], {}, {}, {}, levels="all")
+    assert [(j[1], j[2]["tile"]["source"]["id"]) for j in jobs] == [(second, "BVphone")]
+
+    def broken(*a, **kw):
+        raise ValueError("模型连接失败或超时")
+    monkeypatch.setattr(m, "chat", broken)
+    jobs = m.library_jobs(project["shots"], {}, {}, {}, levels="all")
+    assert [(j[1], j[2]["tile"]["source"]["id"]) for j in jobs] == [
+        (first, "BVfair"), (first, "BVqueue"), (second, "BVphone"), (second, "BVdad")]
+    # Off in the settings: words only, no pick.
+    m.cfg["library_semantic"] = "0"
+    m.cfg["library_pick"] = "0"
+    jobs = m.library_jobs(project["shots"], {}, {}, {}, levels="all")
+    assert [(j[1], j[2]["tile"]["source"]["id"]) for j in jobs] == [(first, "BVsinger"), (second, "BVdad")]

@@ -256,8 +256,37 @@ def bundle_assist_tool(settings_dir: Path) -> None:
     print("Bundled 远程协助 (tools/jinggao-assist.exe)", flush=True)
 
 
+def bundle_semantic():
+    """Meaning-level library search: the small text model and the index of the shipped seed's descriptions
+    (scripts/build_semantic_index.py), from this machine's data/. An index built from another seed would point
+    at frames the customer's library lacks, so it must name the seed being shipped."""
+    model, vectors = ROOT / "data" / "models" / "bge-small-zh", ROOT / "data" / "footage-vectors"
+    for name in ("model_quantized.onnx", "vocab.txt"):
+        if not (model / name).is_file():
+            raise ValueError(f"--semantic: {model / name} missing")
+    meta = json.loads((vectors / "meta.json").read_text("utf-8"))
+    seed = hashlib.sha256()
+    for part in sorted((ROOT / "assets" / "footage-index").glob("part-*.jsonl.gz")):
+        seed.update(part.read_bytes())
+    if meta.get("seed") != seed.hexdigest():
+        raise ValueError("--semantic: data/footage-vectors was built from another seed; rebuild it "
+                         "(scripts/build_semantic_index.py corpus/embed/pack)")
+    copied = {}
+    for folder, rel in ((model, "data/models/bge-small-zh"), (vectors, "data/footage-vectors")):
+        dst = OUTPUT / rel
+        if dst.exists():
+            shutil.rmtree(dst)
+        dst.mkdir(parents=True)
+        for path in sorted(folder.iterdir()):
+            if path.is_file():
+                shutil.copy2(path, dst / path.name)
+                copied[f"{rel}/{path.name}"] = digest(path)
+    print(f"Bundled meaning search ({meta.get('texts')} descriptions, {meta.get('dims')} dims)", flush=True)
+    return copied
+
+
 def package(release_path=None, model_directory=None, requirements=ROOT / "requirements.lock", bundle_pixabay=False,
-            bundle_assist: Path | None = None):
+            bundle_assist: Path | None = None, semantic=False):
     app_manifest, model_manifest = {}, {}
     if release_path:
         source, manifest = load_release(release_path)
@@ -282,6 +311,8 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
             # Subtitle alignment works offline from the first start (no model download on the customer's PC).
             model_manifest = bundle_captions(ROOT, model_directory)
         model_manifest.update(bundle_ocr(ROOT, ROOT / "data" / "models" / "ocr"))
+        if semantic:
+            model_manifest.update(bundle_semantic())
     defaults = OUTPUT / "defaults.json"
     defaults.unlink(missing_ok=True)
     if bundle_pixabay:
@@ -356,6 +387,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-name", help="A new folder name under build/, also used for the test archive")
     parser.add_argument("--bundle-pixabay-key", action="store_true",
                         help="Ship this machine's Pixabay key as the package default (defaults.json)")
+    parser.add_argument("--semantic", action="store_true",
+                        help="Ship meaning-level library search (data/models/bge-small-zh, data/footage-vectors)")
     parser.add_argument("--bundle-assist", type=Path, metavar="DIR",
                         help="Add 远程协助: DIR holds assist.json, the relay settings (kept out of the repository)")
     args = parser.parse_args()
@@ -373,4 +406,4 @@ if __name__ == "__main__":
     prepare(requirements)
     if not args.prepare_only:
         package(args.release, args.model_directory, requirements, bundle_pixabay=args.bundle_pixabay_key,
-                bundle_assist=args.bundle_assist)
+                bundle_assist=args.bundle_assist, semantic=args.semantic)

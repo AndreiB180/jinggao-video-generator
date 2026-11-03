@@ -624,6 +624,76 @@ def find(words: list[str], *, limit: int = 6, exclude: set[str] | None = None,
     return [row for _, _, row in found[:limit]]
 
 
+LIKE_WEIGHT = 10.0      # find_like: 0.01 of similarity = 0.1 point (people, period and overlay costs are 0.2–1)
+LIKE_CLEAN = 0.3        # a checked-clean frame wins over one up to 0.03 closer
+LIKE_VIDEO = 3.0        # the mean similarity of the video's other frames: a video about the thing beats a stray frame
+LIKE_BAND = 0.08        # frames further than this below the line's best match are not considered...
+LIKE_FLOOR = 0.6        # ...nor any below this (centred: good matches 0.6–0.9; a shared word alone reaches 0.58)
+LIKE_POOL = 120         # videos scored per query, closest first
+
+
+def find_like(query: str, *, limit: int = 6, exclude: set[str] | None = None,
+              penalize: dict[str, float] | None = None, foreign_ok: bool = False, people: bool | None = None,
+              vectors_dir=None, model_dir=None) -> list[dict]:
+    """find() by meaning: videos with a usable frame whose description is close to `query` (a picture
+    description such as the plan's 大学生在图书馆看书), through semantic.nearest, with find()'s rules for
+    videos and frames. Rows as find()'s, with match["like"] = the frame's similarity. [] without the model or
+    the vector index."""
+    from . import semantic
+    query = " ".join(str(query or "").split())
+    if not query:
+        return []
+    try:
+        answer = semantic.nearest([query], model_dir=model_dir, vectors_dir=vectors_dir)[0]
+    except Exception:       # noqa: BLE001 — a damaged index or model: the word search still runs
+        return []
+    exclude, penalize = set(exclude or ()), penalize or {}
+    floor = max(LIKE_FLOOR, answer["top"] - LIKE_BAND)
+    videos = {}
+    for key, entry in answer["videos"].items():
+        sims = {t: s for t, s in entry["sims"].items() if s >= floor}
+        if sims and key not in exclude:
+            videos[key] = (sims, entry["video"])
+    if not videos:
+        return []
+    known = sorted(v for _, v in videos.values() if v is not None)
+    prior = known[len(known) // 2] if known else 0.0
+    keys = sorted(videos, key=lambda k: -max(videos[k][0].values()))[:LIKE_POOL]
+    foreign_ok = foreign_ok or bool(FOREIGN.search(query))
+    no_animals = not ANIMAL.search(query) and _people(query)
+    wants = (people, (bool(PERIOD.search(query)), "no_animals" if no_animals else "", bool(RACY.search(query))))
+    out = []
+    try:
+        with _conn() as con:
+            checks = _checks(con, keys)
+            for start in range(0, len(keys), FIND_CHUNK):
+                part = keys[start:start + FIND_CHUNK]
+                marks = ",".join("?" * len(part))
+                sources = {r["key"]: r for r in con.execute(
+                    f"SELECT key, row, flags, used FROM sources WHERE key IN ({marks})", part)}
+                moments = {}
+                for m in con.execute(f"SELECT source, t, kind, text FROM moments WHERE source IN ({marks}) "
+                                     "ORDER BY source, t", part):
+                    moments.setdefault(m["source"], []).append(m)
+                for key in part:
+                    if key not in sources:
+                        continue
+                    sims, video = videos[key]
+                    got = _video(sources[key], moments.get(key, []), checks.get(key, {}), set(sims), [], None,
+                                 foreign_ok, wants, sims=sims)
+                    if not got:
+                        continue
+                    score, row = got
+                    score += LIKE_VIDEO * (video if video is not None else prior) - float(penalize.get(key, 0.0))
+                    row["index_score"] = round(score, 3)
+                    row["match"]["like"] = round(sims.get(round(row["match"]["t"], 2), 0.0), 3)
+                    out.append((score, key, row))
+    except sqlite3.Error:
+        return []
+    out.sort(key=lambda item: -item[0])
+    return [row for _, _, row in out[:limit]]
+
+
 def _gather(con, specs, title_spec, limit, exclude, penalize, foreign_ok, wants) -> list:
     """[(score, key, row)] best first: videos with a frame matching every spec (and, with title_spec, whose
     title row carries that word too). The newest FIND_HITS matching frames are read, their videos ordered by
@@ -689,9 +759,10 @@ def _gather(con, specs, title_spec, limit, exclude, penalize, foreign_ok, wants)
     return out
 
 
-def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
+def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants, sims=None):
     """(score, row) for one candidate video, or None when it or all its matching frames are unusable.
-    wants: (people preference, whether a period picture was asked for)."""
+    wants: (people preference, whether a period picture was asked for). sims (find_like): {t: similarity} of
+    the frames close in meaning to the line, which then score by that closeness instead of by words."""
     people, period = wants
     racy_ok = isinstance(period, tuple) and len(period) > 2 and period[2]
     no_animals = isinstance(period, tuple) and period[1] == "no_animals"
@@ -736,7 +807,7 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
         weights = [_weight(low, keywords, spec) for spec in specs]
         if not all(weights):
             continue
-        score = sum(weights)
+        score = sum(weights) + (LIKE_WEIGHT * sims[round(t, 2)] if sims is not None else 0.0)
         if people is not None:
             score += 0.5 if _people(low) == people else -0.5
         if not period and PERIOD.search(low):
@@ -745,7 +816,8 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
         if t > duration - 8:
             score -= 0.5     # the window after it may not fit
         if status:
-            score += 10      # checked clean: ranks first
+            # Checked clean: ranks first among word matches; among meaning matches it outweighs a little closeness.
+            score += 10 if sims is None else LIKE_CLEAN
         frames.append((score, t, m, status))
     if not frames:
         return None
@@ -759,6 +831,33 @@ def _video(src, moments, checked, hit, specs, title_spec, foreign_ok, wants):
     return score, row | {"indexed": True, "moments": [f[1] for f in frames],
                          "avoid": sorted({float(x["t"]) for x in moments if x["kind"] in BAD_KINDS} | set(bad)),
                          "index_score": round(score, 3), "index_used": src["used"], "match": match}
+
+
+def description(text: str) -> str:
+    """A frame's description without the describer's search words ("描述｜关键词")."""
+    return str(text or "").split("｜", 1)[0].strip()
+
+
+def indexable_frames(row: dict, moments: list) -> list[tuple[float, str]]:
+    """[(t, description)] of the frames _video could return for some line: the rules that do not depend on
+    the line (title, length, AI-made, presenter share, filmed frame between filmed neighbours). Foreign,
+    racy and period frames and clean-up checks are decided per query, as find() does."""
+    duration = float(row.get("duration") or 0)
+    if SKIP_TITLE.search(row.get("title") or "") or not 20 <= duration <= 3 * 3600:
+        return []
+    if AI_MADE.search(" ".join(str(row.get(k) or "") for k in ("title", "tags", "description"))):
+        return []
+    described = [m for m in moments if m.get("text")]
+    if not described or sum(m.get("kind") in BAD_KINDS for m in described) > 0.35 * len(described):
+        return []
+    out = []
+    for i, m in enumerate(described):
+        if any(n.get("kind") not in FILMED for n in described[max(0, i - 1):i + 2]):
+            continue
+        text = description(m["text"])
+        if len(text) >= 4 and text not in FILMED:
+            out.append((float(m["t"]), text))
+    return out
 
 
 # ------------------------------------------------------------------ clean-up checks

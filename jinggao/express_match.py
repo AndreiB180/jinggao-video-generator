@@ -63,6 +63,8 @@ LIB_PER_LEVEL = (1, 1)  # library videos offered to the picker per line: from it
                         # (each costs a B站 preview call; two from the first words made previews 60-75 s a film)
 LIB_TILES = 3           # preview frames of such a video: the matching moments first
 LIB_FILL_PER_LINE = 2   # library candidates downloaded per open line in one fill pass (one usually passes QA)
+LIB_SHORTLIST = 6       # library videos a line puts before the text pick (meaning matches first, then words)
+LIB_PICK_LINES = 25     # lines per pick call
 AUDIT_SECONDS = 40      # download time the final repeat check's replacements and the topic round get, flat
 REFUSED_WAIT = 90       # seconds a film waits in place for B站 before its repeats get one more fresh round
 TOPIC_SECONDS = 25      # the topic round, a last fill before borrowing
@@ -389,6 +391,7 @@ class Matcher:
         self.library_rich = set()   # groups whose lines all found library videos of their own (fewer live searches)
         self.fill_errors = {}   # job id -> why its download or text check failed (written back to the library's checks)
         self.window_notes = []  # library moments judged here, for footage_index.record_checks
+        self.lib_pick_stats = {"lines": 0, "options": 0, "chosen": 0, "none": 0}
         self.similar = []       # sizes of the groups of alike-looking shots in the finished film (audit)
         self.looked, self.relooked = {}, set()   # clip path -> dHash of three frames; jobs analysed again by audit()
 
@@ -1359,57 +1362,146 @@ class Matcher:
             return [words[:2]] * (len(words) >= 2) + [[w] for w in words if w not in self.VAGUE]
         return [planned[level] for level in levels if level < len(planned) and planned[level]]
 
+    def semantic_on(self) -> bool:
+        from . import footage_index
+        return self.cfg.get("library_semantic", "1") == "1" and hasattr(footage_index, "find_like")
+
+    LIBRARY_PICK = """每一行先是一句口播（行首 L 编号，后面是画面建议），再是素材库里几段视频画面的文字描述（编号 a、b、c…）。
+为每句挑出最多两段放在这句话下面的画面，最合适的在前。按平台审核“音画相关”的标准挑：画面在表现这句话说的人、事、场景，或这个故事主角的一个具体场景。
+不要：只沾整篇话题边的通用画面；别的领域、别的人群（讲年轻人求职却是老人下棋）；讲现代的事却是古装、战争年代；舞台表演、综艺、偶像团体；对着镜头讲话的主持人、博主；讲中国的人和事却是外国人。都不合适就给空数组。
+只输出 JSON：{"L1":["b","a"],"L2":[]}"""
+
+    def library_pick(self, lines) -> dict | None:
+        """lines: [(shot, [(how, words, row), …])]. The text model's choice per line among the shortlisted
+        descriptions, best first: {shot id: [index into its shortlist, …]}; None when the call failed (the
+        shortlist order is used then). Descriptions are all a library window has before it is downloaded, and a
+        text call for a whole fill costs less than one QA call that turns a downloaded window down."""
+        from . import footage_index
+        picks = {}
+        for start in range(0, len(lines), LIB_PICK_LINES):
+            batch = lines[start:start + LIB_PICK_LINES]
+            text = []
+            for n, (shot, options) in enumerate(batch, 1):
+                text.append(f"L{n} 口播：{shot['narration'][:70]}｜画面建议：{shot.get('visual', '')}")
+                for i, (_, _, row) in enumerate(options):
+                    text.append(f"  {'abcdefgh'[i]}. {footage_index.description(row['match']['text'])[:40]}")
+            try:
+                result, _ = self.chat(self.LIBRARY_PICK, [{"type": "text", "text": "\n".join(text)}],
+                                      max_tokens=60 + 14 * len(batch), task="express_pick", attempts=2)
+            except (media.Cancelled, Budget):
+                raise
+            except Exception:       # noqa: BLE001 — the shortlist order still serves
+                return None
+            for n, (shot, options) in enumerate(batch, 1):
+                chosen = result.get(f"L{n}") if isinstance(result, dict) else None
+                if not isinstance(chosen, list):
+                    continue        # a line the answer left out keeps its order
+                order = []
+                for letter in chosen:
+                    i = "abcdefgh".find(str(letter).strip().lower()[:1]) if str(letter).strip() else -1
+                    if 0 <= i < len(options) and i not in order:
+                        order.append(i)
+                picks[shot["id"]] = order
+        return picks
+
     def library_jobs(self, pending, final, reserved, streams, levels=(0, 1), tag="a", per_line=LIB_FILL_PER_LINE,
                      per_set=2) -> list:
         """Lines still without footage: a window from a library video the film does not show yet, whose described
-        frame (a filmed one between filmed neighbours, footage_index.find) carries the line's words, at that
-        moment. No previews or picker: the library's descriptions choose, QA and the clean-up check the window.
-        Videos the dorm PC already checked clean come first. [(job_id, sid, choice)]"""
+        frame (a filmed one between filmed neighbours) matches the line, at that moment. With levels "all" each
+        line shortlists up to LIB_SHORTLIST videos, closest in meaning to the planned picture first
+        (footage_index.find_like), then by its planned words (find), and a text call picks among the descriptions
+        (library_pick); QA and the clean-up check judge the window. Videos the dorm PC already checked clean come
+        first. [(job_id, sid, choice)]"""
         from . import footage_index
         if not hasattr(footage_index, "find"):
             return []
         used = {f"{c['tile']['source'].get('provider')}:{c['tile']['source'].get('id')}" for c in final.values()}
         used |= {f"{provider}:{source_id}" for (provider, source_id), windows in reserved.items() if windows}
         penalize = self.penalties()
-        planned = []
-        for shot in pending:
-            sid = shot["id"]
+        shortlist = levels == "all"
+        meaning = shortlist and self.semantic_on()
+        if meaning:
+            from . import semantic
+            try:      # every line's picture in one pass over the index
+                semantic.nearest([s["visual"] for s in pending if s.get("visual")])
+            except Exception:       # noqa: BLE001 — find_like answers [] then and the words still search
+                pass
+
+        def usable(shot, row, taken):
+            key = f"{row.get('provider')}:{row.get('id')}"
+            if row.get("provider") != "bilibili" or key in taken or row.get("contact"):
+                return None
+            if FUNERAL.search(row.get("title", "")) and not DEATH_LINE.search(shot["narration"]):
+                return None
+            if self.off_limits(row):
+                return None
             need = float(shot["duration"]) + MARGIN
-            tries = 0
-            for words in self.library_words(shot, levels):
-                if tries >= per_line:
+            length = float(row.get("duration") or 0)
+            return next((float(t) for t in row.get("moments") or [] if max(0.0, float(t) - 1.0) + need <= length - 0.1),
+                        None)
+
+        lines, claimed = [], set()      # videos an earlier line shortlisted: each line gets its own
+        for shot in pending:
+            searches = [("words", words) for words in self.library_words(shot, levels)]
+            if meaning and shot.get("visual"):
+                # The planned picture by meaning first: "高端服务场所接待员" by words was 女子 微笑 and found a singer.
+                searches.insert(0, ("like", shot["visual"]))
+            options, seen = [], set()
+            wanted = LIB_SHORTLIST if shortlist else per_line
+            for how, words in searches:
+                if len(options) >= wanted:
                     break
                 self.check()
-                rows = footage_index.find(words, limit=per_set + 4, exclude=used, penalize=penalize,
-                                          foreign_ok=self.foreign_ok(shot))
+                taken = used | claimed
+                if how == "like":
+                    rows = footage_index.find_like(words, limit=per_set + 4, exclude=taken, penalize=penalize,
+                                                   foreign_ok=self.foreign_ok(shot))
+                    words = ["≈" + words]
+                else:
+                    rows = footage_index.find(words, limit=per_set + 4, exclude=taken, penalize=penalize,
+                                              foreign_ok=self.foreign_ok(shot))
                 from_set = 0
                 for row in rows:
-                    if from_set >= per_set:
+                    if from_set >= per_set or len(options) >= wanted:
                         break
-                    key = f"{row.get('provider')}:{row.get('id')}"
-                    if row.get("provider") != "bilibili" or key in used or row.get("contact"):
+                    if usable(shot, row, taken | seen) is None:
                         continue
-                    if FUNERAL.search(row.get("title", "")) and not DEATH_LINE.search(shot["narration"]):
-                        continue
-                    if self.off_limits(row):
-                        continue
-                    length = float(row.get("duration") or 0)
-                    moment = next((float(t) for t in row.get("moments") or [] if max(0.0, float(t) - 1.0) + need <= length - 0.1),
-                                  None)
-                    if moment is None:
-                        continue
-                    start = max(0.0, moment - 1.0)
-                    used.add(key)            # one new video per window: the point is not to repeat
-                    reserved.setdefault(("bilibili", row["id"]), []).append((start, start + need))
-                    base = "ctx" if shot.get("persons") else "library"
-                    planned.append((f"{sid}#lib{tag}{tries}", sid, {
-                        "tile": {"source": row, "t": moment, "hash": None}, "start": round(start, 2),
-                        "lane": "library", "base_lane": base, "rank": tries, "moment": moment,
-                        "words": " ".join(words)}))
-                    tries += 1
+                    seen.add(f"{row.get('provider')}:{row.get('id')}")
+                    options.append((how, words, row))
                     from_set += 1
-                    if tries >= per_line:
-                        break
+            claimed |= seen
+            if options:
+                lines.append((shot, options))
+        picks = self.library_pick(lines) if shortlist and lines and self.cfg.get("library_pick", "1") == "1" else None
+        if picks is not None:
+            stats = self.lib_pick_stats
+            stats["lines"] += len(lines)
+            stats["none"] += sum(1 for shot, _ in lines if picks.get(shot["id"]) == [])
+            stats["options"] += sum(len(options) for _, options in lines)
+            stats["chosen"] += sum(len(picks.get(shot["id"]) or []) for shot, _ in lines)
+        planned = []
+        for shot, options in lines:
+            sid = shot["id"]
+            need = float(shot["duration"]) + MARGIN
+            order = picks.get(sid, list(range(len(options)))) if picks is not None else list(range(len(options)))
+            tries = 0
+            for i in order:
+                if tries >= per_line:
+                    break
+                how, words, row = options[i]
+                moment = usable(shot, row, used)      # an earlier line may have taken it
+                if moment is None:
+                    continue
+                key = f"{row.get('provider')}:{row.get('id')}"
+                start = max(0.0, moment - 1.0)
+                used.add(key)            # one new video per window: the point is not to repeat
+                reserved.setdefault(("bilibili", row["id"]), []).append((start, start + need))
+                base = "ctx" if shot.get("persons") else "library"
+                planned.append((f"{sid}#lib{tag}{tries}", sid, {
+                    "tile": {"source": row, "t": moment, "hash": None}, "start": round(start, 2),
+                    "lane": "library", "base_lane": base, "rank": tries, "moment": moment,
+                    "words": " ".join(words), "how": how}))
+                tries += 1
         if not planned:
             return []
         streams.update(self.resolve({choice["tile"]["source"]["id"]: choice["tile"]["source"] for _, _, choice in planned}))
@@ -3575,9 +3667,9 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                             c.get("tile", {}).get("source", {}).get("id", ""), round(float(c.get("start") or 0)),
                             "final" if (final.get(job_id.split("#")[0]) or {}).get("job") == job_id
                             else "qa:" + str(qa_bad[job_id])[:24] if job_id in qa_bad
-                            else "dl:" + str(failures[job_id])[:24] if job_id in failures else "-"]
+                            else "dl:" + str(failures[job_id])[:24] if job_id in failures else "-", c.get("how", "")]
                            for job_id, c in list(self.job_choice.items())[:500]],
-                  "pictures": dict(self.picture_stats),
+                  "pictures": dict(self.picture_stats), "library_pick": dict(self.lib_pick_stats),
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
                                          "library", "pool", "sweep", "repeat", "reuse", "card")},
