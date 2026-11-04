@@ -457,6 +457,12 @@
 - 交付：mbp2 ~/Documents/镜稿/Jinggao-0.7.7-Windows-x64.zip（sha256 da382da7…，用户 0.7.6 zip 换 10 个条目：express_match/express_plan/express_sources/sources/
   picture_plugin/__init__ + 4 份 seed-1104）+《镜稿0.7.7-使用说明.txt》+《镜稿0.7.7-图片来源要你接的部分.md》；0.7.6 挪进旧版，用户的解包文件夹
   ~/Documents/Jinggao-Windows-x64 也同步了（被换的 5 个原文件在 旧版/0.7.6-被替换的文件/）。
+- 11-04 夜（用户接了百度图片后要我全量测，我不跑 kedou 下载和百度绕反爬，测试副本换空插件/Bing 替身）：r54 全新安装查出并修了——
+  ① `custom_images` 按句调插件、无超时（12 句 2 话题调 12 次；插件卡 200 s 找图卡 400 s）→ `sources.custom_images` 进程内按词缓存 1 h、同词并发只问一次、
+  出错 2 分钟不重问；`Matcher.own_pictures` 先把话题去重、`CUSTOM_AT_ONCE` 4 路、`CUSTOM_SECONDS` 40 秒总限，全没答上就本片不再问（`own_off`）；
+  ② 终审借用在查重之后（r54 一组三连）→ 终审硬伤先 `other_moments` 再借；`borrow(again=)`：先在各上限里只借没借出过的，最后才借第二次（卡片阶段同）；
+  终审后重算 `alike_groups`；③ 用户 Mac 重压的 zip 中文名没 UTF-8 标记 → repack 补；④ 高负载时 /api/system 31 s 才回、左下角先显示 v0.7.4
+  → 用户前端包里 `H.version||"0.7.4"` 改成 "0.7.7"（只 1 字节；用户前端无源码）。
 - 不做：用户建议没画面时镜像翻转。翻转后还是同一段画面（观众和平台的重复判定都看得出），画面里的字也会反过来；改成用图片顶。
 - 素材库 seed-1104：262,650 个视频，45,426 段体检 / 13,381 个视频（seed-1102 是 35,093 / 9,590），从 mini 的体检库 check-mini/data 导出。
 - 测试：tests/test_repeats_1104.py；test_express.py 里三条 NBA 回放测试改成体育域、audit 测试改成像的只留一个。

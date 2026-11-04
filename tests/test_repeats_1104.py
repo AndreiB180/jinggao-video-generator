@@ -184,7 +184,9 @@ def test_the_pool_walk_skips_the_line_next_to_the_same_video(data):
 
 def test_your_picture_source_comes_in_as_rows_and_stays_out_when_empty(monkeypatch):
     from jinggao import picture_plugin
+    sources._custom_cache.clear()
     assert sources.custom_images("台海") == []
+    sources._custom_cache.clear()
     monkeypatch.setattr(picture_plugin, "search", lambda q: [
         {"url": "https://img.example.com/a.jpg", "title": "台海&amp;大桥", "width": 1600, "height": 900,
          "page": "https://news.example.com/1", "headers": {"Referer": "https://image.example.com/"}},
@@ -195,9 +197,12 @@ def test_your_picture_source_comes_in_as_rows_and_stays_out_when_empty(monkeypat
     assert [r["url"] for r in rows] == ["https://img.example.com/a.jpg", "https://img.example.com/b.jpg"]
     assert rows[0]["title"] == "台海&大桥" and rows[0]["source_url"] == "https://news.example.com/1"
     assert rows[0]["headers"] == {"Referer": "https://image.example.com/"} and rows[1]["fallback"] == ""
+    sources._custom_cache.clear()
     monkeypatch.setattr(picture_plugin, "search", lambda q: (_ for _ in ()).throw(RuntimeError("blocked")))
     with pytest.raises(RuntimeError):
         sources.custom_images("台海")
+    assert sources.custom_images("台海") == []     # a search that raised is not asked again for a while
+    sources._custom_cache.clear()
 
 
 # ------------------------------------------------------------------ pictures: judged once a film, within a budget
@@ -269,3 +274,76 @@ def test_a_plan_cut_off_at_the_output_limit_is_asked_once_more_with_more_room(mo
     monkeypatch.setattr(planner, "chat", lambda *a, **k: (_ for _ in ()).throw(planner.ModelResponseError("模型返回空内容，任务已停止")))
     with pytest.raises(planner.ModelResponseError):
         express_plan._ask(shots, "")
+
+
+def test_your_picture_source_is_asked_once_a_search_and_never_holds_the_film(data, monkeypatch):
+    import threading
+    import time
+
+    from jinggao import picture_plugin, publisher_videos, screen_text
+    sources._custom_cache.clear()
+    calls, lock = [], threading.Lock()
+    delay = {"s": 0.3}
+    def search(q):
+        with lock:
+            calls.append(q)
+        time.sleep(delay["s"])
+        return [{"url": f"https://img.example.com/{q}.jpg", "width": 1280, "height": 720}]
+    monkeypatch.setattr(picture_plugin, "search", search)
+    # Five callers of one search at once: it is asked once, everyone gets the answer.
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(sources.custom_images("南海"))) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert calls == ["南海"] and len(got) == 5 and all(len(rows) == 1 for rows in got)
+    # A film of 12 lines in two groups: the source is asked once for each group's search, not once a line.
+    sources._custom_cache.clear()
+    calls.clear()
+    monkeypatch.setattr(sources, "so360_images", lambda q: [])
+    monkeypatch.setattr(sources, "bing_images", lambda q: [])
+    monkeypatch.setattr(publisher_videos, "chinanews_images", lambda q: [])
+    monkeypatch.setattr(screen_text, "installed", lambda: False)
+    monkeypatch.setattr(express_match.network, "client", lambda **kw: (_ for _ in ()).throw(OSError("offline")))
+    shots = [planner.new_shot(f"第{i}句讲军舰。") | {"duration": 6.0} for i in range(12)]
+    m = _matcher(shots)
+    m.plan = {"groups": [{"id": "G1", "shots": [s["id"] for s in m.shots[:6]], "zh": ["南海 军舰"]},
+                         {"id": "G2", "shots": [s["id"] for s in m.shots[6:]], "zh": ["海警 执法"]}]}
+    m.image_fill(m.shots)
+    assert sorted(calls) == ["南海 军舰", "海警 执法"] and m.picture_stats["custom_asked"] == 2
+    m.image_fill(m.shots)                      # a later call in the film asks nothing again
+    assert len(calls) == 2
+    # A source that hangs: the film waits CUSTOM_SECONDS for all its searches together, then goes on without it.
+    sources._custom_cache.clear()
+    calls.clear()
+    delay["s"] = 3.0
+    monkeypatch.setattr(express_match, "CUSTOM_SECONDS", 1)
+    m2 = _matcher(shots)
+    m2.plan = m.plan
+    began = time.monotonic()
+    m2.image_fill(m2.shots)
+    assert time.monotonic() - began < 2.5 and m2.own_off and m2.picture_stats["custom_late"] == 2
+    began = time.monotonic()
+    m2.image_fill(m2.shots)                    # not asked again in this film
+    assert time.monotonic() - began < 1.0 and len(calls) == 2
+    time.sleep(2.5)                            # the late answers still land for the next film
+    assert sources.custom_images("南海 军舰") and len(calls) == 2
+    sources._custom_cache.clear()
+
+
+def test_a_clip_lent_out_once_is_lent_again_only_when_nothing_else_is_left(data, monkeypatch, tmp_path):
+    shots = [planner.new_shot(f"镜头{i}。") | {"duration": 5.0} for i in range(8)]
+    m = _matcher(shots)
+    ids = [s["id"] for s in m.shots]
+    monkeypatch.setattr(express_match.es, "probe_duration", lambda path: 9.0)
+    def clip(video):
+        return {"tile": {"source": {"provider": "bilibili", "id": video}, "t": 10.0}, "lane": "pick", "qa": "pass"}
+    final = {ids[2]: clip("BVnear"), ids[0]: clip("BVfar"),
+             ids[6]: clip("BVnear") | {"lane": "reuse", "repeat_of": ids[2]}}   # BVnear's clip is lent out already
+    files = {sid: tmp_path / f"{sid}.mp4" for sid in final}
+    shot = m.shots[4]
+    assert m.borrow(shot, final, files) == ids[0]                  # further away, but not lent yet
+    assert m.borrow(shot, final, files, again=True) == ids[2]      # nothing else: the nearest again
+    del final[ids[0]]
+    assert m.borrow(shot, final, files) is None

@@ -282,19 +282,57 @@ _so360_lock = threading.Lock()
 _so360_last = [0.0]
 
 
-def custom_images(query: str) -> list[dict]:
-    """Pictures from the user's own source (jinggao/picture_plugin.py, search()): Baidu's image search refuses a
-    program from China, and getting past that is left to whoever fills in that file. [] while it is empty; its
-    errors reach the caller (one search less there)."""
+CUSTOM_TTL = 3600        # seconds one search of your own picture source is reused in this process
+CUSTOM_FAILED_TTL = 120  # ...and how long a search that raised is not asked again
+_custom_lock = threading.Lock()
+_custom_cache = {}       # query -> (time, rows or None when it raised)
+_custom_flight = {}      # query -> Event while its first caller is asking
+
+
+def custom_source() -> bool:
+    """Whether jinggao/picture_plugin.py offers a search() to ask."""
     try:
         from . import picture_plugin
     except ImportError:
+        return False
+    return callable(getattr(picture_plugin, "search", None))
+
+
+def custom_images(query: str) -> list[dict]:
+    """Pictures from the user's own source (jinggao/picture_plugin.py, search()): Baidu's image search refuses a
+    program from China, and getting past that is left to whoever fills in that file. [] while it is empty.
+    One search per query an hour in this process: callers of a query being asked wait for that answer (three
+    films at once asked one name a dozen times, 11-04). The first caller gets the search's error; later ones []
+    for CUSTOM_FAILED_TTL seconds."""
+    if not custom_source():
         return []
-    search = getattr(picture_plugin, "search", None)
-    if not callable(search):
-        return []
+    while True:
+        with _custom_lock:
+            hit = _custom_cache.get(query)
+            if hit and time.time() - hit[0] < (CUSTOM_TTL if hit[1] is not None else CUSTOM_FAILED_TTL):
+                return list(hit[1] or [])
+            event = _custom_flight.get(query)
+            mine = event is None
+            if mine:
+                event = _custom_flight[query] = threading.Event()
+        if not mine:
+            event.wait()
+            continue
+        rows = None
+        try:
+            rows = _custom_search(query)
+            return list(rows)
+        finally:
+            with _custom_lock:
+                _custom_cache[query] = (time.time(), rows)
+                _custom_flight.pop(query, None)
+            event.set()
+
+
+def _custom_search(query: str) -> list[dict]:
+    from . import picture_plugin
     rows = []
-    for item in list(search(query) or [])[:12]:
+    for item in list(picture_plugin.search(query) or [])[:12]:
         if not isinstance(item, dict):
             continue
         url = str(item.get("url") or "")

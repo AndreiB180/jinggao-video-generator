@@ -131,6 +131,8 @@ PICTURE_LINES = 40      # lines it looks for pictures for
 PICTURE_SHARE = 1.0     # a news or person story's lines that may take a photo of the story before library footage
 PICTURE_SECONDS_NEWS = 180   # ...and the time its pictures may take (every open line looks for one)
 PICTURE_FILM_SECONDS = 300   # all picture searches of one film together (person photos, fills, repeat check, final review)
+CUSTOM_SECONDS = 40     # your own picture source (picture_plugin) answers one call's searches in at most this long
+CUSTOM_AT_ONCE = 4      # ...asked this many at a time
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -403,6 +405,8 @@ class Matcher:
         self.steady_stats = {}  # windows moved off the source's own cuts (express_sources.steady_shift), for the report
         self.picture_cache = {}   # picture url -> (picture, dHash) or None: what image_fill made of it, for its later calls
         self.picture_spent = 0.0  # seconds image_fill has taken in this film (PICTURE_FILM_SECONDS)
+        self.own_rows = {}       # query -> rows your own picture source gave (each query asked once a film)
+        self.own_off = False     # your picture source answered nothing in time: not asked again in this film
 
     @property
     def sports(self) -> bool:
@@ -770,6 +774,45 @@ class Matcher:
             chosen.add(sid)
             taken.add(index)
         return chosen
+
+    def own_pictures(self, asked, deadline) -> dict:
+        """Your own picture source's rows for these searches: each asked once a film, CUSTOM_AT_ONCE at a time, all of
+        them within CUSTOM_SECONDS (11-04: a source taking 200 s a search held the film 400 s; one that never answers
+        would hold it for good). An answer that comes later lands in sources' cache for the next call; a source that
+        answered nothing in time is not asked again in this film. {query: rows}"""
+        from . import sources
+        got = {q: self.own_rows[q] for q in asked if q in self.own_rows}
+        missing = [q for q in asked if q not in got]
+        if not missing or self.own_off or not sources.custom_source():
+            return got
+        stats = self.picture_stats
+        results, gate = {}, threading.Semaphore(CUSTOM_AT_ONCE)
+        def ask(query):
+            with gate:
+                try:
+                    results[query] = sources.custom_images(query)[:12]
+                except Exception:   # noqa: BLE001 — the built-in sources follow
+                    results[query] = None
+        threads = [threading.Thread(target=ask, args=(q,), daemon=True, name="own-pictures") for q in missing]
+        for thread in threads:
+            thread.start()
+        end = min(deadline, time.monotonic() + CUSTOM_SECONDS)
+        for thread in threads:
+            while thread.is_alive() and time.monotonic() < end:
+                self.check()
+                thread.join(0.5)
+        answered = results.copy()
+        late = [q for q in missing if q not in answered]
+        stats["custom_asked"] = stats.get("custom_asked", 0) + len(missing)
+        stats["custom_failed"] = stats.get("custom_failed", 0) + sum(1 for rows in answered.values() if rows is None)
+        stats["custom_late"] = stats.get("custom_late", 0) + len(late)
+        stats["custom_found"] = stats.get("custom_found", 0) + sum(len(rows) for rows in answered.values() if rows)
+        for query, rows in answered.items():
+            self.own_rows[query] = got[query] = rows or []
+        if late and all(rows is None for rows in answered.values()):
+            self.own_off = True
+            self.notes.append(f"自己接的图片来源 {CUSTOM_SECONDS} 秒没有回应，这条片子不再等它")
+        return got
 
     @staticmethod
     def picture_shown(final) -> list:
@@ -1284,7 +1327,7 @@ class Matcher:
                                        for row in rows[:12]]
         return options
 
-    def borrow(self, shot, final, files, limit=None):
+    def borrow(self, shot, final, files, limit=None, again=False):
         """The nearest accepted clip (never the next one: a clip twice in a row looks like a glitch) that is long
         enough and shows no other named person; anywhere in the video, as one about the same subject. limit: skip
         clips whose video already fills this many shots (borrow from the less used ones first)."""
@@ -1293,13 +1336,19 @@ class Matcher:
         for choice in final.values():
             key = (choice["tile"]["source"].get("provider"), choice["tile"]["source"].get("id"))
             counts[key] = counts.get(key, 0) + 1
+        # A clip lent out already would be on screen a third time (r54: one clip lent at the card stage and again by
+        # the final review): only clips not lent yet, unless again (callers ask that last, after every limit).
+        lent = set() if again else {c.get("repeat_of") for c in final.values() if c.get("lane") == "reuse"}
+        return self._borrow(shot, final, files, limit, position, need, counts, lent)
+
+    def _borrow(self, shot, final, files, limit, position, need, counts, lent):
         for distance in range(2, len(self.timeline)):
             for other in (position - distance, position + distance):
                 if not 0 <= other < len(self.timeline):
                     continue
                 sid = self.timeline[other]["id"]
                 choice = final.get(sid)
-                if not choice or choice.get("lane") in ("card", "reuse") or sid not in files:
+                if not choice or choice.get("lane") in ("card", "reuse") or sid not in files or sid in lent:
                     continue
                 if str(choice.get("qa", "")).startswith("rejected_kept") or self.flags(choice.get("job")) & {"wm", "narrow"}:
                     continue    # a marked clip is never lent out: it would show its marks again and again
@@ -1652,14 +1701,8 @@ class Matcher:
             # Your own source first (jinggao/picture_plugin.py, empty unless you fill it in), then 360 (fast and on the
             # story); Bing (slow from China) and 中新网 only where they found too little.
             for q in queries(shot):
-                own = []
-                try:
-                    own = sources.custom_images(q)[:12]
-                except Exception:   # noqa: BLE001 — the built-in sources follow
-                    count("custom_failed")
+                own = own_rows.get(q) or []
                 rows += own
-                if own:
-                    count("custom_found", len(own))
                 if len(own) >= 8:
                     continue
                 try:
@@ -1711,8 +1754,12 @@ class Matcher:
             return shot, pictures
         found = {}
         ordered = sorted(shots, key=lambda shot: not shot.get("persons"))   # person lines first
+        searched = ordered[:PICTURE_LINES if not self.news_like() else len(ordered)]
+        # Your own source once for each search these lines share (it was asked once a line: 12 lines, 12 calls for 2
+        # subjects), all within CUSTOM_SECONDS.
+        own_rows = self.own_pictures(list(dict.fromkeys(q for line in searched for q in queries(line))), deadline)
         with execution.ThreadPoolExecutor(max_workers=8) as pool:
-            for shot, pictures in pool.map(candidates, ordered[:PICTURE_LINES if not self.news_like() else len(ordered)]):
+            for shot, pictures in pool.map(candidates, searched):
                 if pictures:
                     found[shot["id"]] = pictures
         stats["lines_with_pictures"] = stats.get("lines_with_pictures", 0) + len(found)
@@ -3662,11 +3709,12 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 files[sid] = path
                 cards.remove(shot)
         reused_more = 0
-        for limit in (SOURCE_MAX + 1, None):    # spread over many clips: never one clip all over the film
+        for again, limit in ((False, SOURCE_MAX + 1), (False, None), (True, SOURCE_MAX + 1), (True, None)):
+            # spread over many clips: never one clip all over the film, and a clip lent twice only when nothing else is left
             for shot in list(cards):
                 # Still nothing: the client reads a blurred card as a broken video (24 of them in one film), so
                 # a clip lent out more often comes first, the least-lent ones before the rest.
-                donor = self.borrow(shot, final, files, limit=limit)
+                donor = self.borrow(shot, final, files, limit=limit, again=again)
                 if donor:
                     final[shot["id"]] = final[donor] | {"lane": "reuse", "qa": "reused", "repeat_of": donor}
                     files[shot["id"]] = files[donor]
@@ -3819,6 +3867,16 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                             final_pictured += 1
                     if final_pictured:
                         self.notes.append(f"成片终审：{final_pictured} 个有硬伤的镜头换成了相关图片")
+                # Then another scene of a video already in the film, before any clip is lent out again (r54: a clip lent at
+                # the card stage was lent once more here, after the repeat check, and ran three times).
+                faulty = [s for s in self.shots if s["id"] in redo_final and s["id"] not in final
+                          and (HARD_FAULT.search(final_bad.get(s["id"], "")) or WRONG_PERSON.search(final_bad.get(s["id"], "")))]
+                if faulty:
+                    self.abandon.clear()
+                    final_moved = other_moments(faulty, len(self.shots), "f")
+                    failures.update(self.stop_downloads())
+                    if final_moved:
+                        self.notes.append(f"成片终审：{final_moved} 个有硬伤的镜头换成了片中已有视频的另一段")
                 # A hard fault nothing replaced (a watermark, 花字, a vertical or black picture, anything indecent) is
                 # never left in the film (10-31: a 岁月珍宝馆 mark and a vlog's 花字 went out to the client): a clean
                 # clip of this film is shown again instead; content that only fits loosely stays.
@@ -3835,10 +3893,10 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                         index = self.position[sid]
                         beside = {key_of(final[t["id"]])[0] for t in self.timeline[max(0, index - 1):index + 2]
                                   if t["id"] != sid and t["id"] in final}
-                        for limit in (SOURCE_MAX + 1, None):
+                        for again, limit in ((False, SOURCE_MAX + 1), (False, None), (True, SOURCE_MAX + 1), (True, None)):
                             candidates = dict(lenders)
                             for _ in range(6):
-                                found = self.borrow(shot, candidates, files, limit=limit)
+                                found = self.borrow(shot, candidates, files, limit=limit, again=again)
                                 if not found or key_of(final[found])[0] not in beside:
                                     donor = found
                                     break
@@ -3856,6 +3914,9 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                                   + f"），{final_fixed} 个换成了素材库里的新视频"
                                   + (f"，{borrowed} 个有硬伤的借用了片中干净的画面" if borrowed else ""))
         stamp("final_review", began)
+        if final_bad:
+            self.similar = []
+            self.audit(final, files)     # the sizes reported are those of the film as saved, after the final review too
         self.record_windows(qa_bad)
         self.progress(92, "保存选片")
         self.save(final, files)
