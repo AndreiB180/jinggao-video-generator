@@ -105,6 +105,8 @@ POOL_GAP = 12.0         # seconds between two windows of one pool video
 FRONTIER = 1            # options per line whose play addresses are asked for before the first round (the rest when
                         # a round allocates them: every address is two B站 calls)
 SIMILAR_BITS = 8        # two shots whose frames differ by at most this many dHash bits (2 of 3 frame pairs) look alike
+ALIKE_MAX = 1           # shots of a film that may look alike (one game's plays aside): a second one is a repeat
+FLASH_PIECE = 1.0       # a window still holding a piece of another scene this short (its source's own edit) is a fallback
 # Lines that are about another country may show foreigners; elsewhere frames described as foreign are skipped.
 FOREIGN_LINE = re.compile(r"美国|美军|美方|日本|韩国|朝鲜|欧洲|欧盟|英国|法国|德国|意大利|西班牙|俄罗斯|俄方|乌克兰|印度|"
                           r"以色列|伊朗|中东|非洲|巴西|澳大利亚|加拿大|越南|泰国|新加坡|外国|国外|海外|西方|欧美|白宫|特朗普|拜登")
@@ -394,6 +396,12 @@ class Matcher:
         self.lib_pick_stats = {"lines": 0, "options": 0, "chosen": 0, "none": 0}
         self.similar = []       # sizes of the groups of alike-looking shots in the finished film (audit)
         self.looked, self.relooked = {}, set()   # clip path -> dHash of three frames; jobs analysed again by audit()
+        self.steady_stats = {}  # windows moved off the source's own cuts (express_sources.steady_shift), for the report
+
+    @property
+    def sports(self) -> bool:
+        """A game: one match's replay shows a different play in every window (its shots may run on and look alike)."""
+        return bool(SPORTS.search((self.plan.get("domain") or "") + " " + " ".join(self.plan.get("pool") or [])))
 
     @staticmethod
     def share() -> int:
@@ -664,13 +672,19 @@ class Matcher:
         order = sorted((b for b in pool_tiles if b not in avoid), key=lambda bvid: len(used.get(bvid, [])))
         if not order:
             return []
+        # Where each video already is in the film: one video's windows in neighbouring lines run as one long shot
+        # (a fixed camera on a strait, 24-30 s, 11-04), except one game's plays.
+        at = {self.position[sid]: c["tile"]["source"].get("id") for sid, c in final.items() if sid in self.position}
         jobs, turn = [], 0
         for shot in sorted(pending, key=lambda s: self.position[s["id"]]):
             need = float(shot["duration"]) + MARGIN
+            index = self.position[shot["id"]]
             for attempt in range(len(order)):
                 bvid = order[(turn + attempt) % len(order)]
                 stream = streams.get(bvid) or {}
                 if not stream.get("available"):
+                    continue
+                if not self.sports and bvid in (at.get(index - 1), at.get(index + 1)):
                     continue
                 tiles = pool_tiles[bvid]
                 source = tiles[0]["source"]
@@ -697,6 +711,7 @@ class Matcher:
                     continue
                 reserved.setdefault(key, []).append((start, start + need))
                 cursors[bvid] = start
+                at[index] = bvid
                 jobs.append((f"{shot['id']}#p", shot["id"], {
                     "tile": {"source": source, "t": start + 1.0, "hash": None}, "start": round(start, 2),
                     "lane": "sweep", "base_lane": "sweep", "rank": 0}))
@@ -1542,11 +1557,10 @@ class Matcher:
                 q = " ".join(self.IMAGE_WORDS.sub(" ", q).split())
                 if q and q not in words:
                     words.append(q)
-            words = words[:3 if names else 2]
-            if self.news_like():
-                # One search per subject, shared by its lines (a person's name, the group's first words): a search a
-                # line in three forms got 360 to refuse the computer within three films (11-01).
-                words = [names[0]] if names else words[:1]
+            # One search per subject, shared by its lines (a person's name, the group's first words): a search a line in
+            # three forms got 360 to refuse the computer within three films (11-01), and every story now looks for
+            # pictures before repeating a video (11-04).
+            words = [names[0]] if names else words[:1]
             # The story itself (its news or pool query) when the line's own words find nothing usable.
             story = next((q for q in list(self.plan.get("event") or []) + list(self.plan.get("pool") or []) if q), "")
             if story and not names and story not in words:
@@ -1564,8 +1578,19 @@ class Matcher:
         deadline = time.monotonic() + (PICTURE_SECONDS_NEWS if self.news_like() else PICTURE_SECONDS)
         def candidates(shot):
             rows = []
-            # 360 first (fast and on the story); Bing (slow from China) and 中新网 only where it found too little.
+            # Your own source first (jinggao/picture_plugin.py, empty unless you fill it in), then 360 (fast and on the
+            # story); Bing (slow from China) and 中新网 only where they found too little.
             for q in queries(shot):
+                own = []
+                try:
+                    own = sources.custom_images(q)[:12]
+                except Exception:   # noqa: BLE001 — the built-in sources follow
+                    count("custom_failed")
+                rows += own
+                if own:
+                    count("custom_found", len(own))
+                if len(own) >= 8:
+                    continue
                 try:
                     rows += sources.so360_images(q)[:12]
                 except Exception:   # noqa: BLE001 — one search less
@@ -1596,10 +1621,11 @@ class Matcher:
                     claimed.add(url)
                 self.check()
                 try:
+                    asked = {"User-Agent": BROWSER} | dict(row.get("headers") or {})
                     with network.client(timeout=6, follow_redirects=True) as client:
-                        response = client.get(url, headers={"User-Agent": BROWSER})
+                        response = client.get(url, headers=asked)
                         if response.status_code != 200 and row.get("fallback"):
-                            response = client.get(row["fallback"], headers={"User-Agent": BROWSER})   # the search's copy
+                            response = client.get(row["fallback"], headers=asked)   # the search's copy
                     if response.status_code != 200 or len(response.content) > 12 * 2**20:
                         count("refused")
                         continue
@@ -1861,15 +1887,25 @@ class Matcher:
                     continue
                 pooled = bool(tile["source"].get("pool"))
                 long_pool = pooled and float(tile["source"].get("duration") or 0) >= POOL_ENOUGH
-                if lane not in ("person", "person_near") and not (shot.get("persons") and not self.unfilmed_shot(shot)):
+                news = lane == "news"
+                # Never the same picture again and never one video in neighbouring shots, whatever the line (11-04:
+                # a pool video's neighbouring windows of one fixed camera ran as one 24-30 s shot, and lines naming a
+                # person were let off every limit, so one bridge shot came back four times). A news report cuts
+                # between scenes, and one game's replay shows different plays: those two may run on.
+                if twin or (adjacent and not news and not (pooled and self.sports)):
+                    continue
+                own_footage = lane in ("person", "person_near") or (
+                    shot.get("persons") and not self.unfilmed_shot(shot) and self.names_in_source(shot, tile["source"]))
+                if not own_footage:
                     # Hard limits (scores alone let one long stock take fill ten shots in a row): a source at most
-                    # SOURCE_MAX windows a film, SCENE_GAP seconds apart, never in neighbouring shots, never the same
-                    # picture again. A news report's windows show different scenes: it may fill more lines.
-                    news = lane == "news"
+                    # SOURCE_MAX windows a film, SCENE_GAP seconds apart. A news report's windows show different
+                    # scenes: it may fill more lines. Footage of the line's own person may show more of them.
                     cap = NEWS_CAP if news else self.pool_cap(tile["source"]) if pooled else min(SOURCE_MAX, hard_cap)
                     gap = SCENE_SECONDS if news else POOL_GAP if pooled else SCENE_GAP
-                    if used >= cap or twin or (adjacent and not news and not pooled) or near < gap:
+                    if used >= cap or near < gap:
                         continue
+                elif near < POOL_GAP:
+                    continue    # another moment of the person's video, not the same seconds again
                 # A pool video is meant to run under the whole film: its next window costs little.
                 cost = (rank + (0.3 if pooled else 2.0) * used + 6.0 * max(0, used + 1 - cap) + 3.0 * adjacent
                         + (8.0 if near < SCENE_SECONDS else 0) + (8.0 if twin or reupload else 0)
@@ -1910,12 +1946,21 @@ class Matcher:
         root.mkdir(exist_ok=True)
         out = root / f"express-{shot['id'][:8]}-{source['id']}-{int(choice['start']*100)}.mp4"
         need = float(shot["duration"]) - 0.15   # the render holds the last frame; export allows 0.16 s (validate_export)
+        moved = out.with_name(out.stem + ".shift")   # how far the window moved off the source's cuts (dash_window)
         try:
             ready = out.exists() and es.probe_duration(out) >= need
         except ValueError:
             ready = False
+        if ready:
+            try:
+                kept = moved.read_text("utf-8").split() if moved.exists() else []
+                choice["shift"] = float(kept[0]) if kept else 0.0
+                choice["shortest"] = float(kept[1]) if len(kept) > 1 else 99.0
+            except (OSError, ValueError):
+                choice["shift"] = 0.0
         if not ready:
             out.unlink(missing_ok=True)
+            moved.unlink(missing_ok=True)
             if source["provider"] == "pixabay":
                 local = self.pixa.download(source, check)
                 way = es.cut_window(str(local), choice["start"], duration, out, check=check, short_edge=self.min_height)
@@ -1923,12 +1968,27 @@ class Matcher:
                 stream = streams.get(source["id"]) or {}
                 if not stream.get("available"):
                     raise ValueError("该视频没有满足最低清晰度的可用流")
-                way = es.dash_window(stream, choice["start"], duration, out, check=check, short_edge=self.min_height)
+                steady = {}
+                way = es.dash_window(stream, choice["start"], duration, out, check=check, short_edge=self.min_height,
+                                     steady=steady)
+                choice["shift"] = float(steady.get("shift") or 0.0)
+                choice["shortest"] = float(steady.get("shortest") or 99.0)
+                with self.lock:
+                    stats = self.steady_stats
+                    stats["windows"] = stats.get("windows", 0) + 1
+                    stats["moved"] = stats.get("moved", 0) + (1 if choice["shift"] else 0)
+                    stats["cut_inside"] = stats.get("cut_inside", 0) + (1 if steady.get("cuts") else 0)
+                    stats["flash"] = stats.get("flash", 0) + (1 if choice["shortest"] < FLASH_PIECE else 0)
+                    if steady.get("error"):
+                        stats["errors"] = stats.get("errors", 0) + 1
+                if choice["shift"] or choice["shortest"] < FLASH_PIECE:
+                    moved.write_text(f"{choice['shift']} {choice['shortest']}", "utf-8")
             with self.lock:
                 self.encoders[way] = self.encoders.get(way, 0) + 1
             got = es.probe_duration(out)
             if got < need:
                 out.unlink(missing_ok=True)
+                moved.unlink(missing_ok=True)
                 raise ValueError(f"下载片段时长不足（{got:.1f}/{need:.1f} 秒）")
         return out
 
@@ -1971,6 +2031,9 @@ class Matcher:
             path = self.fetch(shot, choice, streams, check)
             with self.lock:
                 self.fetch_seconds.append((choice["tile"]["source"]["provider"], round(time.monotonic() - began, 2)))
+                if float(choice.get("shortest") or 99.0) < FLASH_PIECE:
+                    # A second of another scene inside it, its own edit: a clip without one comes first.
+                    self.soft.setdefault(job_id, set()).add("flash")
             clean = self.analyse(shot, choice, path)
             with self.lock:
                 self.clean[job_id] = clean
@@ -2099,7 +2162,8 @@ class Matcher:
         try:
             stream = next(s for s in media.probe(path)["streams"] if s.get("codec_type") == "video")
             size = (int(stream["width"]), int(stream["height"]))
-            sprites = self.sprite_frames(source, choice["start"])
+            at = float(choice["start"]) + float(choice.get("shift") or 0)   # where the clip really begins
+            sprites = self.sprite_frames(source, at)
             if sprites and size[1] > size[0] and sprites[0][1].width > sprites[0][1].height:
                 # Portrait videos sit pillarboxed inside landscape preview cells: keep only the picture.
                 cw, ch = sprites[0][1].size
@@ -2121,7 +2185,7 @@ class Matcher:
                 profile = dict(profile, boxes=[b for b in profile.get("boxes", []) if not b.get("central")])
             broadcast = bool(BROADCAST.search(" ".join(str(source.get(k, "")) for k in ("title", "tags", "author"))))
             result = express_clean.analyse(path, float(shot["duration"]), size, self.out_aspect(), profile,
-                                           sprites, choice["start"], channel_logo=broadcast)
+                                           sprites, at, channel_logo=broadcast)
             return self.remembered_marks(source, result)
         except media.Cancelled:
             raise
@@ -2538,13 +2602,15 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
 
     def audit(self, final, files) -> dict:
         """The film as it will be seen: shots that look alike (one video's other moments, re-uploads of one
-        picture, one clip borrowed again), one video used more than SOURCE_MAX times, alike shots side by side,
-        and any Bilibili window that was never checked for marks. Returns {sid: reason} to replace; a named
-        person's own footage and news reports are left alone."""
+        picture, one clip borrowed again), one video used more than SOURCE_MAX times, one video in neighbouring
+        shots, and any Bilibili window that was never checked for marks. Returns {sid: reason} to replace.
+        Nothing may look like another shot of the film (11-04: the client still saw one strait-and-bridge shot
+        four times, two of them as one 24-30 s run): only one game's plays are let off that. A named person's own
+        footage and news reports may come from one video more often (different moments of it)."""
         redo = {}
         exempt = {sid for sid, c in final.items()
-                  if c.get("base_lane", c.get("lane")) in ("person", "person_near", "news")
-                  or (self.shots_by_id_all.get(sid, {}).get("persons") and not self.unfilmed_shot(self.shots_by_id_all[sid]))}
+                  if sid in self.shots_by_id_all and (c.get("base_lane", c.get("lane")) == "news"
+                                                      or self.shows_person(self.shots_by_id_all[sid], c))}
         for sid, choice in final.items():
             job = choice.get("job")
             if (sid in files and choice["tile"]["source"].get("provider") == "bilibili" and express_clean.available()
@@ -2591,7 +2657,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
         pooled = {sid for sid in sids if final[sid]["tile"]["source"].get("pool")}
         # One game's shots look alike by nature (the same court) and are different moments; an interview's are one
         # seated person over and over (a 赵长鹏 film showed one 7 times, 10-30): only a sports pool is let off.
-        sports = bool(SPORTS.search((self.plan.get("domain") or "") + " " + " ".join(self.plan.get("pool") or [])))
+        sports = self.sports
         for i, a in enumerate(sids):
             for b in sids[i + 1:]:
                 if sports and a in pooled and b in pooled:
@@ -2600,23 +2666,23 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                              or (final[b].get("lane") == "reuse" and final[b].get("repeat_of") == a))
                 if same_clip or (a in looks and b in looks and self.alike(looks[a], looks[b])):
                     parent[root(a)] = root(b)
-                    if abs(self.position[a] - self.position[b]) == 1 and b not in exempt:
+                    if abs(self.position[a] - self.position[b]) == 1:
                         redo.setdefault(b, "和上一镜画面几乎一样")
         clusters = {}
         for sid in sids:
             clusters.setdefault(root(sid), []).append(sid)
         for members in clusters.values():
-            if len(members) > SOURCE_MAX:
-                for sid in sorted(members, key=keep_key)[SOURCE_MAX:]:
-                    if sid not in exempt:
-                        redo.setdefault(sid, f"全片有 {len(members)} 个镜头画面几乎一样")
+            if len(members) > ALIKE_MAX:
+                for sid in sorted(members, key=keep_key)[ALIKE_MAX:]:
+                    redo.setdefault(sid, f"全片有 {len(members)} 个镜头画面几乎一样")
         for a, b in zip(sids, sids[1:], strict=False):
-            # The same video in neighbouring shots reads as one shot cut in two (S17/S18 of a dorm test film).
-            if (key_of(a) == key_of(b) and b not in exempt and b not in pooled
-                    and abs(self.position[a] - self.position[b]) == 1):
+            # The same video in neighbouring shots reads as one shot cut in two (S17/S18 of a dorm test film), and
+            # three or four of a fixed camera's windows as one half-minute take (11-04).
+            if (key_of(a) == key_of(b) and abs(self.position[a] - self.position[b]) == 1
+                    and final[b].get("base_lane", final[b].get("lane")) != "news" and not (sports and b in pooled)):
                 redo.setdefault(b, "和上一镜是同一个视频")
         for sid in sids:
-            if final[sid].get("lane") == "reuse" and sid not in exempt:
+            if final[sid].get("lane") == "reuse":
                 redo.setdefault(sid, "同一段画面第二次出现")
         by_source = {}
         for sid in sids:
@@ -2654,7 +2720,8 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                                         author=source.get("author", ""),
                                         description=(source.get("tags") or "")[:300],
                                         provider=source["provider"])
-            asset.update(source_clip_start=choice["start"], download_mode="express",
+            asset.update(source_clip_start=round(float(choice["start"]) + float(choice.get("shift") or 0), 2),
+                         download_mode="express",
                          candidate_id=f"{source['provider']}:{source['id']}")
             clean = self.clean.get(choice.get("job")) or {}
             if clean.get("crop") and asset.get("kind") == "video" and asset.get("thumbnail"):
@@ -2710,7 +2777,9 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                                 "provider": source["provider"], "source_id": source["id"],
                                 "source_url": source.get("url", ""), "source_title": source.get("title", ""),
                                 "tile_time": round(float(choice["tile"]["t"]), 2),
-                                "window": [choice["start"], round(choice["start"] + float(shot["duration"]), 2)],
+                                "window": [round(float(choice["start"]) + float(choice.get("shift") or 0), 2),
+                                           round(float(choice["start"]) + float(choice.get("shift") or 0)
+                                                 + float(shot["duration"]), 2)],
                                 "qa": choice.get("qa", "pass"), "identity": (identity or {}).get("status", ""),
                                 "flags": sorted(self.flags(choice.get("job"))) if choice.get("job") else []},
                 }
@@ -3210,7 +3279,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 # A window turned down stays reserved: the next walk through the video goes on past it.
                 if sid in final or job_id not in got or job_id in bad:
                     continue
-                if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
+                if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump", "flash"}:
                     continue
                 final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
                                        "job": job_id}
@@ -3280,7 +3349,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             for job_id, sid, choice in sorted(jobs, key=lambda job: job[2]["rank"]):
                 if sid in final or job_id not in got or job_id in bad:
                     continue
-                if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump"}:
+                if self.flags(job_id) & {"wm", "narrow", "still", "dark", "jump", "flash"}:
                     continue
                 final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
                                        "job": job_id}
@@ -3315,6 +3384,22 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             stamp("library", began)
         if library_filled:
             self.notes.append(f"{library_filled} 镜用素材库里描述相符的新视频补上，没有重复已经用过的画面")
+        if pending and picture_thread is not None and not self.news_like():
+            # Still open after the library: a related photo, moving slowly, before another moment of a video already
+            # in the film (11-04: "没有不重复的视频就用动态的、符合的新闻图片"; one bridge shot came back four times).
+            began = time.monotonic()
+            picture_thread.join()
+            self.check()
+            open_ids = {s["id"] for s in pending}
+            early_used = 0
+            for sid, (choice, path) in sorted(early_pictures.items(), key=lambda item: self.position[item[0]]):
+                if sid in open_ids and sid not in final and self.fresh_picture(final, choice):
+                    final[sid], files[sid] = choice, path
+                    early_used += 1
+            if early_used:
+                self.notes.append(f"{early_used} 镜没有新的视频，用了相关图片（慢慢推拉），没有重复片子里已有的视频")
+            pending = [s for s in pending if s["id"] not in final]
+            stamp("pictures_before_repeat", began)
         if pending:
             # Another moment of a video already in the film, only where the library had nothing new: one video at
             # most SOURCE_MAX windows a film, SCENE_GAP seconds apart, never next to its other window (a named
@@ -3573,11 +3658,31 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 replaced += fill_from_library("x2", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
                 pending = [s for s in pending if s["id"] not in final]
             failures.update(self.stop_downloads())
+            pictured = 0
+            if pending:
+                # No new video for them: a related photo of this story, moving slowly, rather than the repeat (11-04:
+                # "没有不重复的视频就用动态的、符合的新闻图片").
+                self.progress(89, f"全片检查：给 {len(pending)} 个重复镜头找相关图片")
+                try:
+                    photos = self.image_fill(pending)
+                except (media.Cancelled, Budget):
+                    raise
+                except Exception as exc:   # noqa: BLE001 — they keep what they had
+                    self.notes.append(f"重复镜头换图片失败：{type(exc).__name__}")
+                    photos = {}
+                for sid, (choice, path) in sorted(photos.items(), key=lambda item: self.position[item[0]]):
+                    if sid not in final and self.fresh_picture(final, choice):
+                        final[sid], files[sid] = choice, path
+                        pictured += 1
+                replaced += pictured
+                pending = [s for s in pending if s["id"] not in final]
             for sid, (choice, path) in kept.items():
                 if sid not in final:
                     final[sid], files[sid] = choice, path
-            if replaced:
-                self.notes.append(f"全片检查：{replaced} 个重复或没检查过的镜头换成了素材库里的新视频")
+            if pictured:
+                self.notes.append(f"全片检查：{pictured} 个重复镜头换成了相关图片（慢慢推拉的动态画面）")
+            if replaced - pictured:
+                self.notes.append(f"全片检查：{replaced - pictured} 个重复或没检查过的镜头换成了素材库里的新视频")
             if len(redo) > replaced:
                 self.notes.append(f"全片检查：还有 {len(redo) - replaced} 个镜头没找到更好的画面（"
                                   + "；".join(sorted(set(redo.values())))[:80] + "）")
@@ -3620,6 +3725,24 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 if pending:
                     final_fixed += fill_from_library("f", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
                 failures.update(self.stop_downloads())
+                faulty = [s for s in self.shots if s["id"] in redo_final and s["id"] not in final
+                          and HARD_FAULT.search(final_bad.get(s["id"], ""))]
+                final_pictured = 0
+                if faulty:
+                    # A related photo, moving slowly, before a clip of this film is shown a second time (11-04).
+                    try:
+                        photos = self.image_fill(faulty)
+                    except (media.Cancelled, Budget):
+                        raise
+                    except Exception as exc:   # noqa: BLE001 — borrowing follows
+                        self.notes.append(f"终审换图片失败：{type(exc).__name__}")
+                        photos = {}
+                    for sid, (choice, path) in sorted(photos.items(), key=lambda item: self.position[item[0]]):
+                        if sid not in final and self.fresh_picture(final, choice):
+                            final[sid], files[sid] = choice, path
+                            final_pictured += 1
+                    if final_pictured:
+                        self.notes.append(f"成片终审：{final_pictured} 个有硬伤的镜头换成了相关图片")
                 # A hard fault nothing replaced (a watermark, 花字, a vertical or black picture, anything indecent) is
                 # never left in the film (10-31: a 岁月珍宝馆 mark and a vlog's 花字 went out to the client): a clean
                 # clip of this film is shown again instead; content that only fits loosely stays.
@@ -3670,6 +3793,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                             else "dl:" + str(failures[job_id])[:24] if job_id in failures else "-", c.get("how", "")]
                            for job_id, c in list(self.job_choice.items())[:500]],
                   "pictures": dict(self.picture_stats), "library_pick": dict(self.lib_pick_stats),
+                  "steady": dict(self.steady_stats),
                   "lanes": {lane: sum(1 for c in final.values() if c["lane"] == lane)
                             for lane in ("news", "pick", "person", "person_near", "ctx", "topic", "neighbor", "near", "stock", "image",
                                          "library", "pool", "sweep", "repeat", "reuse", "card")},

@@ -422,6 +422,29 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.7：重复镜头、一闪而过、太长的镜头、图片顶重复（2026-11-04，包 = 用户的 0.7.6 + 这里的改动）
+
+0.7.5/0.7.6 是用户自己在包里改的（好看过验证、kedou 自动下载、benchmark 翻页），源码只在 mbp2 `~/Documents/Jinggao-Windows-x64`，
+不进这个公开仓库。0.7.7 包 = 用户 0.7.6 zip + 本仓库的 express_match / express_sources / sources / picture_plugin + seed-1104
+（`build-tmp/repack.py` 在 mbp2 上换条目，中文文件名补 UTF-8 标记）。
+客户 11-04（成片在剪映里自动分镜的截图）：同一段海面大桥出现 4 次、其中两段 24–30 秒；还有 1–2 秒一闪而过；用户要"没有不重复视频就用动态新闻图片"。
+- 原因 1：`allocate` 对"讲到具名人物的句子"整段跳过硬限制（同源次数、相邻、同一画面），`audit` 也把这些句子全部豁免——不管配的是不是本人画面。
+  改成：同一画面（`twin`）和相邻同源对所有句子都拒（新闻报道、体育同题回放除外）；只有标题点名本人的素材（`own_footage`）不受同源次数限制，
+  但两窗相隔至少 `POOL_GAP`。`audit` 的豁免只剩"同源次数"一条、且只给 `shows_person` 为真的镜头和新闻报道。
+- 原因 2：同题素材（pool）允许相邻，`pool_sweep` 按时间往后走，固定机位的直播/纪录片连取三四窗 = 一个半分钟长镜。改成非体育（`Matcher.sports`）不相邻，
+  `pool_sweep` 跳过邻句已用的视频，`audit` 相邻同源只放过体育同题。
+- `ALIKE_MAX` = 1：全片长得像的镜头只留一个（以前 `SOURCE_MAX` 2 个）。查出来的先换同题/素材库新视频，换不到就 `image_fill`（新），再不行才保留。
+- 一闪而过：B 站窗口内含原片剪辑点。`express_sources.dash_window(steady=)` 前后多取 `STEADY_LEAD` 2.5 秒，`scene_cuts`（10 fps 48×27 灰度，帧差+直方图差，
+  高于周围运动 3 倍）找剪辑点，`steady_shift` 挪窗让两端和剪辑点之间每段 ≥ `STEADY_PIECE` 2 秒；挪不开、最短段 < `FLASH_PIECE` 1 秒的标 `flash`（软标记，
+  干净的优先，补位轮直接跳过）。挪动量记在 `choice["shift"]`（`.shift` 旁文件给缓存命中），`source_clip_start` 和水印分析按挪后的起点。
+  素材库体检（footage_check）照旧不挪。报告 `steady`：windows/moved/cut_inside/flash/errors。
+- 图片：非新闻稿素材库补不上时先上图片、再"同源别段"（repeat）；成片终审的硬伤先换图片再借用；`image_fill` 所有稿子都按话题共享搜索（360 限流）。
+- `jinggao/picture_plugin.py`：用户自己接的图片来源（百度图片要过反爬，不在这里做），`sources.custom_images` 包一层，排在 360 前；
+  报告 `pictures.custom_found/custom_failed`。
+- 不做：用户建议没画面时镜像翻转。翻转后还是同一段画面（观众和平台的重复判定都看得出），画面里的字也会反过来；改成用图片顶。
+- 素材库 seed-1104：262,650 个视频，45,426 段体检 / 13,381 个视频（seed-1102 是 35,093 / 9,590），从 mini 的体检库 check-mini/data 导出。
+- 测试：tests/test_repeats_1104.py；test_express.py 里三条 NBA 回放测试改成体育域、audit 测试改成像的只留一个。
+
 ## 0.7.4：对标采集（2026-11-03，sha256 4b4ae6d5…）
 
 客户的做法：跟好看视频上的对标号，挑一万播放以上的爆款，拿原文案洗稿再出片（同行用的"对标内容工作台/易撰"那一类）。

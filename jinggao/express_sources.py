@@ -720,17 +720,104 @@ def dash_index(client: httpx.Client, url: str, check=None, segment_base: dict | 
     return {"init": head[:init_end], "refs": refs}
 
 
-def dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720) -> str:
+# A source's own cut close to either end of a window leaves a second or two of another scene: on screen a flash
+# (the client, 11-04: "有的镜头过短1-2秒一闪而过"). Windows are fetched with a little footage around them and moved
+# off such cuts.
+STEADY_PIECE = 2.0     # no piece of a window between its ends and the source's cuts shorter than this
+STEADY_LEAD = 2.5      # seconds a window may move either way (fetched around it)
+STEADY_RATE = 10       # frames a second the cut finder looks at
+
+
+def scene_cuts(path: str, start: float, length: float, rate: int = STEADY_RATE) -> list[float]:
+    """Times (seconds into the file) where the picture cuts to another scene between start and start+length.
+    A cut is a jump in both the picture and its brightness histogram, well above the motion around it (a pan or
+    a fast move changes the picture but keeps its tones; a fade changes it slowly)."""
+    import subprocess
+    import numpy as np
+    w, h = 48, 27
+    with throttle.slot("frames", None):
+        raw = subprocess.run(
+            [paths.binary("ffmpeg"), "-v", "error", "-threads", "2", "-ss", f"{max(0.0, start):.3f}", "-i", path,
+             "-t", f"{max(0.5, length):.3f}", "-vf", f"fps={rate},scale={w}:{h}:flags=area,format=gray",
+             "-f", "rawvideo", "-"], capture_output=True, timeout=60, check=True).stdout
+    n = len(raw) // (w * h)
+    if n < 3:
+        return []
+    frames = np.frombuffer(raw[:n * w * h], dtype=np.uint8).reshape(n, h, w).astype(np.float32)
+    diff = np.abs(frames[1:] - frames[:-1]).mean(axis=(1, 2))
+    hists = np.stack([np.histogram(f, bins=16, range=(0, 256))[0] / f.size for f in frames])
+    tones = np.abs(hists[1:] - hists[:-1]).sum(axis=1) / 2
+    cuts = []
+    for i, d in enumerate(diff):
+        around = np.concatenate([diff[max(0, i - 5):i], diff[i + 1:i + 6]])
+        calm = float(np.median(around)) if around.size else 0.0
+        if d >= 18 and d >= 3 * max(calm, 3.0) and tones[i] >= 0.2:
+            cuts.append(round(max(0.0, start) + (i + 1) / rate, 2))
+    return cuts
+
+
+def shortest_piece(cuts: list[float], start: float, need: float) -> float:
+    """The shortest piece of the window [start, start+need) between its ends and the source's cuts. A cut within
+    0.15 s of an end counts as at the end: a frame or two of the other scene is a flash too."""
+    marks = [start] + sorted(min(max(c, start), start + need) for c in cuts
+                             if start - 0.15 < c < start + need + 0.15) + [start + need]
+    return min(b - a for a, b in zip(marks, marks[1:]))
+
+
+def steady_shift(cuts: list[float], start: float, need: float, lo: float, hi: float,
+                 piece: float = STEADY_PIECE) -> float:
+    """How far to move the window [start, start+need) so that no piece of it between its ends and the cuts is
+    shorter than piece, the smallest move first; with no such place in [lo, hi] the move that leaves the longest
+    shortest piece (0 when moving does not help)."""
+    def shortest(s):
+        return shortest_piece(cuts, s, need)
+    here = shortest(start)
+    if here >= piece:
+        return 0.0
+    best = (here, 0.0)
+    for k in range(1, int(STEADY_LEAD * 10) + 1):
+        for move in (k / 10, -k / 10):
+            s = start + move
+            if not lo - 1e-6 <= s <= hi + 1e-6:
+                continue
+            got = shortest(s)
+            if got >= piece:
+                return round(move, 2)
+            if got > best[0] + 0.25:
+                best = (got, move)
+    return round(best[1], 2)
+
+
+def dash_window(stream: dict, start: float, duration: float, out: Path, check=None, short_edge: int = 720,
+                steady: dict | None = None) -> str:
     """Fetch only the DASH segments covering the window (holding a download slot), then trim locally (holding
-    a gpu or cpu slot instead). Returns how the clip was encoded."""
+    a gpu or cpu slot instead). Returns how the clip was encoded. With steady (a dict) the window may move up to
+    STEADY_LEAD seconds off the source's own cuts (steady_shift); steady["shift"] says how far it moved."""
     last = None
+    lead = STEADY_LEAD if steady is not None else 0.0
     for url in stream["urls"]:
         local = out.with_suffix(".src.mp4")
         try:
             with throttle.slot("bili_download", check):
-                refs = _fetch_segments(stream, url, start, duration, local, check)
+                refs = _fetch_segments(stream, url, max(0.0, start - lead), duration + 2 * lead, local, check)
+            base = refs[0][2]
+            shift = 0.0
+            if steady is not None:
+                have = refs[-1][2] + refs[-1][3]
+                lo, hi = max(base, start - lead, 0.0), min(have - duration - 0.1, start + lead)
+                try:
+                    if hi >= lo:
+                        span = (max(base, start - lead), min(have, start + duration + lead))
+                        cuts = [base + c for c in scene_cuts(str(local), span[0] - base, span[1] - span[0])]
+                        shift = steady_shift(cuts, start, duration, lo, hi)
+                        steady["cuts"] = len([c for c in cuts if start + shift < c < start + shift + duration])
+                        steady["shortest"] = round(shortest_piece(cuts, start + shift, duration), 2)
+                except Exception as exc:   # noqa: BLE001 — a decode error or timeout: the window as asked
+                    steady["error"] = type(exc).__name__
+                    shift = 0.0
+                steady["shift"] = shift
             try:
-                return cut_window(str(local), start - refs[0][2], duration, out, check=check, timeout=60,
+                return cut_window(str(local), start + shift - base, duration, out, check=check, timeout=60,
                                   short_edge=short_edge)
             finally:
                 local.unlink(missing_ok=True)

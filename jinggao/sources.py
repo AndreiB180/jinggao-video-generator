@@ -282,6 +282,40 @@ _so360_lock = threading.Lock()
 _so360_last = [0.0]
 
 
+def custom_images(query: str) -> list[dict]:
+    """Pictures from the user's own source (jinggao/picture_plugin.py, search()): Baidu's image search refuses a
+    program from China, and getting past that is left to whoever fills in that file. [] while it is empty; its
+    errors reach the caller (one search less there)."""
+    try:
+        from . import picture_plugin
+    except ImportError:
+        return []
+    search = getattr(picture_plugin, "search", None)
+    if not callable(search):
+        return []
+    rows = []
+    for item in list(search(query) or [])[:12]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        if urlparse(url).scheme not in ("http", "https"):
+            continue
+        try:
+            width, height = int(item.get("width") or 0), int(item.get("height") or 0)
+        except (TypeError, ValueError):
+            width = height = 0
+        if width and height and min(width, height) < 360:
+            continue
+        page, fallback = str(item.get("page") or url), str(item.get("fallback") or "")
+        headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
+        rows.append(candidate("custom_image", html.unescape(str(item.get("title") or "网页图片")), url, url,
+                              page if urlparse(page).scheme in ("http", "https") else url, width=width, height=height,
+                              fallback=fallback if urlparse(fallback).scheme in ("http", "https") else "",
+                              headers={str(k): str(v) for k, v in headers.items()},
+                              license="网页图片，使用许可待核实"))
+    return rows
+
+
 def so360_images(query: str) -> list[dict]:
     """360 image search: from China it answers a program plainly (Baidu's refuses one) with the photos of news
     reports on the very people and events (赵长鹏, 周群飞, 特奥多罗: 48-99 each, 11-01). Landscape ones first; each

@@ -740,8 +740,8 @@ def test_the_finished_film_is_checked_for_alike_shots_and_overused_videos(data, 
     monkeypatch.setattr(express_match.express_clean, "available", lambda: True)
     monkeypatch.setattr(express_match.Matcher, "looks_of", staticmethod(lambda path, d: looks[Path(path).stem]))
     redo = m.audit(final, files)
-    # The pick and the library window stay; the repeat and the near window of that picture go.
-    assert set(redo) == {ids[3], ids[4]}
+    # The pick stays; every other shot of that picture goes (11-04: any second one is a repeat on screen).
+    assert set(redo) == {ids[2], ids[3], ids[4]}
     assert m.similar == [4]
     # One video in more than SOURCE_MAX shots: the extra ones go too.
     final = {sid: clip(n, "BVsame") for n, sid in enumerate(ids[:3])}
@@ -954,6 +954,7 @@ def test_the_topic_pool_takes_long_videos_about_the_story_itself(data, monkeypat
 def test_open_lines_walk_through_the_pool_and_a_pool_video_gives_many_windows(data):
     shots = [planner.new_shot(f"镜头{i}。") | {"duration": 6.0} for i in range(6)]
     m = _matcher(data, shots)
+    m.plan = {"domain": "NBA篮球"}       # one game's plays may run on in neighbouring lines (not other stories: 11-04)
     game = {"provider": "bilibili", "id": "BVgame", "duration": 600.0, "pool": True}
     tiles = {"BVgame": [{"source": game, "t": float(t)} for t in (30, 35, 60, 90, 120, 150, 180)]}
     jobs = m.pool_sweep(m.shots[:4], {}, {}, {"BVgame": {"available": True}}, tiles)
@@ -966,6 +967,10 @@ def test_open_lines_walk_through_the_pool_and_a_pool_video_gives_many_windows(da
     assert len(assigned) == 5        # one window per two minutes of it: a 10-minute video gives five
     game["duration"] = 7236.0        # a full game replay gives every line
     assert len(m.allocate(options, {}, {}, m.shots)) == 6
+    # Any other story: never one video in neighbouring lines (a fixed camera's windows ran as one 30 s shot).
+    m.plan = {"domain": "台海局势"}
+    placed = sorted(m.position[sid] for sid in m.allocate(options, {}, {}, m.shots))
+    assert all(b - a > 1 for a, b in zip(placed, placed[1:], strict=False)) and len(placed) == 3
 
 
 def test_pool_covers_person_lines_with_story_footage_and_skips_talk_videos(data):
@@ -973,6 +978,7 @@ def test_pool_covers_person_lines_with_story_footage_and_skips_talk_videos(data)
              planner.new_shot("乔治防得很凶。") | {"duration": 6.0, "persons": [{"name": "乔治"}]},
              planner.new_shot("比赛进入第四节。") | {"duration": 6.0}]
     m = _matcher(data, shots)
+    m.plan = {"domain": "NBA篮球"}
     replay = {"provider": "bilibili", "id": "BVreplay", "duration": 7236.0, "pool": True, "pool_talk": False,
               "title": "勇士vs森林狼完整全场回放！库里44分"}
     talk = {"provider": "bilibili", "id": "BVtalk", "duration": 797.0, "pool": True, "pool_talk": True,
@@ -1074,6 +1080,7 @@ def test_pool_keeps_to_the_event_itself_when_its_footage_is_long_enough(data, mo
 def test_the_sweep_walks_a_long_pool_video_past_its_previews(data):
     shots = [planner.new_shot(f"镜头{i}。") | {"duration": 6.0} for i in range(30)]
     m = _matcher(data, shots)
+    m.plan = {"domain": "NBA篮球", "pool": ["勇士 森林狼 全场回放"]}
     replay = {"provider": "bilibili", "id": "BVreplay", "duration": 7236.0, "pool": True, "title": "全场回放"}
     m.pool_sources = [replay]
     tiles = {"BVreplay": [{"source": replay, "t": float(t)} for t in (600, 1200, 1800)]}
