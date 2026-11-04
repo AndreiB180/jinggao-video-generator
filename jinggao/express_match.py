@@ -3610,6 +3610,11 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             self.abandon.clear()
             began = time.monotonic()
             moments = other_moments(cards, SOURCE_MAX + 1, "2")
+            cards = [s for s in cards if s["id"] not in final]
+            if cards:
+                # Still nothing: any other scene of a video in the film, however often it is used already (dorm r52: a
+                # news film's person lines left 7 lines to borrow one clip twice).
+                moments += other_moments(cards, len(self.shots), "3")
             failures.update(self.stop_downloads())
             if moments:
                 self.notes.append(f"{moments} 镜用了片子里已有视频的另一段（不同的场景），没有重复同一段画面")
@@ -3739,7 +3744,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             if again:
                 # The same clip shown twice and nothing new for it: at least another scene of a video already in the film.
                 self.abandon.clear()
-                moved = other_moments(again, SOURCE_MAX + 1, "x")
+                moved = other_moments(again, len(self.shots), "x")
                 failures.update(self.stop_downloads())
                 replaced += moved
                 pending = [s for s in pending if s["id"] not in final]
