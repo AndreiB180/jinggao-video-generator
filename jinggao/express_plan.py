@@ -440,7 +440,17 @@ def _ask(shots: list[dict], requirements: str, check=None, opening: bool = False
     max_tokens = min(12000, 1200 + 130 * len(shots))
     if check:
         check()
-    return planner.chat(SYSTEM, content, max_tokens=max_tokens, timeout=150, task="express_plan")
+    try:
+        return planner.chat(SYSTEM, content, max_tokens=max_tokens, timeout=150, task="express_plan")
+    except planner.ModelResponseError as exc:
+        if "输出长度上限" not in str(exc):
+            raise
+        # The model now and then writes far more than usual (a 35-shot batch ran past 5,750 tokens on 11-04 and the
+        # whole film failed): asked once more with room to spare.
+        if check:
+            check()
+        return planner.chat(SYSTEM, content, max_tokens=min(16000, round(max_tokens * 1.7)), timeout=180,
+                            task="express_plan")
 
 
 def annotate(shots: list[dict], script: str, requirements: str = "", check=None) -> dict:

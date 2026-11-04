@@ -251,3 +251,21 @@ def test_the_final_review_saying_someone_else_is_read_as_a_wrong_person():
     assert express_match.WRONG_PERSON.search("前两张截图为俄罗斯总统普京，口播讲菲律宾防长，明显张冠李戴")
     assert express_match.WRONG_PERSON.search("中间镜头人物非周群飞本人")
     assert not express_match.WRONG_PERSON.search("口播讲2015年手机玻璃，画面是古代城门建筑")
+
+
+def test_a_plan_cut_off_at_the_output_limit_is_asked_once_more_with_more_room(monkeypatch):
+    from jinggao import express_plan, planner
+    asked = []
+    def chat(system, content, *, max_tokens, timeout, task):
+        asked.append(max_tokens)
+        if len(asked) == 1:
+            raise planner.ModelResponseError("模型响应达到输出长度上限，返回内容不完整，任务已停止")
+        return {"rows": []}, {}
+    monkeypatch.setattr(planner, "chat", chat)
+    shots = [planner.new_shot(f"第{i}句。") for i in range(35)]
+    assert express_plan._ask(shots, "") == ({"rows": []}, {})
+    assert asked == [5750, 9775]
+    asked.clear()
+    monkeypatch.setattr(planner, "chat", lambda *a, **k: (_ for _ in ()).throw(planner.ModelResponseError("模型返回空内容，任务已停止")))
+    with pytest.raises(planner.ModelResponseError):
+        express_plan._ask(shots, "")
