@@ -198,3 +198,50 @@ def test_your_picture_source_comes_in_as_rows_and_stays_out_when_empty(monkeypat
     monkeypatch.setattr(picture_plugin, "search", lambda q: (_ for _ in ()).throw(RuntimeError("blocked")))
     with pytest.raises(RuntimeError):
         sources.custom_images("台海")
+
+
+# ------------------------------------------------------------------ pictures: judged once a film, within a budget
+
+def test_pictures_are_judged_once_a_film_and_searched_within_its_budget(data, monkeypatch):
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from jinggao import picture_plugin, screen_text
+    shots = [planner.new_shot("台海局势紧张。") | {"duration": 6.0}, planner.new_shot("军舰在附近巡航。") | {"duration": 6.0}]
+    m = _matcher(shots)
+    m.plan = {"groups": [{"id": "G1", "shots": [s["id"] for s in m.shots], "zh": ["台海 军舰"]}]}
+    rng = np.random.default_rng(7)
+    pictures = {}
+    for n in range(12):
+        buffer = io.BytesIO()
+        Image.fromarray(rng.integers(0, 255, (90, 160, 3), dtype=np.uint8)).resize((1280, 720)).save(buffer, "JPEG")
+        pictures[f"https://img.example.com/{n}.jpg"] = buffer.getvalue()
+    monkeypatch.setattr(picture_plugin, "search", lambda q: [{"url": u, "width": 1280, "height": 720} for u in pictures])
+    monkeypatch.setattr(screen_text, "installed", lambda: False)
+    fetched = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, headers=None):
+            fetched.append(url)
+            return type("R", (), {"status_code": 200, "content": pictures[url]})()
+    monkeypatch.setattr(express_match.network, "client", lambda **kw: Client())
+    monkeypatch.setattr(m, "chat", lambda system, content, **kw: ({"S1": 1, "S2": 1}, {}))
+    first = m.image_fill(m.shots)
+    assert len(first) == 2 and len(fetched) == len(set(fetched))
+    final = {sid: choice for sid, (choice, _) in first.items()}
+    second = m.image_fill(m.shots, final)
+    # Nothing downloaded twice; the photos already in the film are not offered again.
+    assert len(fetched) == len(set(fetched)) and m.picture_stats.get("known", 0) > 0
+    shown = {c["tile"]["hash"] for c in final.values()}
+    assert all(choice["tile"]["hash"] not in shown for choice, _ in second.values())
+    # The film's picture time is used up: no more searching.
+    m.picture_spent = express_match.PICTURE_FILM_SECONDS
+    assert m.image_fill(m.shots) == {} and m.picture_stats.get("out_of_budget") == 1

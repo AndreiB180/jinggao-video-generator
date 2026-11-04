@@ -127,6 +127,7 @@ PICTURE_SECONDS = 90    # time the picture fallback may take per film (searches 
 PICTURE_LINES = 40      # lines it looks for pictures for
 PICTURE_SHARE = 1.0     # a news or person story's lines that may take a photo of the story before library footage
 PICTURE_SECONDS_NEWS = 180   # ...and the time its pictures may take (every open line looks for one)
+PICTURE_FILM_SECONDS = 300   # all picture searches of one film together (person photos, fills, repeat check, final review)
 FILMED_KINDS = {"实拍", "影视剧"}     # library frame kinds that are footage (not a cartoon, a presenter or text)
 MARGIN = 0.3   # seconds of extra footage per window; tolerates sources ending early
 FOOTAGE_WORDS = re.compile(r"素材|空镜|航拍|实拍|纪录|影像|画面|现场|4K|4k|高清|原声|新闻|珍贵|全景|延时|记录")
@@ -397,6 +398,8 @@ class Matcher:
         self.similar = []       # sizes of the groups of alike-looking shots in the finished film (audit)
         self.looked, self.relooked = {}, set()   # clip path -> dHash of three frames; jobs analysed again by audit()
         self.steady_stats = {}  # windows moved off the source's own cuts (express_sources.steady_shift), for the report
+        self.picture_cache = {}   # picture url -> (picture, dHash) or None: what image_fill made of it, for its later calls
+        self.picture_spent = 0.0  # seconds image_fill has taken in this film (PICTURE_FILM_SECONDS)
 
     @property
     def sports(self) -> bool:
@@ -764,6 +767,12 @@ class Matcher:
             chosen.add(sid)
             taken.add(index)
         return chosen
+
+    @staticmethod
+    def picture_shown(final) -> list:
+        """dHashes of the photos a film shows already."""
+        return [c["tile"]["hash"] for c in list((final or {}).values())
+                if c.get("lane") == "image" and (c.get("tile") or {}).get("hash") is not None]
 
     @staticmethod
     def fresh_picture(final, choice) -> bool:
@@ -1539,7 +1548,7 @@ class Matcher:
     IMAGE_SKIP_HOSTS = re.compile(r"699pic|588ku|58pic|ibaotu|nipic|huitu|quanjing|veer|51miz|shutterstock|gettyimages|"
                                   r"istockphoto|dreamstime|alamy|123rf|depositphotos|vcg\.com|ooopic|zcool|sucai")
 
-    def image_fill(self, shots) -> dict:
+    def image_fill(self, shots, final=None) -> dict:
         """Lines still without footage: related web pictures (shown with slow motion by the render), chosen by
         the vision model from up to four candidates a line. {shot id: (choice, path)}; lines nothing fits are
         left out."""
@@ -1566,7 +1575,7 @@ class Matcher:
             if story and not names and story not in words:
                 words.append(story)
             return words
-        seen_hashes = []
+        seen_hashes = list(self.picture_shown(final))   # photos the film shows already are not offered again
         claimed = set()         # each picture goes to one line only (shared searches return the same ones)
         lock = threading.Lock()
         began_at = time.monotonic()
@@ -1574,8 +1583,66 @@ class Matcher:
         def count(key, n=1):
             with lock:
                 stats[key] = stats.get(key, 0) + n
-        # A time budget: the client's machines spent up to four and a half minutes here for a few pictures.
-        deadline = time.monotonic() + (PICTURE_SECONDS_NEWS if self.news_like() else PICTURE_SECONDS)
+        # A time budget a call and one for the film: the client's machines spent up to four and a half minutes here
+        # for a few pictures, and the repeat check and the final review look for pictures too (11-04).
+        left = PICTURE_FILM_SECONDS - self.picture_spent
+        if left < 10:
+            count("out_of_budget")
+            return {}
+        deadline = time.monotonic() + min(left, PICTURE_SECONDS_NEWS if self.news_like() else PICTURE_SECONDS)
+        cache = self.picture_cache    # url -> (picture, dHash), or None when turned down: later calls reuse the verdict
+        def vet(row, url):
+            """Download one picture and judge it: (picture, dHash), or None."""
+            try:
+                asked = {"User-Agent": BROWSER} | dict(row.get("headers") or {})
+                with network.client(timeout=6, follow_redirects=True) as client:
+                    response = client.get(url, headers=asked)
+                    if response.status_code != 200 and row.get("fallback"):
+                        response = client.get(row["fallback"], headers=asked)   # the search's copy
+                if response.status_code != 200 or len(response.content) > 12 * 2**20:
+                    count("refused")
+                    return None
+                with Image.open(io.BytesIO(response.content)) as raw:
+                    image = ImageOps.exif_transpose(raw).convert("RGB")
+            except Exception:   # noqa: BLE001 — broken or refused picture
+                count("refused")
+                return None
+            count("downloaded")
+            if min(image.size) < 360 or not 0.45 <= image.width / image.height <= 2.6:
+                count("small")
+                return None
+            if self.project.get("aspect", "16:9") != "9:16" and image.width < image.height * 1.15:
+                # A tall picture would sit between blurred side bands: a portrait wide enough is cut to 16:9
+                # around the upper middle, where a face usually is (most photos of a named person are tall).
+                if image.width < 640:
+                    count("tall")
+                    return None
+                band = round(image.width * 9 / 16)
+                top = max(0, min(image.height - band, round(image.height * 0.36 - band / 2)))
+                image = image.crop((0, top, image.width, top + band))
+            h = _dhash(image)
+            if screen_text.installed():
+                try:
+                    lines = screen_text.read(image)
+                    found = screen_text.classify([lines])
+                except Exception:   # noqa: BLE001
+                    lines, found = [], {"contact": [], "dense": False, "moving": False}
+                big = any(l["score"] >= 0.7 and screen_text._cjk(l["text"]) >= 1 and l["box"][3] - l["box"][1] >= 0.08
+                          for l in lines)
+                if found["contact"] or found["dense"] or big:
+                    count("text")
+                    return None    # a poster, a screenshot, an ad, or a stock picture with big words on it ("房贷")
+                # A news photo's credit ("@作者", an outlet's name) along the top or bottom edge: cut that band off.
+                marks = [l["box"] for l in lines if l["score"] >= 0.5 and (l["box"][1] >= 0.8 or l["box"][3] <= 0.2)]
+                if marks:
+                    top = max([b[3] for b in marks if b[3] <= 0.2] or [0.0])
+                    bottom = min([b[1] for b in marks if b[1] >= 0.8] or [1.0])
+                    if bottom - top < 0.6:
+                        return None
+                    image = image.crop((0, round(top * image.height) + 2, image.width,
+                                        round(bottom * image.height) - 2))
+            image.thumbnail((1920, 1920))
+            return image, h
         def candidates(shot):
             rows = []
             # Your own source first (jinggao/picture_plugin.py, empty unless you fill it in), then 360 (fast and on the
@@ -1619,61 +1686,23 @@ class Matcher:
                     if url in claimed:
                         continue
                     claimed.add(url)
-                self.check()
-                try:
-                    asked = {"User-Agent": BROWSER} | dict(row.get("headers") or {})
-                    with network.client(timeout=6, follow_redirects=True) as client:
-                        response = client.get(url, headers=asked)
-                        if response.status_code != 200 and row.get("fallback"):
-                            response = client.get(row["fallback"], headers=asked)   # the search's copy
-                    if response.status_code != 200 or len(response.content) > 12 * 2**20:
-                        count("refused")
-                        continue
-                    with Image.open(io.BytesIO(response.content)) as raw:
-                        image = ImageOps.exif_transpose(raw).convert("RGB")
-                except Exception:   # noqa: BLE001 — broken or refused picture
-                    count("refused")
+                    known = url in cache
+                    got = cache.get(url)
+                if known:
+                    count("known")
+                else:
+                    self.check()
+                    got = vet(row, url)
+                    with lock:
+                        cache[url] = got
+                if got is None:
                     continue
-                count("downloaded")
-                if min(image.size) < 360 or not 0.45 <= image.width / image.height <= 2.6:
-                    count("small")
-                    continue
-                if self.project.get("aspect", "16:9") != "9:16" and image.width < image.height * 1.15:
-                    # A tall picture would sit between blurred side bands: a portrait wide enough is cut to 16:9
-                    # around the upper middle, where a face usually is (most photos of a named person are tall).
-                    if image.width < 640:
-                        count("tall")
-                        continue
-                    band = round(image.width * 9 / 16)
-                    top = max(0, min(image.height - band, round(image.height * 0.36 - band / 2)))
-                    image = image.crop((0, top, image.width, top + band))
-                h = _dhash(image)
+                image, h = got
                 with lock:
                     if any(bin(h ^ other).count("1") <= 6 for other in seen_hashes):
                         stats["duplicate"] = stats.get("duplicate", 0) + 1
                         continue
                     seen_hashes.append(h)
-                if screen_text.installed():
-                    try:
-                        lines = screen_text.read(image)
-                        found = screen_text.classify([lines])
-                    except Exception:   # noqa: BLE001
-                        lines, found = [], {"contact": [], "dense": False, "moving": False}
-                    big = any(l["score"] >= 0.7 and screen_text._cjk(l["text"]) >= 1 and l["box"][3] - l["box"][1] >= 0.08
-                              for l in lines)
-                    if found["contact"] or found["dense"] or big:
-                        count("text")
-                        continue    # a poster, a screenshot, an ad, or a stock picture with big words on it ("房贷")
-                    # A news photo's credit ("@作者", an outlet's name) along the top or bottom edge: cut that band off.
-                    marks = [l["box"] for l in lines if l["score"] >= 0.5 and (l["box"][1] >= 0.8 or l["box"][3] <= 0.2)]
-                    if marks:
-                        top = max([b[3] for b in marks if b[3] <= 0.2] or [0.0])
-                        bottom = min([b[1] for b in marks if b[1] >= 0.8] or [1.0])
-                        if bottom - top < 0.6:
-                            continue
-                        image = image.crop((0, round(top * image.height) + 2, image.width,
-                                            round(bottom * image.height) - 2))
-                image.thumbnail((1920, 1920))
                 pictures.append((row, image, h))
             return shot, pictures
         found = {}
@@ -1685,6 +1714,7 @@ class Matcher:
         stats["lines_with_pictures"] = stats.get("lines_with_pictures", 0) + len(found)
         if not found:
             stats["seconds"] = round(stats.get("seconds", 0) + time.monotonic() - began_at, 1)
+            self.picture_spent += time.monotonic() - began_at
             return {}
         chosen = {}
         items = list(found.items())
@@ -1720,6 +1750,7 @@ class Matcher:
                     stats["picker_none"] = stats.get("picker_none", 0) + 1
         stats["chosen"] = stats.get("chosen", 0) + len(chosen)
         stats["seconds"] = round(stats.get("seconds", 0) + time.monotonic() - began_at, 1)
+        self.picture_spent += time.monotonic() - began_at
         out = {}
         for sid, (row, image, h) in chosen.items():
             name = hashlib.sha1((row.get("url") or str(h)).encode()).hexdigest()[:16]
@@ -3240,7 +3271,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             began = time.monotonic()
             self.progress(86, f"给 {len(person_open)} 句人物找本人照片")
             try:
-                photos = self.image_fill(person_open)
+                photos = self.image_fill(person_open, final)
             except (media.Cancelled, Budget):
                 raise
             except Exception as exc:   # noqa: BLE001 — the lines keep what they have
@@ -3400,22 +3431,22 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 self.notes.append(f"{early_used} 镜没有新的视频，用了相关图片（慢慢推拉），没有重复片子里已有的视频")
             pending = [s for s in pending if s["id"] not in final]
             stamp("pictures_before_repeat", began)
-        if pending:
-            # Another moment of a video already in the film, only where the library had nothing new: one video at
-            # most SOURCE_MAX windows a film, SCENE_GAP seconds apart, never next to its other window (a named
-            # person's own footage may show more of the same documentary).
-            began = time.monotonic()
+        group_of_id = {sid: g["id"] for g in groups for sid in g["shots"]}
+        def other_moments(lines, cap, tag):
+            """Another moment of a video already in the film for these open lines (never the same clip again): one video
+            at most cap windows a film, SCENE_GAP seconds apart, never next to its other window (a named person's own
+            footage may show more of the same documentary). Returns how many lines it filled."""
+            nonlocal carried
             for _, _, choice in self.drop_queued():
                 release(choice)
             carried = [job for job in carried if job[0] in {j[0] for j in self.inflight.values()}]
-            group_of_id = {sid: g["id"] for g in groups for sid in g["shots"]}
             donors = sorted(final.items(), key=lambda item: self.position[item[0]])
             shots_from, places = {}, {}
             for donor_id, choice in final.items():
                 shots_from[key_of(choice)[0]] = shots_from.get(key_of(choice)[0], 0) + 1
                 places.setdefault(key_of(choice)[0], []).append(self.position.get(donor_id, -9))
             jobs = []
-            for shot in pending:
+            for shot in lines:
                 sid = shot["id"]
                 person = bool(shot.get("persons")) and not self.unfilmed_shot(shot)
                 ranked = sorted(donors, key=lambda item: (group_of_id.get(item[0]) != group_of_id.get(sid),
@@ -3426,10 +3457,13 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                                        or donor["lane"] in CONTEXT_LANES):
                         continue
                     key = key_of(donor)[0]
-                    if not person and (shots_from.get(key, 0) >= SOURCE_MAX
-                                       or any(abs(p - self.position[sid]) < 2 for p in places.get(key, []))):
-                        continue    # that video is in the film enough already, or right next to this line
-                    if donor_id not in self.position or donor.get("lane") in ("reuse", "card"):
+                    if any(abs(p - self.position[sid]) < 2 for p in places.get(key, [])):
+                        continue    # right next to this line: one long take on screen
+                    if not person and shots_from.get(key, 0) >= cap:
+                        continue    # that video is in the film enough already
+                    if donor_id not in self.position or donor.get("lane") in ("reuse", "card", "image"):
+                        continue
+                    if donor["tile"]["source"].get("provider") not in ("bilibili", "pixabay"):
                         continue
                     if FUNERAL.search(donor["tile"]["source"].get("title", "")) and not DEATH_LINE.search(shot["narration"]):
                         continue
@@ -3448,18 +3482,21 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     if start is None:
                         continue
                     reserved.setdefault(key, []).append((start, start + need))
-                    jobs.append((f"{sid}#r", sid, donor | {"start": round(start, 2), "lane": "repeat",
-                                                           "base_lane": donor.get("base_lane", donor["lane"]),
-                                                           "repeat_of": donor_id}))
+                    jobs.append((f"{sid}#r{tag}", sid, donor | {"start": round(start, 2), "lane": "repeat",
+                                                                "base_lane": donor.get("base_lane", donor["lane"]),
+                                                                "repeat_of": donor_id}))
                     shots_from[key] = shots_from.get(key, 0) + 1
                     places.setdefault(key, []).append(self.position[sid])
                     break
+            if not jobs:
+                return 0
             self.job_choice.update({job_id: c for job_id, _, c in jobs})
             got, failed, bad, running = self.download(jobs, streams, qa=checking,
                                                        deadline=time.monotonic() + (45 + 0.3 * max(0, len(jobs) - 10)) * self.share())
             failures.update(failed)
             qa_bad.update(bad)
             carried = settle(carried, got, bad, running, last=True)   # late clips of the main rounds win
+            filled = 0
             for job_id, sid, choice in jobs:
                 if sid in final:
                     continue
@@ -3475,6 +3512,12 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     final[sid] = choice | {"qa": "pass" if checking and job_id not in self.qa_unchecked else "unchecked",
                                            "job": job_id}
                     files[sid] = got[job_id]
+                    filled += 1
+            return filled
+        if pending:
+            # Another moment of a video already in the film, only where the library had nothing new.
+            began = time.monotonic()
+            other_moments(pending, SOURCE_MAX, "")
             pending = [s for s in pending if s["id"] not in final]
             stamp("repeat", began)
         failures.update(self.stop_downloads())
@@ -3528,7 +3571,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
             later = [s for s in cards if s["id"] not in early_ids]
             if later:
                 try:
-                    pictured.update(self.image_fill(later))
+                    pictured.update(self.image_fill(later, final))
                 except (media.Cancelled, Budget):
                     raise
                 except Exception as exc:   # noqa: BLE001 — borrowing still follows
@@ -3557,6 +3600,17 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 self.notes.append(f"{filled} 镜用素材库里同一主题的新视频补上")
             cards = [s for s in cards if s["id"] not in final]
             stamp("library_d", began)
+        if cards:
+            # Before any clip is shown a second time: another moment of a video already in the film, one window more
+            # than the usual limit (a different scene of it reads far less as a repeat than the same seconds twice).
+            self.abandon.clear()
+            began = time.monotonic()
+            moments = other_moments(cards, SOURCE_MAX + 1, "2")
+            failures.update(self.stop_downloads())
+            if moments:
+                self.notes.append(f"{moments} 镜用了片子里已有视频的另一段（不同的场景），没有重复同一段画面")
+            cards = [s for s in cards if s["id"] not in final]
+            stamp("repeat2", began)
         reused = 0
         for shot in list(cards):
             # The same clip a second time (never next to itself), from a video the film shows only once so far.
@@ -3664,7 +3718,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 # "没有不重复的视频就用动态的、符合的新闻图片").
                 self.progress(89, f"全片检查：给 {len(pending)} 个重复镜头找相关图片")
                 try:
-                    photos = self.image_fill(pending)
+                    photos = self.image_fill(pending, final)
                 except (media.Cancelled, Budget):
                     raise
                 except Exception as exc:   # noqa: BLE001 — they keep what they had
@@ -3676,13 +3730,24 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                         pictured += 1
                 replaced += pictured
                 pending = [s for s in pending if s["id"] not in final]
+            again = [s for s in pending if re.search(r"第二次出现|几乎一样", redo.get(s["id"], ""))]
+            moved = 0
+            if again:
+                # The same clip shown twice and nothing new for it: at least another scene of a video already in the film.
+                self.abandon.clear()
+                moved = other_moments(again, SOURCE_MAX + 1, "x")
+                failures.update(self.stop_downloads())
+                replaced += moved
+                pending = [s for s in pending if s["id"] not in final]
             for sid, (choice, path) in kept.items():
                 if sid not in final:
                     final[sid], files[sid] = choice, path
             if pictured:
                 self.notes.append(f"全片检查：{pictured} 个重复镜头换成了相关图片（慢慢推拉的动态画面）")
-            if replaced - pictured:
-                self.notes.append(f"全片检查：{replaced - pictured} 个重复或没检查过的镜头换成了素材库里的新视频")
+            if moved:
+                self.notes.append(f"全片检查：{moved} 个重复镜头换成了片中已有视频的另一段（不同的场景）")
+            if replaced - pictured - moved:
+                self.notes.append(f"全片检查：{replaced - pictured - moved} 个重复或没检查过的镜头换成了素材库里的新视频")
             if len(redo) > replaced:
                 self.notes.append(f"全片检查：还有 {len(redo) - replaced} 个镜头没找到更好的画面（"
                                   + "；".join(sorted(set(redo.values())))[:80] + "）")
@@ -3731,7 +3796,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                 if faulty:
                     # A related photo, moving slowly, before a clip of this film is shown a second time (11-04).
                     try:
-                        photos = self.image_fill(faulty)
+                        photos = self.image_fill(faulty, final)
                     except (media.Cancelled, Budget):
                         raise
                     except Exception as exc:   # noqa: BLE001 — borrowing follows

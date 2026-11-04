@@ -441,6 +441,10 @@
 - 图片：非新闻稿素材库补不上时先上图片、再"同源别段"（repeat）；成片终审的硬伤先换图片再借用；`image_fill` 所有稿子都按话题共享搜索（360 限流）。
 - `jinggao/picture_plugin.py`：用户自己接的图片来源（百度图片要过反爬，不在这里做），`sources.custom_images` 包一层，排在 360 前；
   报告 `pictures.custom_found/custom_failed`。
+- 宿舍机 r50（客户三篇：菲律宾防长/周群飞/继父，同时 3 条）：旧 868 s、新 1189 s；三连以上重复 3→0 镜、同源第三次起 8→3、相邻同源 3→1，
+  但成对重复 4+1 组 → 8 对，全是最后一步"借用同一段"（reuse）：两轮 360 都被拒（21:17 写了 so360-refused，停 30 分钟），图片顶不上，规则又更严。
+  → 加 `other_moments`（原 repeat 步抽出来）：借用同一段之前先取已用视频的另一段（上限 SOURCE_MAX+1、相隔 SCENE_GAP、不相邻），全片检查里
+  重复的也先走它；`image_fill` 一条片子内按 URL 记判定（`picture_cache`，不重复下载/识字）、已在片中的图不再当候选、全片找图 `PICTURE_FILM_SECONDS` 300 秒。
 - 不做：用户建议没画面时镜像翻转。翻转后还是同一段画面（观众和平台的重复判定都看得出），画面里的字也会反过来；改成用图片顶。
 - 素材库 seed-1104：262,650 个视频，45,426 段体检 / 13,381 个视频（seed-1102 是 35,093 / 9,590），从 mini 的体检库 check-mini/data 导出。
 - 测试：tests/test_repeats_1104.py；test_express.py 里三条 NBA 回放测试改成体育域、audit 测试改成像的只留一个。
