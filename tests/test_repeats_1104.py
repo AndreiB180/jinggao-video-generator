@@ -245,3 +245,9 @@ def test_pictures_are_judged_once_a_film_and_searched_within_its_budget(data, mo
     # The film's picture time is used up: no more searching.
     m.picture_spent = express_match.PICTURE_FILM_SECONDS
     assert m.image_fill(m.shots) == {} and m.picture_stats.get("out_of_budget") == 1
+
+
+def test_the_final_review_saying_someone_else_is_read_as_a_wrong_person():
+    assert express_match.WRONG_PERSON.search("前两张截图为俄罗斯总统普京，口播讲菲律宾防长，明显张冠李戴")
+    assert express_match.WRONG_PERSON.search("中间镜头人物非周群飞本人")
+    assert not express_match.WRONG_PERSON.search("口播讲2015年手机玻璃，画面是古代城门建筑")

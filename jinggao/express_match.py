@@ -88,6 +88,9 @@ MARK_REASON = re.compile(r"水印|台标|账号|署名|平台|素材站|角标|�
 OTHER_FAULT = re.compile(r"花字|中间|竖屏|黑边|画中画|模糊|黑屏|性暗示|暴露|血腥|暴力|表情包|卡通|游戏|主持|PPT|截图|外国")
 HARD_FAULT = re.compile(r"水印|台标|账号|署名|平台名|素材站|角标|花字|字幕|竖屏|黑边|画中画|模糊|黑屏|性暗示|暴露|内衣|泳装|"
                         r"擦边|亲热|血腥|暴力|表情包|鬼脸|卡通|游戏|PPT|截图")
+# The final review saying a photo or clip of a named person shows someone else (a 普京 portrait on a line about the
+# Philippine defence minister, 11-04): never kept, and no new photo found by the same name.
+WRONG_PERSON = re.compile(r"张冠李戴|不是.{0,8}本人|并非.{0,8}本人|非.{0,4}本人|明显是(?:别人|他人|另一)|认错")
 SPORTS = re.compile(r"NBA|CBA|篮球|足球|排球|网球|乒乓|羽毛球|比赛|赛事|体育|世界杯|奥运|联赛|F1|拳击|UFC|斯诺克|台球|集锦|全场回放")
 POOL_CARRIES = 0.4      # share of a film the pool must already fill before the library stays out of its lines
 POOL_GRID = 20.0        # the sweep may start a window every this many seconds of a pool video, not only at its previews
@@ -1539,7 +1542,8 @@ class Matcher:
     # ------------------------------------------------------------ pictures
     IMAGE_PICK = """每一行是一句口播（行首黄色编号）和几张网上找来的候选图片（行内从左到右是第1、2、3、4张）。
 为每句挑一张放在这句话下面的图片。这是没有视频时的补位画面：和口播讲的人、事、地方、话题大致相关就可以选，画面干净清楚最重要。
-口播讲到某个具名人物时，优先选这个人本人的照片（新闻照、会议照、肖像都可以），不要选明显是别人的照片。
+口播讲到某个具名人物时，优先选这个人本人的照片（新闻照、会议照、肖像都可以），不要选明显是别人的照片；
+认得出图里是另一位知名人物（比如别国领导人）的，不选。
 不要：文字多的图（海报、截图、图表、聊天记录）；带明显水印、网站logo或二维码的；表情包、漫画、卡通；
 画质很差或模糊的；人脸打了马赛克的；口播讲中国的人和事却明显是外国人或外国街景的。都不合适就填 0。
 只输出 JSON：{"S3":2,"S5":0}"""
@@ -3781,6 +3785,8 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                         recropped += 1
             if recropped:
                 self.notes.append(f"成片终审：{recropped} 个镜头的水印/字幕在角上或边上，已裁掉")
+            # A photo found by the person's name has no title to vouch for it: when the review sees someone else, it goes.
+            exempt -= {sid for sid, why in final_bad.items() if WRONG_PERSON.search(why) and final[sid].get("lane") == "image"}
             redo_final = {sid: why for sid, why in final_bad.items() if sid not in exempt}
             if redo_final:
                 kept = {sid: (final.pop(sid), files.pop(sid, None)) for sid in redo_final}
@@ -3791,7 +3797,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     final_fixed += fill_from_library("f", "all", per_line=LIB_FILL_PER_LINE + 1, seconds=AUDIT_SECONDS)
                 failures.update(self.stop_downloads())
                 faulty = [s for s in self.shots if s["id"] in redo_final and s["id"] not in final
-                          and HARD_FAULT.search(final_bad.get(s["id"], ""))]
+                          and HARD_FAULT.search(final_bad.get(s["id"], "")) and not WRONG_PERSON.search(final_bad.get(s["id"], ""))]
                 final_pictured = 0
                 if faulty:
                     # A related photo, moving slowly, before a clip of this film is shown a second time (11-04).
@@ -3818,7 +3824,7 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                         continue
                     shot = self.shots_by_id_all[sid]
                     donor = None
-                    if HARD_FAULT.search(final_bad.get(sid, "")):
+                    if HARD_FAULT.search(final_bad.get(sid, "")) or WRONG_PERSON.search(final_bad.get(sid, "")):
                         # Never the clip a neighbouring line already shows (two flagged neighbours borrowed one clip
                         # and it ran three times, twice in a row, in a test film).
                         index = self.position[sid]
