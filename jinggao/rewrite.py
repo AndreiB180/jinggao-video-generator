@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import uuid
 
 from . import costs, planner, subtitle_style
 
@@ -69,6 +70,14 @@ def unsupported_numbers(script: str, source: str) -> list[str]:
         if number not in have and number not in found:
             found.append(number)
     return found
+
+
+def _own(project_id: str) -> str:
+    """A shared label (news, rewrite, benchmark) gets a fresh id for each rewrite: the per-project model cap
+    (¥0.30) summed every rewrite ever made under the label, and 对标采集 stopped for good after about twenty
+    scripts (11-05). Rewrites stay under the daily cap."""
+    project_id = str(project_id or "rewrite")
+    return project_id if re.fullmatch(r"[0-9a-f]{32}", project_id) else f"{project_id}-{uuid.uuid4().hex[:12]}"
 
 
 def _scope(project_id: str, stage: str):
@@ -149,6 +158,7 @@ def from_crawler(koubo: str, source: str, *, title: str = "", project_id: str = 
     script = clean_script(koubo)
     if len(re.sub(r"\s+", "", script)) < 50:
         raise ValueError("爬虫口播稿太短")
+    project_id = _own(project_id)
     checked = fact_check(script, str(source or "")[:MAX_SOURCE], project_id=project_id, check=check)
     script = checked["script"]
     return {"title": title.strip()[:40], "script": script, "target_chars": len(re.sub(r"\s+", "", koubo)),
@@ -163,6 +173,7 @@ def rewrite(source: str, *, title: str = "", minutes: float | None = None, aspec
     if len(re.sub(r"\s+", "", source)) < 30:
         raise ValueError("素材太短，至少需要 30 个字")
     source = source[:MAX_SOURCE]
+    project_id = _own(project_id)
     target = target_chars(source, minutes)
     line = subtitle_style.line_chars_for(aspect)
     system = SYSTEM.replace("{line}", str(line)).replace("{target}", str(target))

@@ -65,13 +65,16 @@ def _runtime(directory: str):
         import numpy as np
         import onnxruntime as ort
         import kaldi_native_fbank as knf
-    except ImportError:
-        raise ValueError("本地字幕组件未安装，请运行字幕组件安装脚本；不会自动调用付费模型") from None
+    except ImportError as exc:
+        # On Windows this is nearly always a missing Microsoft C++ runtime (MSVCP140.dll): the package carries
+        # its own copy in runtime/python since 0.7.8, so the message names the fix rather than a script.
+        raise ValueError(f"本地字幕组件加载失败（{str(exc)[:120]}）：请装微软 VC++ 运行库 "
+                         "https://aka.ms/vs/17/release/vc_redist.x64.exe 后重开镜稿") from None
     root = Path(directory)
     for name, digest in FILES.items():
         target = root / name
         if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
-            raise ValueError("本地字幕模型未安装或校验失败，请运行字幕组件安装脚本")
+            raise ValueError(f"本地字幕模型缺文件或文件不完整（{root / name}）：请把镜稿压缩包完整解压后再打开")
     options = ort.SessionOptions()
     options.intra_op_num_threads = 4
     options.inter_op_num_threads = 1

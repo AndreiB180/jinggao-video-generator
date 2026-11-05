@@ -210,6 +210,8 @@ def main():
     store.init()
     store.recover("main")
     store.recover("background")
+    from jinggao import tidy
+    tidy.start()      # old finished projects and stale download caches, ten minutes in and every six hours
     checking.join(90)
     print(gpu.summary(card) if card.get("checked") else "显卡检测未完成，先用 CPU 合成", flush=True)
     from jinggao import power

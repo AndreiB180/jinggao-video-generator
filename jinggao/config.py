@@ -15,7 +15,7 @@ DEFAULTS = {
     "planning_model": "", "requirements_model": "", "review_model": "", "rewrite_model": "",
     "tts_provider": "edge_tts", "edge_tts_voice": "zh-CN-YunxiNeural", "qwen_tts_voice": "Ethan", "tts_speed": "1.1", "tts_daily_budget_cny": "5.00", "index_daily_budget_cny": "2.00",
     "tts_migrated": "", "tts_migrated_edge": "",
-    "export_dir": "", "auto_save_exports": "1",
+    "export_dir": "", "auto_save_exports": "1", "project_keep_days": "7",
     "tts_base_url": "https://api.openai.com/v1",
     "tts_api_key": "", "tts_model": "", "tts_voice": "alloy",
     "tts_pricing_json": "",
@@ -191,6 +191,8 @@ def update(values: dict) -> dict:
         raise ValueError("制作流程须为 express 或 classic")
     if values.get("auto_save_exports", "1") not in ("0", "1"):
         raise ValueError("自动保存开关须为 0 或 1")
+    if not str(values.get("project_keep_days", "7")).isdigit() or int(values.get("project_keep_days", "7")) > 3650:
+        raise ValueError("旧项目保留天数须为 0–3650 的整数（0 = 不自动清理）")
     if values.get("export_dir", "") and not os.path.isabs(os.path.expanduser(values["export_dir"])):
         raise ValueError("成片保存位置须是完整的文件夹路径")
     if values.get("express_final_check", "1") not in ("0", "1"):

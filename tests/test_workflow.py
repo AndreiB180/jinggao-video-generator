@@ -166,7 +166,8 @@ def test_real_mp4_export_with_audio_subtitles_and_sources(client, monkeypatch):
     streams = media.probe(video)["streams"]
     assert {s["codec_type"] for s in streams} == {"video", "audio"}
     assert next(s for s in streams if s["codec_type"] == "video")["width"] == 1280
-    with zipfile.ZipFile(paths.file_path(p["id"], export["bundle"])) as z:
+    assert not paths.file_path(p["id"], export["bundle"]).exists()     # made on first download (0.7.8)
+    with zipfile.ZipFile(media.bundle(paths.file_path(p["id"], export["bundle"]).parent)) as z:
         assert set(z.namelist()) == {"video.mp4", "sources.json", "subtitles.srt", "project.json"}
         assert "钢轨" in z.read("subtitles.srt").decode("utf-8-sig")
         assert json.loads(z.read("sources.json"))[0]["overlay_label"] == "通用铁路工程资料图"

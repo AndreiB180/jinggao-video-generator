@@ -422,6 +422,29 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.8：新 Win11 字幕起不来、对标采集、硬盘被占满（2026-11-05，包 = 用户 0.7.7 + 下面的文件）
+
+- **字幕组件**：onnxruntime 和 kaldi_native_fbank 依赖 MSVCP140.dll / MSVCP140_1.dll（VC++ 运行库）。包里原来只有 Python 自带的
+  vcruntime140(_1).dll，客户重装 Win11 后 `import onnxruntime` 失败，local_asr 报"请运行字幕组件安装脚本"（包里并没有这个脚本）。
+  0.7.8 把两个 DLL（14.51.36247，微软签名，取自宿舍机 System32，VC++ 可再发行文件允许随程序放）放进 runtime/python；
+  宿舍机实测四个运行库都从 runtime\python 加载。build_windows.py 从 data/vc-runtime/ 拷这两个文件（data/ 不进 git，mini 上已放好），缺了就报错。
+  报错改成写出真实原因和 vc_redist 链接。
+- **硬盘**：data/projects 只增不减（软件没有删除项目）。每条片子 = 下载的素材 + exports/video.mp4 + 同样大的 delivery.zip + 镜稿成片里一份。
+  宿舍机 394 个项目 281 GB（assets 159、exports 116）。改：render 不再写 delivery.zip（`media.bundle` 在下载时现做，api get_file）；
+  `media.place` 硬链接到输出文件夹，跨盘才复制；新 `jinggao/tidy.py`：成片在输出文件夹、`project_keep_days`（默认 7，"0" 关）天没动、
+  没有排队/运行任务、不是素材库项目 → 删 jobs/projects 行和项目文件夹（launch.py 起线程，10 分钟后一次、之后每 6 小时）；
+  cache/express 的 bili-shots、pixabay-files、pixabay-thumbs 14 天没写的删。宿舍机试算：159 个项目、133 GB。宿舍机测试包设了 "0"。
+- **改写预算**：rewrite.rewrite/from_crawler 用固定 project_id（"benchmark"/"rewrite"/"news"），costs 的"项目累计"¥0.30 对它是终身上限，
+  对标改写二十来篇后永远失败。`rewrite._own` 给非真实项目的每次改写一个新 id；仍受每日上限。
+- 用户包里的 benchmark.py / api.py / models.py（含 kedou/好看部分，不进公开仓库）也改了：添加作者先加能加的、`added_note` 说明没加的；
+  BenchmarkAuthors 上限 10 万字；对标文件夹改成 1-原视频 / 2-原文案 / 3-改写好的文案 / 4-封面（旧名首次使用时改名），转写完删视频，
+  送批量的稿子移到 DATA/benchmark-sent。前端 dist 打补丁（无源码）：添加后显示 added_note、对标窗口的 alert/status 固定在底边（CSS sticky）、
+  文件夹按钮改名排序；资源文件改名 index-Jg078KJR.js / index-Jg078De0.css 防浏览器缓存。
+- **教训**：在宿舍机点「转写洗稿」前没看 1-原视频 里有多少：里面有 11-04 采集测试下的 131 个视频，转了 20 个（按新规则删了视频，文字在
+  2-原文案 / 3-改写好的文案）才停。动带删除的流程前先看输入文件夹。
+- 字幕错别字（用户 11-05 提）：SRT 文字 = 项目稿子；音频成片的稿子是本机 paraformer 识别 + script_norm 保守纠错，对标改写的原话也是本机识别。
+  没留识别接口。可选：百炼云端识别（同 Key）为主、本机为后备。待用户看例子。
+
 ## 0.7.7：重复镜头、一闪而过、太长的镜头、图片顶重复（2026-11-04，包 = 用户的 0.7.6 + 这里的改动）
 
 0.7.5/0.7.6 是用户自己在包里改的（对标采集那部分），源码只在 mbp2 `~/Documents/Jinggao-Windows-x64`，

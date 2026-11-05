@@ -347,6 +347,31 @@ def day_folder(when: float | None = None) -> str:
     return f"{t.tm_mon}月{t.tm_mday}日 单条"
 
 
+def place(source: Path, target: Path) -> None:
+    """The finished film in the output folder without a second copy on disk: a hard link when both are on one
+    drive (deleting either name leaves the other whole), else a copy."""
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copyfile(source, target)
+
+
+def bundle(folder: Path) -> Path:
+    """An export's 完整交付包 (video, subtitles, sources, project), stored uncompressed, made on first download."""
+    target = folder / "delivery.zip"
+    names = [n for n in ("video.mp4", "subtitles.srt", "sources.json", "project.json") if (folder / n).is_file()]
+    if not target.is_file() and "video.mp4" in names:
+        temporary = paths.temporary(target)
+        try:
+            with zipfile.ZipFile(temporary, "w", zipfile.ZIP_STORED) as pack:
+                for name in names:
+                    pack.write(folder / name, name)
+            paths.publish(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return target
+
+
 def deliver(project: dict, result: dict) -> str:
     """Copy a finished export to the output folder as <title>.mp4, inside the batch's dated subfolder (films made
     one at a time: one folder a day); the subtitle file goes one level down so players that auto-load a
@@ -362,7 +387,7 @@ def deliver(project: dict, result: dict) -> str:
         stem, n = f"{name}（{n}）", n + 1
     root = paths.project_dir(project["id"])
     video = folder / f"{stem}.mp4"
-    shutil.copyfile(root / result["path"], video)
+    place(root / result["path"], video)
     srt = (root / result["path"]).with_name("subtitles.srt")
     if srt.exists():
         (folder / SUBTITLE_FOLDER).mkdir(exist_ok=True)
@@ -811,9 +836,8 @@ def render(project: dict, job_id: str, options: dict, progress, check) -> dict:
     (out / "subtitles.srt").write_text("\n".join(srt_rows), "utf-8-sig")
     (out / "sources.json").write_text(json.dumps(source_list, ensure_ascii=False, indent=2), "utf-8")
     (out / "project.json").write_text(json.dumps(project, ensure_ascii=False, indent=2), "utf-8")
-    with zipfile.ZipFile(out / "delivery.zip", "w", zipfile.ZIP_STORED) as bundle:
-        for name in ("video.mp4", "subtitles.srt", "sources.json", "project.json"):
-            bundle.write(out / name, name)
+    # delivery.zip is made when its link is opened (bundle()): written here it was a second full copy of every
+    # film, ~40% of the space projects took on a customer's disk.
     result = {"id": job_id, "path": final.relative_to(root).as_posix(),
               "bundle": (out / "delivery.zip").relative_to(root).as_posix(), "created": time.time(),
               "duration": elapsed, "width": w, "height": h,

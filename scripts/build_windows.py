@@ -210,6 +210,21 @@ def bundle_captions(source, model_directory):
     return copied
 
 
+VC_RUNTIME = ("msvcp140.dll", "msvcp140_1.dll")
+
+
+def bundle_vc_runtime(directory):
+    """onnxruntime and kaldi_native_fbank import MSVCP140(_1).dll, which Python does not ship and a fresh Windows 11
+    lacks: captions and text reading failed to load on a reinstalled customer PC (11-05). The redistributable
+    files (from System32 of a machine with the VC++ 2015-2022 runtime) sit next to python.exe, where Windows
+    finds them first."""
+    for name in VC_RUNTIME:
+        if not (directory / name).is_file():
+            raise ValueError(f"VC++ runtime missing: {directory / name} (copy it from System32 of a Windows machine "
+                             "with the VC++ 2015-2022 redistributable)")
+        shutil.copy2(directory / name, OUTPUT / "runtime" / "python" / name)
+
+
 def bundle_ocr(source, model_directory):
     """The two public text-reading models (PP-OCRv6 small, Apache-2.0), hash-pinned in jinggao/screen_text.py.
     Without them the app would not find uploaders' contact text and burned-in subtitles, so they are required."""
@@ -311,6 +326,7 @@ def package(release_path=None, model_directory=None, requirements=ROOT / "requir
             # Subtitle alignment works offline from the first start (no model download on the customer's PC).
             model_manifest = bundle_captions(ROOT, model_directory)
         model_manifest.update(bundle_ocr(ROOT, ROOT / "data" / "models" / "ocr"))
+        bundle_vc_runtime(ROOT / "data" / "vc-runtime")
         if semantic:
             model_manifest.update(bundle_semantic())
     defaults = OUTPUT / "defaults.json"

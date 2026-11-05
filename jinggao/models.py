@@ -172,7 +172,7 @@ class FileAction(Strict):
 
 
 class BenchmarkAuthors(Strict):
-    links: str = Field(min_length=1, max_length=5000)
+    links: str = Field(min_length=1, max_length=100000)     # a long pasted list is answered by add_authors itself
 
 
 class BenchmarkMark(Strict):

@@ -983,6 +983,8 @@ def create_app() -> FastAPI:
     def get_file(pid: str, relative: str, download: bool = False):
         store.get_project(pid)
         path = paths.file_path(pid, relative)
+        if path.name == "delivery.zip" and not path.is_file():
+            media.bundle(path.parent)       # made on first download since 0.7.8
         if not path.is_file():
             raise HTTPException(404, "文件不存在")
         return FileResponse(path, filename=path.name if download else None)
