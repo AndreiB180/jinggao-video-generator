@@ -422,6 +422,18 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.10：对标采集几处修正（2026-11-05 夜，包 sha256 c2bd47ab…）
+
+客户试 0.7.9 的反馈，都在用户版前端 + 用户包 benchmark.py/api.py（build-tmp/fix-078/new，overlay-0710，make0710.sh）：
+- 爆款 90 条却下了 198 条：`picked` 不随筛选收缩（7 天全选后切 3 天，表头仍显示全选）。现在 `sel` = 勾选 ∩ 当前列表，换筛选自动去掉看不见的；
+  底栏"已选 N / M 条"、按钮"下载这 N 条"。
+- 宽屏找不到下载按钮：fixed 底栏的内容放进与表格同宽的 `.bench-actionbar-in`（注意 ≥1800px 时 body zoom 1.15，别用 vw 算对齐）；
+  「下载转写」页顶上加"「爆款视频」里已选 N 条 · 下载这 N 条"。
+- MAX_AUTHORS 50 → 300；`/api/benchmark/scan` 改为 `scan_start()` 后台线程（`state()["scan"]` 进度，重复调用不另开），前端轮询显示"读取 x/y"。
+  每作者 GAP 3 s + 首页 + 3 天约一页翻页，估 6–8 s/人，200 人约 20–25 分钟（未实测真站）。
+- 改写好的稿只显示 3 天内（按天分组、新的在上），更早的点"显示 3 天前的 N 篇"；"删除选中"批量删（逐篇调 /benchmark/review/delete）。
+宿舍机 Edge 1920 宽 CDP 实测上述各点；后台读取在 mini 上用假 _fetch 测 300 人。公开仓库的 benchmark.py/前端没跟着改（它的对标页还是旧的同步刷新）。
+
 ## 0.7.9：对标采集改成独立页面（2026-11-05 晚，包 sha256 0d223064…）
 
 客户嫌对标采集弹窗一直往下滑太乱，给了同行工具的截图（每步一个标签页）。0.7.9 = 0.7.8 + 新的对标采集页（4 个标签：对标作者 / 爆款视频 /
