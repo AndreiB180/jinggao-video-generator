@@ -422,6 +422,14 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.9：对标采集改成独立页面（2026-11-05 晚，包 sha256 0d223064…）
+
+客户嫌对标采集弹窗一直往下滑太乱，给了同行工具的截图（每步一个标签页）。0.7.9 = 0.7.8 + 新的对标采集页（4 个标签：对标作者 / 爆款视频 /
+下载转写 / 改写好的稿，整窗、`#bench` 可单开窗口、提示就近显示、改稿左右分栏、粘贴视频链接下载、停止）。这一页的源码含用户的下载/登录界面，
+**不在这个公开仓库**：在 /Volumes/Data/Projects/镜稿/用户版前端/（= 本仓库 frontend 的副本 + 新 BenchmarkPanel.tsx，node_modules 链回这里；
+用户包的前端以后从那里 `npx vite build`）。用户包 benchmark.py 加了 stop()/`/api/benchmark/stop`、state 的 cookie/root/max_authors、
+review() 全文（原来截 4000 字）。宿舍机用 Edge 无头 + CDP（runtime 自带 websocket-client）点过每页，脚本在会话 scratchpad 的 uitest.py 思路。
+
 ## 0.7.8：新 Win11 字幕起不来、对标采集、硬盘被占满（2026-11-05，包 = 用户 0.7.7 + 下面的文件）
 
 - **字幕组件**：onnxruntime 和 kaldi_native_fbank 依赖 MSVCP140.dll / MSVCP140_1.dll（VC++ 运行库）。包里原来只有 Python 自带的
