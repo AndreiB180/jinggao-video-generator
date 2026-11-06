@@ -427,8 +427,11 @@ def merge_short(project: dict, indices: list[int]) -> None:
         group["shots"] = [sid for sid in group.get("shots", []) if any(s["id"] == sid for s in shots)]
 
 
-OPENING = ("\nS1 是全片开头的钩子，观众看不看下去就看它：S1 单独成一组，检索词写开头这件事最具体、最有冲击力的现场画面"
-           "（事件现场、冲突场面、当事人、标志性地点），不要写概念或泛泛的场景。")
+# 11-06: S1 alone in its group (10-24) searched "the event's most striking scene" from one hook sentence and often
+# found nothing that fits it, while S2, grouped with the lines around it, matched well ("第一句话匹配不好，第二句话
+# 匹配得特别好"). S1 now shares its group with the lines that tell the same thing, and the queries name what they say.
+OPENING = ("\nS1 是全片开头的钩子，观众看不看下去就看它：S1 和后面讲同一件事的一两句放在同一组，检索词写这几句里"
+           "说到的具体人物、地点、事件现场，不要写概念或泛泛的场景。")
 
 
 def _ask(shots: list[dict], requirements: str, check=None, opening: bool = False) -> tuple[dict, dict]:

@@ -3090,9 +3090,10 @@ wm：bad 里因为水印、台标、账号名、平台名、字幕条列出的�
                     if other["id"] != sid and not other.get("persons"):
                         neighbours += picks.get(other["id"], [])
                 fill += [(t, "neighbor") for t in neighbours]
-            if index == 0:
+            if index == 0 and not picks.get(sid):
                 # The opening line hooks the viewer and usually sums up what the next lines tell: when it has no
-                # pick of its own, the next lines' picks come before any filler.
+                # pick of its own, the next lines' picks come before any filler. (It chooses first: with picks of
+                # its own it took the next line's best footage whenever QA turned its own down, 11-06.)
                 own += [(t, "pick") for other in self.timeline[1:4] for t in picks.get(other["id"], [])]
             seen, merged = set(), []
             for tile, lane in own + fill:
