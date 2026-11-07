@@ -36,6 +36,11 @@ SHAPES = {"landscape": ("16:9", "横版", (1920, 1080)), "portrait": ("9:16", "�
 BACKGROUND = ("为这期视频画一张百家号封面的背景图。画面里不要出现任何文字、字母、数字、标志和水印。"
               "主体人物或场景放在画面右侧，左侧留出较暗、干净的区域放标题。写实、电影感、冲击力强，"
               "符合百家号读者的喜好。")
+# Added to every AI prompt, the customer's own too: a cover drawing 习近平 (from a frame of the film sent as the
+# reference picture, whose prompt said "use its people") was rejected by the platform as a violation (11-08).
+NO_LEADERS = ("画面里不要出现中国党和国家领导人（现任和历任）的脸、照片或形象，参考图或标题里有也不要画；"
+              "要表现他们时，用国旗、会场、建筑、地图或看不清脸的人物背影代替。")
+REFERENCE = "参考图是这期视频里的画面，可以参考其中的场景和气氛。"
 AI_WAIT = 240          # seconds one AI cover may take
 SAMPLES = 5            # opening shots looked at for the picture
 YELLOW, WHITE, BLACK = (255, 222, 0), (255, 255, 255), (0, 0, 0)
@@ -365,7 +370,7 @@ def design(picture: Image.Image, parts: dict, shape: str = "landscape") -> Image
 
 
 PLAN_SYSTEM = """图片是一条视频开头几个画面的联系表，每格左上角有黄色编号。要为这条视频做百家号封面：
-1. frame：挑最适合做封面背景的一格编号。有人物正脸、冲突、爆炸、标志性地点或物件的优先；不要文字多、模糊、黑屏、表情包或只有空镜风景的。
+1. frame：挑最适合做封面背景的一格编号。有人物正脸、冲突、爆炸、标志性地点或物件的优先；不要文字多、模糊、黑屏、表情包或只有空镜风景的；不要有中国党和国家领导人（现任和历任）的格子，平台会判违规。
 2. 把标题拆成封面上的字，全部用标题里的原词，不编新内容：
    tag：栏目标签，从 国际焦点、深度揭秘、历史档案、财经观察、社会热点、人物故事、军事前沿、娱乐速递、体育风云、真相调查 里选最贴的一个；
    main：最抓人的一句（不超过14个字），超过6个字时用“｜”标出分两行的位置，断在两个词之间，最好断在意思的停顿处；sub：第二句（不超过16个字，可以为空）；ask：标题里的问句或悬念（不超过18个字，可以为空）。
@@ -557,8 +562,8 @@ def prompt_for(template: str, title: str, aspect_label: str, references: bool) -
     text = template.replace("{标题}", title) if "{标题}" in template else f"{template}\n\n标题：{title}"
     text += f"\n画面比例：{aspect_label}。"
     if references:
-        text += "\n参考图是这期视频里的画面，可以用其中的人物和场景。"
-    return text
+        text += "\n" + REFERENCE
+    return text + "\n" + NO_LEADERS
 
 
 def model_for(cfg: dict) -> str:
@@ -663,7 +668,8 @@ def render(cfg: dict, picture: Image.Image, parts: dict, title: str, folder: Pat
         try:
             prompt = (cfg.get("cover_prompt_background") or BACKGROUND).strip() + f"\n视频主题：{headline(title)}"
             if references:
-                prompt += "\n参考图是这期视频里的画面，可以用其中的人物和场景。"
+                prompt += "\n" + REFERENCE
+            prompt += "\n" + NO_LEADERS
             try:
                 picture = ai_picture(cfg, prompt, "landscape", references)
             except CoverError as exc:
