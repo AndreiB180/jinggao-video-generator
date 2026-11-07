@@ -208,8 +208,12 @@ def start(folder: str = "", titles: str = "", mode: str = "ai", sizes: str = "",
         raise ValueError("先选文件夹，或贴标题")
     rows = []
     for item in items:
-        have = all(t.exists() for t in _targets(item, sizes))
-        rows.append(item | {"state": "skipped" if have and not redo else "queued", "files": [], "error": ""})
+        targets = _targets(item, sizes)
+        have = all(t.exists() for t in targets)
+        skip = have and not redo
+        # a skipped one shows the cover it already has
+        rows.append(item | {"state": "skipped" if skip else "queued", "files": [str(t) for t in targets] if skip else [],
+                            "error": ""})
     todo = [r for r in rows if r["state"] == "queued"]
     with _lock:
         _run.update(running=bool(todo), done=0, total=len(todo), rows=rows, folder=where, mode=mode, sizes=sizes,
