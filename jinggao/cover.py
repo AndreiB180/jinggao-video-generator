@@ -530,6 +530,21 @@ class CoverError(RuntimeError):
     pass
 
 
+NO_CREDIT = "GrsAI 账户余额不足，去 grsai.ai 充值"
+BAD_KEY = "GrsAI 的 API Key 不对，去 grsai.ai 复制一个"
+
+
+def plain_reason(text: str) -> str:
+    """The image service's English answers the customer meets, in Chinese (11-07: "insufficient credits" on a new
+    account with no balance)."""
+    low = text.lower()
+    if "insufficient" in low or "余额不足" in text or "credits" in low and ("not enough" in low or "balance" in low):
+        return NO_CREDIT
+    if "unauthorized" in low or "invalid" in low and ("key" in low or "token" in low) or "api key" in low and "invalid" in low:
+        return BAD_KEY
+    return text
+
+
 def _data_url(image: Image.Image) -> str:
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, "JPEG", quality=85)
@@ -570,9 +585,13 @@ def ai_picture(cfg: dict, prompt: str, shape: str, references: list) -> Image.Im
         try:
             url = _drawn(client, host, headers, body)
         except CoverError as exc:
-            if "审核" in str(exc):
-                raise
-            url = _drawn_legacy(client, host, headers, body)    # the older per-model interface
+            reason = plain_reason(str(exc))
+            if "审核" in reason or reason in (NO_CREDIT, BAD_KEY):
+                raise CoverError(reason) from None
+            try:
+                url = _drawn_legacy(client, host, headers, body)    # the older per-model interface
+            except CoverError as again:
+                raise CoverError(plain_reason(str(again))) from None
         picture = client.get(url, timeout=120)
         picture.raise_for_status()
     with Image.open(io.BytesIO(picture.content)) as image:

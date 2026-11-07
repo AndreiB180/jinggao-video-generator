@@ -242,6 +242,11 @@ def _work(todo: list[dict], mode: str, sizes: str) -> None:
                 row.update(state="done" if files else "failed", files=files,
                            error=("用了排版封面：" + result["error"]) if files and result.get("error") else
                            ("" if files else result.get("error") or "没做出来"))
+            if result.get("error") in (cover.NO_CREDIT, cover.BAD_KEY):
+                # every AI cover after it would fail the same way: stop instead of drawing them all as 排版 covers
+                _stop.set()
+                with _lock:
+                    _run["note"] = result["error"] + "：弄好后勾「重做已有的」再点开始"
         except Exception as exc:  # noqa: BLE001 — the next one still goes
             with _lock:
                 row.update(state="failed", error=str(exc)[:160])
@@ -255,6 +260,8 @@ def _work(todo: list[dict], mode: str, sizes: str) -> None:
     finally:
         with _lock:
             _run.update(running=False, finished=time.time())
+            if _run["note"] and any(r["state"] == "stopped" for r in _run["rows"]):
+                _run["note"] += f"（还有 {sum(r['state'] == 'stopped' for r in _run['rows'])} 条没做）"
 
 
 def stop() -> dict:
