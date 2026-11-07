@@ -422,6 +422,34 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.13：做封面单独出来、对标去重、改写不再一字不差、稿子去乱符号（2026-11-07）
+
+客户 11-07 的反馈。对标部分在用户包（build-tmp/fix-0713：patch_bench.py 从 0.7.12 的 benchmark.py 生成 benchmark.py；api.py、models.py；
+overlay-0713、make0713.sh；前端在私有的用户版前端），其余在本仓库：
+- 做封面（`cover_batch.py`，用户包 `/api/covers*` + 前端 CoverPanel）：文件夹里的视频（标题先用 `film_titles` 从项目记录按 saved_to 找，
+  成片名是第一句、不是标题；项目 7 天被 tidy 掉后用文件名，去掉（2）（无字幕））、只有 .txt 的文件夹（对标批次取 改写好的文案，出图进「新封面」）、
+  贴的标题（`<成片>/做封面/<batch_folder(kind="封面")>`）。每条 `cover.choose`（有视频帧）或 `split_title`（纯文字，同一套拆字规则）→ `cover.render`，
+  模式 design/ai_bg/ai 由页面选；没视频时用 `backdrop()` 当排版底图、不送参考图。WORKERS=4，已有的跳过（redo 重做），stop 后剩下的不开始。
+  客户同行的封面（见 镜稿/客户反馈/11-07/同行封面样子.jpg）就是 gpt-image-2 整张生成那一类；GrsAI 11-07 官网价 gpt-image-2 ¥0.03、nano-banana-2-lite ¥0.022。
+  `media.choose_folder(initial, prompt)` 多了提示文字参数。
+- 改写一字不差（几台电脑同一篇洗出来一样）：`model_protocol.apply` 对千问一律 `temperature=0`（为审查稳定），改写跟着定死。
+  `planner.chat(temperature=…)` 新参数；`rewrite.rewrite` 写稿用 0.7（0.9 时编出过"七年时间"），每次随机抽 `STYLES` 讲法 + `TITLE_STYLES` 标题写法；
+  `copied()`（6 字片段落在原文里的比例）> 0.5 且原文 ≥ 300 字时重写一次取较低的（实测重写对 0.3 左右的帮助不大，所以只救最差的）。
+  mini 真千问：同一篇两次改写之间约 0.2（以前 1.0）。核对仍温度 0；改写和核对都带「今天是…」，核对的素材带标题，
+  `META` 拦掉"素材里没提过…""标题里说…"这类说明句（以前会被当成修正写进稿子）。
+- 稿子里的 \n、$$、空格、英文：`clean_script` 先把写出来的 `\n` 变换行、去 `$^~|\{}<>`、去中文之间空格；`foreign_words` 去掉原文（含标题）没有的拉丁字母串。
+  用户包 `benchmark.plain` 再去空行；`tidy_drafts` 在新版第一次 state() 时把旧稿清一遍（保留 mtime），`take_reviewed` 送批量时也清。
+- 去重（用户包 benchmark.py）：列表层 `popular()` 用 2 字片段在已拿过/改写过的标题里找（≥0.8 算同题），同次列表同题留播放多的；
+  内容层转写后 `duplicate_of`：4 字片段 crc32 取 1/16 抽样，和 45 天内的记录比，较短一方被覆盖 ≥0.2 即同一篇（客户 82 篇真稿：不同文章 ≤0.06，
+  同一篇被改写 0.45–0.48）→ 不改写、删视频，`made[stem]={"dup": "和…是同一篇"}`，行状态 duplicate。记录 DATA/benchmark-heard.json；
+  设置 `benchmark_share` 时每台另写 `<共享>/镜稿去重记录/<主机名>.json`、读别台的；`benchmark_split="N/k"` 按 crc32(vid)%N 分工。
+  改写失败 `forget`（重试不会和自己重复），成功 `_settle` 记上稿子路径。`benchmark_dedupe="0"` 关掉。
+- 114 条只出 77 条：Kedou（用户的 kedou.py，没改）用网页标题按第一个英文逗号截断当文件名，stem 对不上 `_safe(列表标题)`，
+  稿子进「转写」文件夹、不送出片；同名的第二条覆盖第一条。现在下载进 `1-原视频/下载中`，`_landed` 改名成列表标题（重名加（2）），记 `stems[vid]`；
+  `_send_if_wanted` 按稿子所在批次文件夹的 `makes[folder]` 送，开了下一批也照送。
+- 测试：用户包离线 `fix-0713/测试/test0713.py`（21 项）+ 0.7.12 的 test0712.py（30 项）；`test_covers.py`（排版真模型 3 条成片，AI 假接口）；
+  本仓库 tests 全跑（除 test_crawl_runs_the_configured_command_and_reports_failures，改动前就失败）。没测：真 Kedou/好看、真 GrsAI、宿舍机实点。
+
 ## 0.7.12：对标采集提速、每批一个文件夹、一键全自动；开头一句（2026-11-06，包 sha256 06be6cc7…）
 
 客户 11-06 上午的反馈。对标部分都在用户包（build-tmp/fix-0712、overlay-0712、make0712.sh；源码不进本仓库），开头一句在本仓库：

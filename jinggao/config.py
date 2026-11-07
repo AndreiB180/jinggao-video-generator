@@ -39,6 +39,8 @@ DEFAULTS = {
     "cover_sizes": "both", "cover_reference": "1", "cover_prompt_landscape": "", "cover_prompt_portrait": "",
     "news_crawler_dir": "", "news_crawler_command": "", "news_crawler_output": "",
     "news_crawler_limit": "5", "news_crawler_platforms": "",
+    # 对标采集 (0.7.13): skip articles already rewritten; several computers can share the record and split the list
+    "benchmark_dedupe": "1", "benchmark_share": "", "benchmark_split": "",
 }
 SECRETS = {k for k in DEFAULTS if k.endswith("api_key")}
 _lock = threading.Lock()
@@ -171,6 +173,10 @@ def update(values: dict) -> dict:
     for key in ("plan_workers", "match_workers", "render_workers"):
         if key in values and values[key] not in ("1", "2", "3", "4"):
             raise ValueError("并发数须为 1 到 4")
+    if values.get("benchmark_dedupe", "1") not in ("0", "1"):
+        raise ValueError("去重开关无效")
+    if values.get("benchmark_split", "").strip() and not re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", values["benchmark_split"]):
+        raise ValueError("几台电脑分工要写成 3/1 这样：共 3 台，这是第 1 台")
     if "video_workers" in values and values["video_workers"] not in ("1", "2", "3", "4", "5", "6"):
         raise ValueError("同时制作的视频须为 1 到 6 条")
     if values.get("marked_clips", "never") not in ("never", "last_resort"):

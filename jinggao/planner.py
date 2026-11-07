@@ -122,15 +122,20 @@ def json_response(content: str, *, strict=False) -> dict:
 
 def chat(system: str, content, *, vision: bool = False, max_tokens: int | None = None,
          timeout: float = 180, reasoning: bool = False, reasoning_effort: str | None = None,
-         task: str | None = None) -> tuple[dict, dict]:
+         task: str | None = None, temperature: float | None = None) -> tuple[dict, dict]:
+    """temperature: None keeps the provider setting (0 for Qwen: reviews must not fluctuate); writing tasks
+    (rewrite) pass a higher one so the same source does not come back word for word the same."""
     cfg = config.read()
     task = task or ("visual_review" if vision else "planning")
     model = model_routing.model(cfg, task, vision=vision)
     if not cfg["model_api_key"] or not model:
         raise ValueError("请在设置中填写模型 API Key 和模型名称")
     def prepare(rows):
-        return _prepare_chat_payload(cfg, model, system, rows, task=task, vision=vision,
+        prepared = _prepare_chat_payload(cfg, model, system, rows, task=task, vision=vision,
             max_tokens=max_tokens, reasoning=reasoning, reasoning_effort=reasoning_effort)
+        if temperature is not None:
+            prepared["payload"]["temperature"] = temperature
+        return prepared
     first = prepare(content)
     options = {"task": task, "timeout": timeout, "reasoning": reasoning, "reasoning_effort": reasoning_effort}
     if first["packet"]:

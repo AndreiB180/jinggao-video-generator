@@ -20,7 +20,7 @@ def data(tmp_path, monkeypatch):
 
 def test_clean_script_keeps_numbers_and_puts_one_sentence_per_line():
     text = "## 标题\n1.8场比赛。\n- 第一点：好！第二点。\n\n\n2. 他说：“好。”然后走了😀 #话题\n**加粗**"
-    assert rewrite.clean_script(text) == "标题\n1.8场比赛。\n第一点：好！\n第二点。\n\n他说：“好。”\n然后走了 话题\n加粗"
+    assert rewrite.clean_script(text) == "标题\n1.8场比赛。\n第一点：好！\n第二点。\n\n他说：“好。”\n然后走了话题\n加粗"
 
 
 def test_target_length_follows_the_source_and_the_wanted_minutes():
@@ -490,3 +490,35 @@ def test_crawler_platform_names_accept_chinese_commas_and_reject_typos(tmp_path,
     monkeypatch.setattr(config, "read", lambda: cfg)
     with pytest.raises(ValueError, match="未知的爬虫平台：tencnet"):
         news_crawler.crawl()
+
+
+def test_clean_script_drops_escaped_breaks_dollars_and_spaces():
+    text = "\\n普京刚宣布拿下库皮扬斯克。\\n短短一个半月后剧情反转。\n$$下一批人 照样会算同一笔账。"
+    assert rewrite.clean_script(text) == "普京刚宣布拿下库皮扬斯克。\n短短一个半月后剧情反转。\n下一批人照样会算同一笔账。"
+
+
+def test_foreign_words_keeps_only_english_the_source_has():
+    assert rewrite.foreign_words("这是GDP的事，n他们说 hello 世界\nok", "GDP增长") == "这是GDP的事，他们说世界"
+
+
+def test_rewrite_asks_for_a_random_way_of_telling_at_a_creative_temperature(monkeypatch):
+    seen = []
+    def chat(system, content, **k):
+        seen.append((system, k.get("temperature")))
+        return ({"script": "这是一段全新的口播。\n" * 8, "title": "新标题"} if k.get("temperature") else {"fixes": []}), {}
+    monkeypatch.setattr(planner, "chat", chat)
+    rewrite.rewrite("素材内容讲的是一件事情，" * 10, title="标题")
+    write = [s for s, t in seen if t]
+    assert len(write) == 1 and write[0] and seen[0][1] == rewrite.WRITE_TEMPERATURE
+    assert any(style in write[0] for style in rewrite.STYLES) and "{style}" not in write[0] and "{title_style}" not in write[0]
+    assert seen[-1][1] is None      # the fact check stays at the provider setting
+
+
+def test_a_fix_that_is_a_remark_about_the_source_is_not_read_out(monkeypatch):
+    line = "国家为此斥资高达六千七百亿。"
+    replies = iter([({"script": "\n".join([line, "这背后是整个行业的变化与竞争格局的重塑。", "每一家都在重新思考未来的路线。",
+                                            "这座新城到底建成了什么样子，咱们一起来看。"])}, {}),
+                    ({"fixes": [{"line": line, "fix": "标题里说当年计划斥资六千七百亿。"}]}, {})])
+    monkeypatch.setattr(planner, "chat", lambda *a, **k: next(replies))
+    result = rewrite.rewrite("雄安新区2017年设立，背后是整个行业的变化与竞争格局的重塑，每一家都在重新思考。", title="斥资6700亿")
+    assert result["script"].splitlines()[0] == line and result["unmatched_fixes"] == 1

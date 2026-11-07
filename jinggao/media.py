@@ -291,7 +291,7 @@ def reveal(target: Path) -> None:
         subprocess.Popen(["xdg-open", str(target.parent)])
 
 
-def choose_folder(initial: str = "") -> str | None:
+def choose_folder(initial: str = "", prompt: str = "选择成片保存位置") -> str | None:
     """The system's folder picker; returns the chosen folder, or None when cancelled or unavailable."""
     if os.name == "nt":
         # The chosen path comes back as Base64 of its UTF-8 bytes: a Chinese Windows console would otherwise
@@ -299,18 +299,18 @@ def choose_folder(initial: str = "") -> str | None:
         script = ("Add-Type -AssemblyName System.Windows.Forms;"
                   "$owner=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false};"
                   "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
-                  "$d.Description='选择成片保存位置';$d.ShowNewFolderButton=$true;"
+                  "$d.Description=$env:JINGGAO_PROMPT;$d.ShowNewFolderButton=$true;"
                   "if($env:JINGGAO_FOLDER){$d.SelectedPath=$env:JINGGAO_FOLDER};"
                   "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){"
                   "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($d.SelectedPath))}")
         command = ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script]
     elif sys.platform == "darwin":
-        command = ["osascript", "-e", 'POSIX path of (choose folder with prompt "选择成片保存位置")']
+        command = ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt.replace(chr(34), "")}")']
     else:
         return None
     try:
         done = subprocess.run(command, capture_output=True, timeout=900, creationflags=_windows_flags(),
-                              env=os.environ | {"JINGGAO_FOLDER": initial})
+                              env=os.environ | {"JINGGAO_FOLDER": initial, "JINGGAO_PROMPT": prompt})
     except (OSError, subprocess.SubprocessError):
         return None
     chosen = done.stdout.decode("utf-8", errors="replace").strip().splitlines()
