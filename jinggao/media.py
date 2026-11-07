@@ -292,18 +292,29 @@ def reveal(target: Path) -> None:
 
 
 def choose_folder(initial: str = "", prompt: str = "选择成片保存位置") -> str | None:
-    """The system's folder picker; returns the chosen folder, or None when cancelled or unavailable."""
+    """The system's folder picker; returns the chosen folder, or None when cancelled. A picker that cannot open
+    raises ValueError (the page says so; a typed or pasted path still works).
+    Windows: the dialog is owned by a small topmost window that is shown first. Opened by the background server, an
+    ownerless (or hidden-owner) dialog came up behind the browser and the customer saw nothing happen (11-07)."""
     if os.name == "nt":
         # The chosen path comes back as Base64 of its UTF-8 bytes: a Chinese Windows console would otherwise
         # hand over GBK text.
-        script = ("Add-Type -AssemblyName System.Windows.Forms;"
-                  "$owner=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false};"
+        script = ("$ErrorActionPreference='Stop';"
+                  "Add-Type -AssemblyName System.Windows.Forms;"
+                  "$owner=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false;"
+                  "Opacity=0;FormBorderStyle='None';StartPosition='CenterScreen';Width=1;Height=1};"
+                  "$owner.Show();$owner.Activate();"
                   "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
                   "$d.Description=$env:JINGGAO_PROMPT;$d.ShowNewFolderButton=$true;"
-                  "if($env:JINGGAO_FOLDER){$d.SelectedPath=$env:JINGGAO_FOLDER};"
-                  "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){"
+                  "if($env:JINGGAO_FOLDER -and (Test-Path -LiteralPath $env:JINGGAO_FOLDER)){$d.SelectedPath=$env:JINGGAO_FOLDER};"
+                  "$r=$d.ShowDialog($owner);$owner.Close();"
+                  "if($r -eq [System.Windows.Forms.DialogResult]::OK){"
                   "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($d.SelectedPath))}")
-        command = ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script]
+        # The full path (a PATH without System32 found no "powershell"); no -ExecutionPolicy Bypass, which a -Command
+        # does not need and which Chinese antivirus software flags.
+        shell = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0",
+                             "powershell.exe")
+        command = [shell if os.path.isfile(shell) else "powershell", "-NoProfile", "-STA", "-Command", script]
     elif sys.platform == "darwin":
         command = ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt.replace(chr(34), "")}")']
     else:
@@ -311,10 +322,18 @@ def choose_folder(initial: str = "", prompt: str = "选择成片保存位置") -
     try:
         done = subprocess.run(command, capture_output=True, timeout=900, creationflags=_windows_flags(),
                               env=os.environ | {"JINGGAO_FOLDER": initial, "JINGGAO_PROMPT": prompt})
-    except (OSError, subprocess.SubprocessError):
+    except subprocess.TimeoutExpired:
         return None
+    except OSError as exc:
+        raise ValueError(f"选择文件夹的窗口打不开（{exc}），可以把文件夹路径直接粘贴进框里") from None
     chosen = done.stdout.decode("utf-8", errors="replace").strip().splitlines()
-    if done.returncode != 0 or not chosen:
+    if done.returncode != 0:
+        if sys.platform == "darwin" and b"-128" in done.stderr:     # osascript: cancelled
+            return None
+        why = done.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        why = next((line for line in why if line.strip()), "")[:120]
+        raise ValueError(f"选择文件夹的窗口打不开（{why or done.returncode}），可以把文件夹路径直接粘贴进框里")
+    if not chosen:
         return None
     if os.name == "nt":
         import base64

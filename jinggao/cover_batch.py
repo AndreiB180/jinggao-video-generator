@@ -83,6 +83,31 @@ def film_titles(folder: Path) -> dict:
     return out
 
 
+def recent_folders(limit: int = 15) -> list[dict]:
+    """The newest folders worth covers, for one-click picking (11-07: the folder picker did not come up for the
+    customer): 成片 batch folders with videos, 对标采集 batch folders with drafts. [{path, name, videos, drafts}]"""
+    base = media.output_folder()
+    found = []
+    for parent in (base, base / "对标采集"):
+        try:
+            folders = [d for d in parent.iterdir() if d.is_dir()]
+        except OSError:
+            continue
+        for d in folders:
+            if d.name in ("对标采集", "做封面", "1-原视频", media.SUBTITLE_FOLDER):
+                continue
+            try:
+                videos = sum(1 for f in d.iterdir() if f.suffix.lower() in VIDEOS and f.is_file())
+                drafts = len(list((d / "改写好的文案").glob("*.txt"))) if (d / "改写好的文案").is_dir() else 0
+                when = d.stat().st_mtime
+            except OSError:
+                continue
+            if videos or drafts:
+                found.append({"path": str(d), "name": d.name, "videos": videos, "drafts": drafts, "time": when})
+    found.sort(key=lambda x: -x["time"])
+    return found[:limit]
+
+
 def items_in(folder: Path) -> list[dict]:
     """What a folder holds to make covers for: its videos, else its drafts (a 对标采集 batch folder: the ones in
     改写好的文案). Covers made earlier (…-封面-横版.jpg) are not videos or drafts, so they are never listed."""
