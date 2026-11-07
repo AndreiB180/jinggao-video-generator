@@ -422,7 +422,7 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
-## 0.7.13：做封面单独出来、对标去重、改写不再一字不差、稿子去乱符号（2026-11-07）
+## 0.7.13：做封面单独出来、对标去重、改写不再一字不差、稿子去乱符号（2026-11-07，包 sha256 e4569e8b…）
 
 客户 11-07 的反馈。对标部分在用户包（build-tmp/fix-0713：patch_bench.py 从 0.7.12 的 benchmark.py 生成 benchmark.py；api.py、models.py；
 overlay-0713、make0713.sh；前端在私有的用户版前端），其余在本仓库：
@@ -448,7 +448,9 @@ overlay-0713、make0713.sh；前端在私有的用户版前端），其余在本
   稿子进「转写」文件夹、不送出片；同名的第二条覆盖第一条。现在下载进 `1-原视频/下载中`，`_landed` 改名成列表标题（重名加（2）），记 `stems[vid]`；
   `_send_if_wanted` 按稿子所在批次文件夹的 `makes[folder]` 送，开了下一批也照送。
 - 测试：用户包离线 `fix-0713/测试/test0713.py`（21 项）+ 0.7.12 的 test0712.py（30 项）；`test_covers.py`（排版真模型 3 条成片，AI 假接口）；
-  本仓库 tests 全跑（除 test_crawl_runs_the_configured_command_and_reports_failures，改动前就失败）。没测：真 Kedou/好看、真 GrsAI、宿舍机实点。
+  本仓库 tests 全跑（除 test_crawl_runs_the_configured_command_and_reports_failures，改动前就失败）。
+  宿舍机在线（D:\jinggao-test\code0713 + real0713，端口 18796；下载用旧成片顶替、好看请求抛错）：真转写 + 真千问 + 去重 + 跨批自动出片 + 做封面 + Edge 1920/1366，
+  结果见用户包使用说明。没测：真 Kedou/好看（不跑）、真 GrsAI（没有 Key）。
 
 ## 0.7.12：对标采集提速、每批一个文件夹、一键全自动；开头一句（2026-11-06，包 sha256 06be6cc7…）
 
