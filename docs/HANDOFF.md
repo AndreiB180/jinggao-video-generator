@@ -422,6 +422,17 @@
 - 封面 `jinggao/cover.py`，`cover_mode`：design（默认，¥0.001：`source_frames` 从下载的素材取帧按 frame_crop 裁，无烧录字幕；`choose` 用 qwen flash 看 8 帧联系表挑背景并拆 tag/main/sub/ask，main 用“｜”断行；`design` 画红标签、金色主标题、银色副标题、黄色警示条问句，横 1920×1080 + 竖 1080×1920，底部压暗盖住素材自带字幕）；ai_bg（推荐，约 ¥0.02/条：GrsAI 画一张不带字的横版背景，本地排字出横竖两张；nano-banana-2-lite 常报 “google gemini timeout”，失败自动用 gpt-image-2 再画）；ai（GrsAI gpt-image-2 整张带字，横竖各一张 ¥0.03–0.06）；off。AI 在后台线程画，失败的形状用 design。GrsAI：国内 `https://grsai.dakka.com.cn`，`POST /v1/api/generate`（replyType async）+ `GET /v1/api/result?id=`，失败再试旧接口 `/v1/draw/completions|nano-banana` + `/v1/draw/result`。客户 Key 只填在客户自己的设置里。
 - 价格调研（用户要求一张不超过一分钱）：千问 qwen-image-3.0 ¥0.18、3.0-pro 1K ¥0.25/2K ¥0.5（效果最好，中文全对，70–100 秒）；GrsAI gpt-image-2 ¥0.03–0.06、nano-banana-2-lite ¥0.022（999 档约半价）。整张 AI 画压不到一分以内，所以默认 design，AI 两档供客户自选。10-25 用客户 Key 实测：gpt-image-2 整张 102 秒/两张，效果接近客户给的百家号示例；nano-banana-2-lite 3 次超时 2 次。
 
+## 0.7.14 / 0.7.15：做封面选文件夹、AI 封面不画中国领导人、新加的对标作者先读（2026-11-07/08）
+
+- 0.7.14（包 4396be7c）：客户「选择」不弹窗。宿舍机桌面会话里实测旧写法的「浏览文件夹」也在最上层，没重现；改成显示的置顶 owner、
+  PowerShell 全路径、去掉 -ExecutionPolicy Bypass，打不开时 `choose_folder` 抛 ValueError（页面红字写原因）；
+  `cover_batch.recent_folders`（成片批次、对标批次）+ 用户包 `GET /api/covers/recent`，页面「最近的文件夹」一点就填。
+- 0.7.15（包 c1138ea7）：AI 封面画了习近平被平台判违规。参考图那句原来是"可以用其中的人物和场景"；`cover.NO_LEADERS` 固定加在每个 AI 提示词后
+  （客户自定义的也加），`REFERENCE` 改成只参考场景和气氛，`PLAN_SYSTEM` 挑帧不挑有领导人的格子。真 GrsAI：旧提示词 + 客户截图当参考图复现了习近平，
+  新提示词 3 张都没有。用户包前端「做封面」页 AI 方式下可展开「提示词」（就是 cover_prompt_*，开始时 PATCH 保存）。
+  对标（用户包 benchmark.py）：`scan()` 没读过的作者先读，读的过程中新加的下一个读（每轮看一次 `_unread`），`only_new` 只读新的；
+  加作者后前端调 `scan?new=true`，打开页面有没读过的也自动读；state 多 `unread`。客户 11-07：36 个作者加到二百多，新作者的视频 20 分钟都不出来。
+
 ## 0.7.13：做封面单独出来、对标去重、改写不再一字不差、稿子去乱符号（2026-11-07，包 sha256 e4569e8b…）
 
 客户 11-07 的反馈。对标部分在用户包（build-tmp/fix-0713：patch_bench.py 从 0.7.12 的 benchmark.py 生成 benchmark.py；api.py、models.py；
